@@ -1,6 +1,6 @@
 const express = require('express');
 const { Telegraf } = require('telegraf');
-const sqlite3 = require('sqlite3').verbose();
+const { createClient } = require('@supabase/supabase-js');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -10,438 +10,461 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- CẤU HÌNH ---
+// --- 1. CẤU HÌNH SUPABASE (Giúp lưu dữ liệu vĩnh viễn, không bị mất khi restart) ---
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
+// --- 2. CẤU HÌNH BOT ---
 const BOT_TOKEN = process.env.BOT_TOKEN || '8695768637:AAErM9TCikOmOoATmuIJCBLNF_SOzc5T34c';
 const GROUP_1_ID = -1003980180530;
 const GROUP_2_ID = -1003958491178;
 const ADMIN_ID = 6327666718;
 const ADMIN_PASS = process.env.ADMIN_PASS || '8695768637:AAErM9TCikOmOoATmuIJCBLNF_SOzc5T34c';
-const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
+const WEB_APP_URL = process.env.WEB_APP_URL || 'https://your-app-name.onrender.com';
 
 const bot = new Telegraf(BOT_TOKEN);
-const db = new sqlite3.Database('./database.sqlite');
+const isAdmin = (ctx) => ctx.from.id === ADMIN_ID;
 
-// --- KHỞI TẠO DATABASE ---
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY, 
-        name TEXT, 
-        coins INTEGER DEFAULT 0, 
-        orders INTEGER DEFAULT 0, 
-        spins INTEGER DEFAULT 1, 
-        truckLevel INTEGER DEFAULT 1, 
-        ip TEXT, 
-        adsToday INTEGER DEFAULT 0, 
-        smartlinksToday INTEGER DEFAULT 0,
-        totalAds INTEGER DEFAULT 0,
-        totalSmartlinks INTEGER DEFAULT 0,
-        isBanned INTEGER DEFAULT 0,
-        referrerId TEXT, 
-        invitedCount INTEGER DEFAULT 0, 
-        validInvites INTEGER DEFAULT 0,
-        inviteCounted INTEGER DEFAULT 0
-    )`);
-    db.run(`CREATE TABLE IF NOT EXISTS withdrawals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, 
-        userId TEXT, 
-        amount INTEGER, 
-        method TEXT, 
-        status TEXT DEFAULT 'pending', 
-        reason TEXT, 
-        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-    db.run(`CREATE TABLE IF NOT EXISTS giftcodes (
-        code TEXT PRIMARY KEY, 
-        rewardType TEXT, 
-        rewardAmount INTEGER, 
-        limitUses INTEGER, 
-        usedCount INTEGER DEFAULT 0
-    )`);
+// --- 3. TELEGRAM BOT LOGIC ---
+bot.start(async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userName = ctx.from.first_name || 'User';
+  const referrerId = ctx.startPayload;
+
+  // 1. Kiểm tra và tạo user mới nếu chưa có
+  const { data: existingUser } = await supabase.from('users').select('*').eq('id', userId).single();
+  if (!existingUser) {
+    await supabase.from('users').insert({
+      id: userId, name: userName, referrerId: referrerId || null,
+      coins: 0, orders: 0, spins: 1, truckLevel: 1, adsToday: 0, smartlinksToday: 0, invitedCount: 0, validInvites: 0, isBanned: false
+    });
+    if (referrerId) {
+      const { data: ref } = await supabase.from('users').select('invitedCount').eq('id', referrerId).single();
+      if (ref) {
+        const newCount = (ref.invitedCount || 0) + 1;
+        await supabase.from('users').update({ invitedCount: newCount }).eq('id', referrerId);
+        await ctx.reply(`🎉 Chúc mừng! Bạn vừa mời thành công: ${userName} (ID: ${userId}).\n⚠️ Điều kiện để nhận thưởng: Người mời phải tham gia đủ 2 nhóm và xác nhận thành công.`);
+      }
+    }
+  } else if (existingUser.isBanned) {
+    return ctx.reply("❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.");
+  }
+
+  // 2. Kiểm tra tham gia nhóm
+  try {
+    const member1 = await ctx.telegram.getChatMember(GROUP_1_ID, userId);
+    const member2 = await ctx.telegram.getChatMember(GROUP_2_ID, userId);
+    const isMember1 = ['member', 'administrator', 'creator'].includes(member1.status);
+    const isMember2 = ['member', 'administrator', 'creator'].includes(member2.status);
+
+    if (isMember1 && isMember2) {
+      if (referrerId && !existingUser.referrerCounted) {
+        const { data: ref } = await supabase.from('users').select('validInvites').eq('id', referrerId).single();
+        if (ref) {
+          const newValid = (ref.validInvites || 0) + 1;
+          await supabase.from('users').update({ validInvites: newValid }).eq('id', referrerId);
+          await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
+          await ctx.telegram.sendMessage(referrerId, `✅ Xác nhận thành công! ${userName} đã tham gia đủ nhóm. Bạn đã được cộng 1 lượt mời hợp lệ.`);
+        }
+      }
+      
+      ctx.reply(`Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`, {
+        reply_markup: {
+          inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]]
+        }
+      });
+    } else {
+      ctx.reply("⚠️ Bạn chưa tham gia đủ 2 nhóm bắt buộc!\nVui lòng tham gia 2 nhóm dưới đây:\n1. https://t.me/khohangkiemtien\n2. https://t.me/khohangchatkiemtien\n\nSau khi tham gia, hãy nhấn nút 'Kiểm Tra, Xác Nhận' bên dưới.", {
+        reply_markup: {
+          inline_keyboard: [[{ text: "✅ Kiểm Tra, Xác Nhận", callback_data: "check_groups" }]]
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Lỗi kiểm tra thành viên:", error);
+    ctx.reply("⚠️ Lỗi kiểm tra thành viên. Vui lòng đảm bảo Bot đã là Admin của 2 nhóm và bạn đã tham gia nhóm.", {
+      reply_markup: {
+        inline_keyboard: [[{ text: "✅ Kiểm Tra, Xác Nhận", callback_data: "check_groups" }]]
+      }
+    });
+  }
 });
 
-// --- TELEGRAM BOT LOGIC ---
-bot.start(async (ctx) => {
+// Xử lý nút bấm "Kiểm Tra, Xác Nhận"
+bot.on('callback_query', async (ctx) => {
+  if (ctx.callbackQuery.data === 'check_groups') {
     const userId = ctx.from.id.toString();
     const userName = ctx.from.first_name || 'User';
-    const referrerId = ctx.startPayload;
-
-    db.get("SELECT * FROM users WHERE id = ?", [userId], async (err, row) => {
-        if (!row) {
-            db.run(`INSERT INTO users (id, name, referrerId) VALUES (?, ?, ?)`, [userId, userName, referrerId || null]);
-        }
-    });
-
-    // Luôn gửi nút Mini App để user vào web tự xác minh
-    ctx.reply(`Chào mừng ${userName}! \nHãy nhấn nút bên dưới để vào Mini App và xác minh tham gia nhóm!`, {
-        reply_markup: {
-            inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]]
-        }
-    });
-});
-
-// API để Web App xác minh nhóm và cập nhật người mời
-app.get('/api/verify/:userId', async (req, res) => {
+    
     try {
-        const userId = req.params.userId;
-        const member1 = await bot.telegram.getChatMember(GROUP_1_ID, userId);
-        const member2 = await bot.telegram.getChatMember(GROUP_2_ID, userId);
-        const isMember1 = ['member', 'administrator', 'creator'].includes(member1.status);
-        const isMember2 = ['member', 'administrator', 'creator'].includes(member2.status);
+      const member1 = await ctx.telegram.getChatMember(GROUP_1_ID, userId);
+      const member2 = await ctx.telegram.getChatMember(GROUP_2_ID, userId);
+      const isMember1 = ['member', 'administrator', 'creator'].includes(member1.status);
+      const isMember2 = ['member', 'administrator', 'creator'].includes(member2.status);
 
-        if (isMember1 && isMember2) {
-            // Kiểm tra và cập nhật người mời nếu chưa tính
-            const userRow = await new Promise((resolve, reject) => {
-                db.get("SELECT referrerId, inviteCounted FROM users WHERE id = ?", [userId], (err, row) => {
-                    if (err) reject(err); else resolve(row);
-                });
-            });
-
-            if (userRow && userRow.referrerId && !userRow.inviteCounted) {
-                const newValid = await new Promise((resolve, reject) => {
-                    db.get("SELECT validInvites FROM users WHERE id = ?", [userRow.referrerId], (err, row) => {
-                        if (err) reject(err); else resolve(row.validInvites || 0);
-                    });
-                });
-                const updatedValid = newValid + 1;
-                db.run("UPDATE users SET validInvites = ?, inviteCounted = 1 WHERE id = ?", [updatedValid, userRow.referrerId]);
-                
-                // Thông báo cho người mời
-                bot.telegram.sendMessage(userRow.referrerId, `🎉 Bạn đã mời thành công: ${userRow.name || userId}!\n📊 Tổng số bạn hợp lệ: ${updatedValid}. Tiếp tục mời để nhận thưởng!`).catch(e => console.log(e));
-            }
-            res.json({ success: true });
-        } else {
-            res.json({ success: false });
+      if (isMember1 && isMember2) {
+        const { data: userData } = await supabase.from('users').select('referrerId, referrerCounted').eq('id', userId).single();
+        if (userData && userData.referrerId && !userData.referrerCounted) {
+          const { data: ref } = await supabase.from('users').select('validInvites').eq('id', userData.referrerId).single();
+          if (ref) {
+            const newValid = (ref.validInvites || 0) + 1;
+            await supabase.from('users').update({ validInvites: newValid }).eq('id', userData.referrerId);
+            await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
+            await ctx.telegram.sendMessage(userData.referrerId, `✅ Xác nhận thành công! ${userName} đã tham gia đủ nhóm. Bạn đã được cộng 1 lượt mời hợp lệ.`);
+          }
         }
-    } catch (e) {
-        res.json({ success: false });
+        
+        await ctx.editMessageText(`Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`, {
+          reply_markup: {
+            inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]]
+          }
+        });
+      } else {
+        await ctx.answerCbQuery("⚠️ Bạn vẫn chưa tham gia đủ 2 nhóm!");
+        await ctx.editMessageText("⚠️ Bạn vẫn chưa tham gia đủ 2 nhóm bắt buộc!\nVui lòng tham gia 2 nhóm dưới đây:\n1. https://t.me/khohangkiemtien\n2. https://t.me/khohangchatkiemtien\n\nSau khi tham gia, hãy nhấn nút 'Kiểm Tra, Xác Nhận' bên dưới.", {
+          reply_markup: {
+            inline_keyboard: [[{ text: "✅ Kiểm Tra, Xác Nhận", callback_data: "check_groups" }]]
+          }
+        });
+      }
+    } catch (error) {
+      await ctx.answerCbQuery("⚠️ Lỗi kiểm tra!");
     }
+  }
 });
 
-// --- ADMIN COMMANDS ---
-const isAdmin = (ctx) => ctx.from.id === ADMIN_ID;
-bot.command('ban', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /ban <userId>");
-    db.run("UPDATE users SET isBanned = 1 WHERE id = ?", [targetId], () => ctx.reply(`✅ Đã ban user ${targetId}`));
+// --- 4. LỆNH ADMIN BOT ---
+bot.command('thongke', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const { count: totalUsers } = await supabase.from('users').select('*', { count: 'exact', head: true });
+  const { data: pendingWithdraws } = await supabase.from('withdrawals').select('amount').eq('status', 'pending');
+  const { data: successWithdraws } = await supabase.from('withdrawals').select('amount').eq('status', 'success');
+  const { data: usersStats } = await supabase.from('users').select('adsToday, smartlinksToday');
+  
+  const totalPending = pendingWithdraws ? pendingWithdraws.reduce((sum, w) => sum + (w.amount || 0), 0) : 0;
+  const totalSuccess = successWithdraws ? successWithdraws.reduce((sum, w) => sum + (w.amount || 0), 0) : 0;
+  const totalAds = usersStats ? usersStats.reduce((sum, u) => sum + (u.adsToday || 0), 0) : 0;
+  const totalSmartlinks = usersStats ? usersStats.reduce((sum, u) => sum + (u.smartlinksToday || 0), 0) : 0;
+
+  ctx.reply(`📊 Thống kê chi tiết:\n👥 Tổng User: ${totalUsers || 0}\n📺 Tổng QC đã xem (hôm nay): ${totalAds}\n🔗 Tổng Smartlink đã ấn (hôm nay): ${totalSmartlinks}\n⏳ Tổng tiền chờ duyệt: ${totalPending} VNĐ\n✅ Tổng tiền đã duyệt: ${totalSuccess} VNĐ`);
 });
-bot.command('unban', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /unban <userId>");
-    db.run("UPDATE users SET isBanned = 0 WHERE id = ?", [targetId], () => ctx.reply(`✅ Đã unban user ${targetId}`));
+
+bot.command('quantri', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const { count: totalUsers } = await supabase.from('users').select('*', { count: 'exact', head: true });
+  const { data: successWithdraws } = await supabase.from('withdrawals').select('amount').eq('status', 'success');
+  const totalWithdrawn = successWithdraws ? successWithdraws.reduce((sum, w) => sum + (w.amount || 0), 0) : 0;
+  ctx.reply(`📊 Thống kê nhanh:\n👥 Tổng User: ${totalUsers || 0}\n💰 Tổng tiền đã duyệt rút: ${totalWithdrawn} VNĐ`);
 });
-bot.command('congcoin', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [_, targetId, amount] = ctx.message.text.split(' ');
-    if (!targetId || !amount) return ctx.reply("❌ Sử dụng: /congcoin <userId> <số_lượng>");
-    db.run("UPDATE users SET coins = coins + ? WHERE id = ?", [parseInt(amount), targetId], () => ctx.reply(`✅ Đã cộng ${amount} coin cho ${targetId}`));
+
+bot.command('ban', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /ban <userId>");
+  await supabase.from('users').update({ isBanned: true }).eq('id', targetId);
+  ctx.reply(`✅ Đã ban user ${targetId}`);
 });
-bot.command('trucoin', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [_, targetId, amount] = ctx.message.text.split(' ');
-    if (!targetId || !amount) return ctx.reply("❌ Sử dụng: /trucoin <userId> <số_lượng>");
-    db.run("UPDATE users SET coins = coins - ? WHERE id = ?", [parseInt(amount), targetId], () => ctx.reply(`✅ Đã trừ ${amount} coin của ${targetId}`));
+
+bot.command('unban', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /unban <userId>");
+  await supabase.from('users').update({ isBanned: false }).eq('id', targetId);
+  ctx.reply(`✅ Đã unban user ${targetId}`);
 });
-bot.command('addspin', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [_, targetId, amount] = ctx.message.text.split(' ');
-    if (!targetId || !amount) return ctx.reply("❌ Sử dụng: /addspin <userId> <số_lượng>");
-    db.run("UPDATE users SET spins = spins + ? WHERE id = ?", [parseInt(amount), targetId], () => ctx.reply(`✅ Đã cộng ${amount} lượt mở rương cho ${targetId}`));
+
+bot.command('congcoin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /congcoin <userId> <số_lượng>");
+  const targetId = parts[1];
+  const amount = parseInt(parts[2]);
+  const { data } = await supabase.from('users').select('coins').eq('id', targetId).single();
+  const newCoins = (data?.coins || 0) + amount;
+  await supabase.from('users').update({ coins: newCoins }).eq('id', targetId);
+  ctx.reply(`✅ Đã cộng ${amount} coin cho ${targetId}`);
 });
-bot.command('addorders', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [_, targetId, amount] = ctx.message.text.split(' ');
-    if (!targetId || !amount) return ctx.reply("❌ Sử dụng: /addorders <userId> <số_lượng>");
-    db.run("UPDATE users SET orders = orders + ? WHERE id = ?", [parseInt(amount), targetId], () => ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`));
+
+bot.command('trucoin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /trucoin <userId> <số_lượng>");
+  const targetId = parts[1];
+  const amount = parseInt(parts[2]);
+  const { data } = await supabase.from('users').select('coins').eq('id', targetId).single();
+  const newCoins = Math.max(0, (data?.coins || 0) - amount);
+  await supabase.from('users').update({ coins: newCoins }).eq('id', targetId);
+  ctx.reply(`✅ Đã trừ ${amount} coin của ${targetId}`);
 });
-bot.command('setlevel', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [_, targetId, level] = ctx.message.text.split(' ');
-    if (!targetId || !level) return ctx.reply("❌ Sử dụng: /setlevel <userId> <cấp_độ>");
-    db.run("UPDATE users SET truckLevel = ? WHERE id = ?", [parseInt(level), targetId], () => ctx.reply(`✅ Đã đặt cấp độ xe của ${targetId} lên ${level}`));
+
+bot.command('addspin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /addspin <userId> <số_lượng>");
+  const targetId = parts[1];
+  const amount = parseInt(parts[2]);
+  const { data } = await supabase.from('users').select('spins').eq('id', targetId).single();
+  const newSpins = (data?.spins || 0) + amount;
+  await supabase.from('users').update({ spins: newSpins }).eq('id', targetId);
+  ctx.reply(`✅ Đã cộng ${amount} lượt mở rương cho ${targetId}`);
 });
-bot.command('resetdaily', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /resetdaily <userId>");
-    db.run("UPDATE users SET adsToday = 0, smartlinksToday = 0 WHERE id = ?", [targetId], () => ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`));
+
+bot.command('adddonhang', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /adddonhang <userId> <số_lượng>");
+  const targetId = parts[1];
+  const amount = parseInt(parts[2]);
+  const { data } = await supabase.from('users').select('orders').eq('id', targetId).single();
+  const newOrders = (data?.orders || 0) + amount;
+  await supabase.from('users').update({ orders: newOrders }).eq('id', targetId);
+  ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`);
 });
-bot.command('deleteuser', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /deleteuser <userId>");
-    db.run("DELETE FROM users WHERE id = ?", [targetId], () => ctx.reply(`✅ Đã xóa vĩnh viễn user ${targetId}`));
+
+bot.command('setlevel', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /setlevel <userId> <cấp_độ>");
+  const targetId = parts[1];
+  const level = parseInt(parts[2]);
+  await supabase.from('users').update({ truckLevel: level }).eq('id', targetId);
+  ctx.reply(`✅ Đã đặt cấp độ xe của ${targetId} lên ${level}`);
 });
-bot.command('createcode', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 5) return ctx.reply("❌ Sử dụng: /createcode <mã> <loại> <số_lượng> <giới_hạn>");
-    const [, code, type, amount, limit] = parts;
-    db.run(`INSERT INTO giftcodes (code, rewardType, rewardAmount, limitUses) VALUES (?, ?, ?, ?)`, 
-        [code, type, parseInt(amount), parseInt(limit)], 
-        (err) => {
-            if (err) return ctx.reply("❌ Lỗi: Mã code đã tồn tại hoặc dữ liệu không hợp lệ.");
-            ctx.reply(`✅ Đã tạo code: \`${code}\` (Loại: ${type}, SL: ${amount}, Giới hạn: ${limit} lần)`, { parse_mode: 'Markdown' });
-        }
-    );
+
+bot.command('resetdaily', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /resetdaily <userId>");
+  await supabase.from('users').update({ adsToday: 0, smartlinksToday: 0 }).eq('id', targetId);
+  ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
 });
-bot.command('listcodes', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    db.all("SELECT * FROM giftcodes", [], (err, rows) => {
-        if (err) return ctx.reply(" Lỗi lấy danh sách code.");
-        if (rows.length === 0) return ctx.reply(" Chưa có giftcode nào.");
-        let msg = "📜 Danh sách Giftcode:\n";
-        rows.forEach(row => {
-            msg += `\n🔹 Mã: \`${row.code}\`\n   Loại: ${row.rewardType} | SL: ${row.rewardAmount} | Đã dùng: ${row.usedCount}/${row.limitUses}\n`;
-        });
-        ctx.reply(msg, { parse_mode: 'Markdown' });
-    });
+
+bot.command('deleteuser', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /deleteuser <userId>");
+  await supabase.from('users').delete().eq('id', targetId);
+  ctx.reply(`✅ Đã xóa vĩnh viễn user ${targetId}`);
 });
-bot.command('delcode', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const code = ctx.message.text.split(' ')[1];
-    if (!code) return ctx.reply("❌ Sử dụng: /delcode <mã_code>");
-    db.run("DELETE FROM giftcodes WHERE code = ?", [code], (err) => {
-        if (err) return ctx.reply("❌ Lỗi: Không tìm thấy code.");
-        ctx.reply(`✅ Đã xóa code: ${code}`);
-    });
+
+bot.command('createcode', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 5) return ctx.reply("❌ Sử dụng: /createcode <mã> <loại> <số_lượng> <giới_hạn>");
+  const [, code, type, amount, limit] = parts;
+  const { error } = await supabase.from('giftcodes').insert({ code, rewardType: type, rewardAmount: parseInt(amount), limitUses: parseInt(limit), usedCount: 0 });
+  if (error) return ctx.reply("❌ Lỗi: Mã code đã tồn tại hoặc dữ liệu không hợp lệ.");
+  ctx.reply(`✅ Đã tạo code: \`${code}\` (Loại: ${type}, SL: ${amount}, Giới hạn: ${limit} lần)`, { parse_mode: 'Markdown' });
 });
-bot.command('quantri', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    db.get("SELECT COUNT(*) as total FROM users", (err, row) => {
-        db.get("SELECT SUM(amount) as totalWithdrawn FROM withdrawals WHERE status = 'success'", (err2, row2) => {
-            ctx.reply(`📊 Thống kê nhanh:\n👥 Tổng User: ${row.total}\n💰 Tổng tiền đã duyệt rút: ${row2.totalWithdrawn || 0} VNĐ`);
-        });
-    });
+
+bot.command('listcodes', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const { data, error } = await supabase.from('giftcodes').select('*');
+  if (error) return ctx.reply("❌ Lỗi lấy danh sách code.");
+  if (!data || data.length === 0) return ctx.reply("📭 Chưa có giftcode nào.");
+  let msg = "📜 Danh sách Giftcode:\n";
+  data.forEach(row => {
+    msg += `\n🔹 Mã: \`${row.code}\`\n   Loại: ${row.rewardType} | SL: ${row.rewardAmount} | Đã dùng: ${row.usedCount}/${row.limitUses}\n`;
+  });
+  ctx.reply(msg, { parse_mode: 'Markdown' });
 });
-bot.command('broadcast', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const msg = ctx.message.text.substring(11);
-    if (!msg) return ctx.reply("❌ Nhập tin nhắn cần gửi!");
-    ctx.reply("⏳ Đang gửi tin nhắn... (Có thể mất vài phút)");
-    db.all("SELECT id FROM users", [], (err, rows) => {
-        if (err) return ctx.reply("❌ Lỗi lấy danh sách user.");
-        let successCount = 0;
-        rows.forEach(u => {
-            bot.telegram.sendMessage(u.id, `📢 **THÔNG BÁO TỪ ADMIN:**\n\n${msg}`, { parse_mode: 'Markdown' }).then(() => {
-                successCount++;
-            }).catch(e => {});
-        });
-        setTimeout(() => {
-            ctx.reply(`✅ Đã gửi thành công đến ${successCount} người dùng.`);
-        }, 5000);
-    });
+
+bot.command('delcode', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const code = ctx.message.text.split(' ')[1];
+  if (!code) return ctx.reply("❌ Sử dụng: /delcode <mã_code>");
+  const { error } = await supabase.from('giftcodes').delete().eq('code', code);
+  if (error) return ctx.reply("❌ Lỗi: Không tìm thấy code.");
+  ctx.reply(`✅ Đã xóa code: ${code}`);
 });
-bot.command('checkID', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const id = ctx.message.text.split(' ')[1];
-    db.get("SELECT * FROM users WHERE id = ?", [id], (err, row) => {
-        if (err || !row) return ctx.reply("❌ Không tìm thấy user.");
-        ctx.reply(`👤 Thông tin user:\nID: ${row.id}\nTên: ${row.name}\nĐơn hàng: ${row.orders}\nCoin: ${row.coins}\nLevel xe: ${row.truckLevel}\nIP: ${row.ip || 'Chưa có'}\nLượt mời hợp lệ: ${row.validInvites}`);
-    });
+
+bot.command('checkID', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /checkID <userId>");
+  
+  const { data } = await supabase.from('users').select('id, name, orders, coins, truckLevel, ip').eq('id', targetId).single();
+  if (!data) return ctx.reply("❌ Không tìm thấy user.");
+  
+  const { data: withdraws } = await supabase.from('withdrawals').select('amount').eq('userId', targetId).eq('status', 'success');
+  const totalWithdrawn = withdraws ? withdraws.reduce((sum, w) => sum + (w.amount || 0), 0) : 0;
+  
+  ctx.reply(`👤 Thông tin user:\nID: ${data.id}\nTên: ${data.name}\nĐơn hàng còn lại: ${data.orders}\nCoin còn lại: ${data.coins}\nLevel xe: ${data.truckLevel}\nIP: ${data.ip || 'Chưa có'}\nTổng tiền đã rút: ${totalWithdrawn} VNĐ`);
+});
+
+bot.command('donrutall', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const { data, error } = await supabase.from('withdrawals').select('id, userId, amount, method, status').eq('status', 'pending');
+  if (error) return ctx.reply("❌ Lỗi lấy danh sách đơn rút.");
+  if (!data || data.length === 0) return ctx.reply("📭 Không có đơn rút tiền nào đang chờ duyệt.");
+  
+  let msg = "📋 Danh sách đơn rút tiền CHỜ DUYỆT:\n";
+  for (const w of data) {
+    const { data: userData } = await supabase.from('users').select('ip').eq('id', w.userId).single();
+    const ip = userData?.ip || 'Chưa có';
+    const ordersDeducted = Math.floor((w.amount || 0) / 1000) * 10000;
+    msg += `\n🆔 ID User: ${w.userId}\n💳 Phương thức: ${w.method}\n💰 Số tiền: ${w.amount} VNĐ\n📦 Đơn hàng đã trừ: ${ordersDeducted}\n🌐 IP: ${ip}\n-------------------`;
+  }
+  
+  if (msg.length > 4000) {
+    msg = msg.substring(0, 4000) + "\n... (tin nhắn quá dài, hãy kiểm tra trên web admin)";
+  }
+  ctx.reply(msg);
+});
+
+bot.command('duyet', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply("❌ Sử dụng: /duyet <userId>");
+  
+  const { data: withdrawals } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
+  if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt cho user này.");
+  
+  for (const w of withdrawals) {
+    await supabase.from('withdrawals').update({ status: 'success', reason: 'Đã duyệt bởi admin' }).eq('id', w.id);
+  }
+  
+  ctx.reply(`✅ Đã duyệt thành công yêu cầu rút tiền cho ${targetId}`);
+  await ctx.telegram.sendMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được DUYỆT thành công! Tiền sẽ sớm được chuyển vào tài khoản.`);
+});
+
+bot.command('huy', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply("❌ Sử dụng: /huy <userId> <lý do>");
+  const targetId = parts[1];
+  const reason = parts.slice(2).join(' ');
+  
+  const { data: withdrawals } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
+  if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt cho user này.");
+  
+  let totalRefunded = 0;
+  for (const w of withdrawals) {
+    const ordersDeducted = Math.floor((w.amount || 0) / 1000) * 10000;
+    await supabase.from('withdrawals').update({ status: 'rejected', reason: reason }).eq('id', w.id);
+    
+    const { data: userData } = await supabase.from('users').select('orders').eq('id', targetId).single();
+    const newOrders = (userData?.orders || 0) + ordersDeducted;
+    await supabase.from('users').update({ orders: newOrders }).eq('id', targetId);
+    
+    totalRefunded += ordersDeducted;
+  }
+  
+  ctx.reply(`✅ Đã hủy yêu cầu rút tiền của ${targetId}. Lý do: ${reason}`);
+  await ctx.telegram.sendMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị HỦY.\nLý do: ${reason}\nSố đơn hàng đã được hoàn trả: ${totalRefunded}`);
+});
+
+bot.command('broadcast', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  const msg = ctx.message.text.substring(11);
+  if (!msg) return ctx.reply("❌ Nhập tin nhắn cần gửi!");
+  
+  ctx.reply("⏳ Đang gửi tin nhắn... (Có thể mất vài phút)");
+  const { data: users } = await supabase.from('users').select('id');
+  let successCount = 0;
+  for (const u of users) {
+    try {
+      await ctx.telegram.sendMessage(u.id, `📢 **THÔNG BÁO TỪ ADMIN:**\n\n${msg}`, { parse_mode: 'Markdown' });
+      successCount++;
+      await new Promise(r => setTimeout(r, 50)); // Delay tránh bị Telegram block spam
+    } catch (e) {}
+  }
+  ctx.reply(`✅ Đã gửi thành công đến ${successCount} người dùng.`);
 });
 
 bot.launch();
 console.log("✅ Bot is running...");
 
-// --- API CHO FRONTEND ---
-app.post('/api/save-ip/:id', (req, res) => {
-    const { ip } = req.body;
-    db.run("UPDATE users SET ip = ? WHERE id = ?", [ip, req.params.id], (err) => {
-        res.json({ success: !err });
-    });
+// --- 5. API CHO FRONTEND ---
+app.post('/api/save-ip/:id', async (req, res) => {
+  const { ip } = req.body;
+  await supabase.from('users').update({ ip }).eq('id', req.params.id);
+  res.json({ success: true });
 });
 
-app.get('/api/user/:id', (req, res) => {
-    db.get("SELECT * FROM users WHERE id = ?", [req.params.id], (err, row) => {
-        if (err || !row) return res.status(404).json({ error: "User not found" });
-        res.json(row);
-    });
+app.get('/api/user/:id', async (req, res) => {
+  const { data, error } = await supabase.from('users').select('*').eq('id', req.params.id).single();
+  if (error || !data) return res.status(404).json({ error: "User not found" });
+  res.json(data);
 });
 
-app.post('/api/user/:id', (req, res) => {
-    const data = req.body;
-    db.run(`UPDATE users SET coins=?, orders=?, spins=?, truckLevel=?, adsToday=?, smartlinksToday=?, invitedCount=?, validInvites=? WHERE id=?`, 
-        [data.coins, data.orders, data.spins, data.truckLevel, data.adsToday, data.smartlinksToday, data.invitedCount, data.validInvites, req.params.id], 
-        (err) => res.json({ success: !err })
-    );
+app.post('/api/user/:id', async (req, res) => {
+  const { error } = await supabase.from('users').update(req.body).eq('id', req.params.id);
+  res.json({ success: !error });
 });
 
-app.post('/api/withdraw', (req, res) => {
-    const { userId, amount, method } = req.body;
-    db.run(`INSERT INTO withdrawals (userId, amount, method) VALUES (?, ?, ?)`, [userId, amount, method], (err) => {
-        if (err) return res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền" });
-        db.run("UPDATE users SET orders = orders - 10000 WHERE id = ?", [userId]);
-        res.json({ success: true });
-    });
+app.post('/api/withdraw', async (req, res) => {
+  const { userId, amount, method } = req.body;
+  const { error } = await supabase.from('withdrawals').insert({ userId, amount, method, status: 'pending' });
+  if (error) return res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền" });
+  
+  const { data: u } = await supabase.from('users').select('orders').eq('id', userId).single();
+  const newOrders = Math.max(0, (u?.orders || 0) - 10000);
+  await supabase.from('users').update({ orders: newOrders }).eq('id', userId);
+  res.json({ success: true });
 });
 
-app.post('/api/redeem-code', (req, res) => {
-    const { userId, code } = req.body;
-    db.get("SELECT * FROM giftcodes WHERE code = ?", [code], (err, row) => {
-        if (err || !row) return res.status(404).json({ error: "Mã code không hợp lệ hoặc không tồn tại." });
-        if (row.usedCount >= row.limitUses) return res.status(400).json({ error: "Mã code đã hết lượt sử dụng." });
-        db.run("UPDATE giftcodes SET usedCount = usedCount + 1 WHERE code = ?", [code]);
-        let updateQuery = "";
-        if (row.rewardType === 'coin') updateQuery = "UPDATE users SET coins = coins + ? WHERE id = ?";
-        else if (row.rewardType === 'orders') updateQuery = "UPDATE users SET orders = orders + ? WHERE id = ?";
-        else if (row.rewardType === 'spins') updateQuery = "UPDATE users SET spins = spins + ? WHERE id = ?";
-        if (updateQuery) {
-            db.run(updateQuery, [row.rewardAmount, userId], (err) => {
-                if (err) return res.status(500).json({ error: "Lỗi cộng thưởng" });
-                res.json({ success: true });
-            });
-        } else {
-            res.status(400).json({ error: "Loại phần thưởng không hợp lệ" });
-        }
-    });
+app.post('/api/redeem-code', async (req, res) => {
+  const { userId, code } = req.body;
+  const { data: gc, error } = await supabase.from('giftcodes').select('*').eq('code', code).single();
+  if (error || !gc) return res.status(404).json({ error: "Mã code không hợp lệ hoặc không tồn tại." });
+  if (gc.usedCount >= gc.limitUses) return res.status(400).json({ error: "Mã code đã hết lượt sử dụng." });
+  
+  await supabase.from('giftcodes').update({ usedCount: gc.usedCount + 1 }).eq('code', code);
+  
+  const { data: u } = await supabase.from('users').select('coins, orders, spins').eq('id', userId).single();
+  let updateData = { ...u };
+  if (gc.rewardType === 'coin') updateData.coins += gc.rewardAmount;
+  else if (gc.rewardType === 'orders') updateData.orders += gc.rewardAmount;
+  else if (gc.rewardType === 'spins') updateData.spins += gc.rewardAmount;
+  
+  await supabase.from('users').update(updateData).eq('id', userId);
+  res.json({ success: true });
 });
 
-// --- ADMIN WEB PANEL ---
-app.post('/api/admin/update-withdrawal', (req, res) => {
-    if (req.query.pass !== ADMIN_PASS) return res.status(403).json({error: "Access Denied"});
-    const { id, status, reason } = req.body;
-    db.run("UPDATE withdrawals SET status = ?, reason = ? WHERE id = ?", [status, reason, id], (err) => {
-        if (err) return res.status(500).json({ error: "Lỗi cập nhật" });
-        res.json({ success: true });
-    });
-});
-
-app.get('/admin', (req, res) => {
-    if (req.query.pass !== ADMIN_PASS) {
-        return res.status(403).send('<h1>Access Denied</h1>');
-    }
-    
-    db.all("SELECT * FROM users", [], (err, users) => {
-        db.all("SELECT * FROM withdrawals ORDER BY createdAt DESC", [], (err2, withdrawals) => {
-            db.get("SELECT COUNT(*) as totalUsers, SUM(totalAds) as totalAds, SUM(totalSmartlinks) as totalSmartlinks FROM users", (err3, stats) => {
-                db.get("SELECT SUM(amount) as totalWithdrawn FROM withdrawals WHERE status = 'success'", (err4, wStats) => {
-                    db.get("SELECT SUM(amount) as totalPending FROM withdrawals WHERE status = 'pending'", (err5, pStats) => {
-                        
-                        const ipCounts = {};
-                        users.forEach(u => { if (u.ip) ipCounts[u.ip] = (ipCounts[u.ip] || 0) + 1; });
-
-                        let usersHtml = users.map(u => {
-                            const isDup = ipCounts[u.ip] > 1;
-                            return `<tr class="${isDup ? 'red-flag' : ''}">
-                                <td>${u.id}</td><td>${u.name}</td><td>${u.orders}</td><td>${u.coins}</td><td>${u.truckLevel}</td><td>${u.ip || 'N/A'} ${isDup ? '(TRÙNG IP!)' : ''}</td><td>${u.validInvites}</td>
-                            </tr>`;
-                        }).join('');
-
-                        let withdrawsHtml = withdrawals.map(w => {
-                            const u = users.find(u => u.id === w.userId);
-                            const isDup = u && u.ip && ipCounts[u.ip] > 1;
-                            return `<tr class="${isDup ? 'red-flag' : ''}">
-                                <td>${w.id}</td><td>${w.userId}</td><td>${w.amount}</td><td>${w.method}</td>
-                                <td>
-                                    <select onchange="updateStatus(${w.id}, this.value, document.getElementById('reason-${w.id}').value)">
-                                        <option value="pending" ${w.status==='pending'?'selected':''}>Chờ duyệt</option>
-                                        <option value="success" ${w.status==='success'?'selected':''}>Đã duyệt</option>
-                                        <option value="rejected" ${w.status==='rejected'?'selected':''}>Lỗi</option>
-                                    </select>
-                                </td>
-                                <td><input type="text" id="reason-${w.id}" value="${w.reason || ''}" style="width:100px;"></td>
-                                <td><button onclick="updateStatus(${w.id}, document.querySelector('#reason-${w.id}').parentElement.previousElementSibling.children[0].value, document.getElementById('reason-${w.id}').value)">Lưu</button></td>
-                            </tr>`;
-                        }).join('');
-
-                        const html = `<!DOCTYPE html>
-                        <html>
-                        <head>
-                            <title>Admin Panel - Logistics</title>
-                            <style>
-                                body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; }
-                                h1, h2 { color: #333; }
-                                .tabs { display: flex; margin-bottom: 20px; }
-                                .tab { padding: 10px 20px; cursor: pointer; background: #ddd; margin-right: 5px; }
-                                .tab.active { background: #fff; border-bottom: 2px solid #007bff; }
-                                .tab-content { display: none; }
-                                .tab-content.active { display: block; }
-                                table { width: 100%; border-collapse: collapse; background: white; margin-top: 10px; }
-                                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
-                                th { background: #f2f2f2; }
-                                .red-flag { background: #ffcccc !important; color: red; font-weight: bold; }
-                                .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-                                .stat-card { background: white; padding: 15px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-                                .stat-value { font-size: 24px; font-weight: bold; color: #007bff; }
-                                .commands-list { background: white; padding: 15px; border-radius: 5px; }
-                                .command-item { margin-bottom: 10px; padding: 5px; background: #f9f9f9; }
-                            </style>
-                            <script>
-                                function switchTab(tabName) {
-                                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                                    document.getElementById('tab-' + tabName).classList.add('active');
-                                    document.getElementById('content-' + tabName).classList.add('active');
-                                }
-                                async function updateStatus(id, status, reason) {
-                                    const res = await fetch('/api/admin/update-withdrawal?pass=${req.query.pass}', {
-                                        method: 'POST',
-                                        headers: {'Content-Type': 'application/json'},
-                                        body: JSON.stringify({ id, status, reason })
-                                    });
-                                    if(res.ok) location.reload();
-                                }
-                            </script>
-                        </head>
-                        <body>
-                            <h1>🛠️ Admin Panel - Logistics App</h1>
-                            <div class="tabs">
-                                <div class="tab active" onclick="switchTab('stats')">Thống kê</div>
-                                <div class="tab" onclick="switchTab('users')">Người dùng</div>
-                                <div class="tab" onclick="switchTab('commands')">Lệnh</div>
-                                <div class="tab" onclick="switchTab('withdrawals')">Duyệt rút tiền</div>
-                            </div>
-                            
-                            <div id="content-stats" class="tab-content active">
-                                <div class="stats-grid">
-                                    <div class="stat-card"><div>Tổng User</div><div class="stat-value">${stats.totalUsers || 0}</div></div>
-                                    <div class="stat-card"><div>QC đã xem (Hôm nay)</div><div class="stat-value">${stats.totalAds || 0}</div></div>
-                                    <div class="stat-card"><div>Smartlink đã ấn (Hôm nay)</div><div class="stat-value">${stats.totalSmartlinks || 0}</div></div>
-                                    <div class="stat-card"><div>Tiền đã duyệt</div><div class="stat-value">${wStats.totalWithdrawn || 0} VNĐ</div></div>
-                                    <div class="stat-card"><div>Tiền chờ duyệt</div><div class="stat-value">${pStats.totalPending || 0} VNĐ</div></div>
-                                </div>
-                            </div>
-                            
-                            <div id="content-users" class="tab-content">
-                                <h2>👥 Danh sách User (Đỏ = Trùng IP)</h2>
-                                <table><tr><th>ID</th><th>Tên</th><th>Đơn hàng</th><th>Coin</th><th>Level</th><th>IP</th><th>Mời hợp lệ</th></tr>${usersHtml || '<tr><td colspan="7">Không có dữ liệu</td></tr>'}</table>
-                            </div>
-                            
-                            <div id="content-commands" class="tab-content">
-                                <h2>📜 Danh sách Lệnh Admin</h2>
-                                <div class="commands-list">
-                                    <div class="command-item"><b>/ban &lt;userId&gt;</b> - Cấm user</div>
-                                    <div class="command-item"><b>/unban &lt;userId&gt;</b> - Bỏ cấm user</div>
-                                    <div class="command-item"><b>/congcoin &lt;userId&gt; &lt;số_lượng&gt;</b> - Cộng coin</div>
-                                    <div class="command-item"><b>/trucoin &lt;userId&gt; &lt;số_lượng&gt;</b> - Trừ coin</div>
-                                    <div class="command-item"><b>/addspin &lt;userId&gt; &lt;số_lượng&gt;</b> - Cộng lượt mở rương</div>
-                                    <div class="command-item"><b>/addorders &lt;userId&gt; &lt;số_lượng&gt;</b> - Cộng đơn hàng</div>
-                                    <div class="command-item"><b>/setlevel &lt;userId&gt; &lt;cấp_độ&gt;</b> - Đặt cấp xe</div>
-                                    <div class="command-item"><b>/resetdaily &lt;userId&gt;</b> - Reset nhiệm vụ ngày</div>
-                                    <div class="command-item"><b>/deleteuser &lt;userId&gt;</b> - Xóa user</div>
-                                    <div class="command-item"><b>/createcode &lt;mã&gt; &lt;loại&gt; &lt;số_lượng&gt; &lt;giới_hạn&gt;</b> - Tạo code</div>
-                                    <div class="command-item"><b>/listcodes</b> - Liệt kê code</div>
-                                    <div class="command-item"><b>/delcode &lt;mã&gt;</b> - Xóa code</div>
-                                    <div class="command-item"><b>/quantri</b> - Thống kê nhanh</div>
-                                    <div class="command-item"><b>/broadcast &lt;tin nhắn&gt;</b> - Gửi thông báo</div>
-                                    <div class="command-item"><b>/checkID &lt;userId&gt;</b> - Kiểm tra user</div>
-                                </div>
-                            </div>
-                            
-                            <div id="content-withdrawals" class="tab-content">
-                                <h2>💸 Duyệt rút tiền (Đỏ = Trùng IP)</h2>
-                                <table><tr><th>ID</th><th>User ID</th><th>Số tiền</th><th>Phương thức</th><th>Trạng thái</th><th>Lý do</th><th>Hành động</th></tr>${withdrawsHtml || '<tr><td colspan="7">Không có yêu cầu</td></tr>'}</table>
-                            </div>
-                        </body>
-                        </html>`;
-                        res.send(html);
-                    });
-                });
-            });
-        });
-    });
+// --- 6. ADMIN WEB PANEL ---
+app.get('/admin', async (req, res) => {
+  if (req.query.pass !== ADMIN_PASS) return res.status(403).send('<h1>Access Denied</h1>');
+  
+  const { data: users } = await supabase.from('users').select('*');
+  const { data: withdrawals } = await supabase.from('withdrawals').select('*').order('createdAt', { ascending: false });
+  
+  const ipCounts = {};
+  users.forEach(u => { if (u.ip) ipCounts[u.ip] = (ipCounts[u.ip] || 0) + 1; });
+  
+  let usersHtml = users.map(u => {
+    const isDup = ipCounts[u.ip] > 1;
+    return `<tr class="${isDup ? 'red-flag' : ''}">
+        <td>${u.id}</td><td>${u.name}</td><td>${u.ip || 'N/A'} ${isDup ? '(TRÙNG IP!)' : ''}</td>
+        <td>${u.coins}</td><td>${u.orders}</td><td>${u.truckLevel}</td><td>${u.validInvites}</td>
+    </tr>`;
+  }).join('');
+  
+  let withdrawsHtml = withdrawals.map(w => {
+    let statusClass = w.status === 'success' ? 'status-success' : (w.status === 'pending' ? 'status-pending' : (w.status === 'rejected' ? 'status-rejected' : 'status-refunded'));
+    let statusText = w.status === 'success' ? 'Đã duyệt' : (w.status === 'pending' ? 'Chờ duyệt' : (w.status === 'rejected' ? 'Lỗi: ' + (w.reason || '') : 'Hoàn trả'));
+    return `<tr>
+        <td>${w.id}</td><td>${w.userId}</td><td>${w.amount}</td><td>${w.method}</td>
+        <td class="${statusClass}">${statusText}</td><td>${w.reason || '-'}</td>
+    </tr>`;
+  }).join('');
+  
+  res.send(`<!DOCTYPE html><html><head><title>Admin Panel</title><style>
+      body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; }
+      table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 14px; }
+      th { background: #f2f2f2; }
+      .red-flag { background: #ffcccc !important; color: red; font-weight: bold; }
+      .status-pending { color: orange; font-weight: bold; }
+      .status-success { color: green; font-weight: bold; }
+      .status-rejected { color: red; font-weight: bold; }
+      .status-refunded { color: gray; font-weight: bold; }
+  </style></head><body>
+  <h1>🛠️ Admin Panel - Logistics App</h1>
+  <h2>📥 Quản lý yêu cầu rút tiền</h2>
+  <table><tr><th>ID</th><th>User ID</th><th>Số tiền</th><th>Phương thức</th><th>Trạng thái</th><th>Lý do</th></tr>${withdrawsHtml || '<tr><td colspan="6">Đang tải...</td></tr>'}</table>
+  <h2>👥 Danh sách User (Nền đỏ = Trùng IP)</h2>
+  <table><tr><th>ID</th><th>Tên</th><th>IP</th><th>Coin</th><th>Đơn hàng</th><th>Level</th><th>Mời hợp lệ</th></tr>${usersHtml || '<tr><td colspan="7">Đang tải...</td></tr>'}</table>
+  </body></html>`);
 });
 
 const PORT = process.env.PORT || 3000;
