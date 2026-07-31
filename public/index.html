@@ -843,16 +843,15 @@
                     this.scheduleCoinBox();
                     this.startCountdown();
 
-                    // Thêm listener để xử lý khi user quay lại tab sau khi làm smartlink
                     document.addEventListener('visibilitychange', () => {
                         if (!document.hidden && this.tab === 'tasks') {
                             const task = this.dailyTasks.find(t => t.id === 'smartlink15');
                             if (task && !task.done && this.smartlinkStartTime > 0) {
                                 const timeSpent = Date.now() - this.smartlinkStartTime;
-                                if (timeSpent >= 10000) { // 10 giây
+                                if (timeSpent >= 10000) {
                                     this.smartlinkCount = (this.smartlinkCount || 0) + 1;
                                     this.smartlinksToday = (this.smartlinksToday || 0) + 1;
-                                    this.smartlinkStartTime = 0; // reset
+                                    this.smartlinkStartTime = 0;
                                     this.saveState();
                                     
                                     if (this.smartlinkCount >= 15) {
