@@ -75,21 +75,41 @@
             .btn-text { font-size: 11px; }
             .card-padding { padding: 10px; }
         }
+
+        /* Hiệu ứng đẹp hơn cho các mục, vẫn giữ chủ đề Kho Hàng */
+        .glass { transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+        .glass:active { transform: scale(0.98); }
+        button { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
+        button:active:not(:disabled) { transform: scale(0.95); }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        main > div[x-show] { animation: fadeInUp 0.35s ease-out; }
+        .chest-container:hover .chest { filter: drop-shadow(0 0 20px rgba(251, 191, 36, 0.6)); }
+        nav button.text-blue-500 i { filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.8)); }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-thumb { background: rgba(251, 191, 36, 0.4); border-radius: 4px; }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
 
     <div x-show="notification.show" x-transition class="banner-notification" x-text="notification.text" @click="notification.show = false"></div>
 
+    <!-- MÀN HÌNH CHẶN KHI TÀI KHOẢN BỊ KHÓA (thay thế toàn bộ mini app, không hiện tên miền/nội dung app) -->
+    <div x-show="bannedScreen" x-cloak class="fixed inset-0 z-[9999] bg-slate-950 flex flex-col items-center justify-center text-center p-6">
+        <div class="text-6xl mb-4">❌</div>
+        <h2 class="text-lg font-black text-red-400 uppercase mb-2" x-text="texts.bannedTitle"></h2>
+        <p class="text-sm text-slate-300" x-text="texts.bannedDesc"></p>
+        <a href="https://t.me/noameazonus" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
+    </div>
+
     <!-- MODAL HỎI X2 ĐƠN HÀNG -->
     <div x-show="showX2Prompt" class="modal-overlay" x-cloak @click.self="skipX2Ad()">
         <div class="modal-content">
             <div class="text-6xl mb-3">🚚💨</div>
-            <h3 class="text-lg font-black text-yellow-400 mb-2">GIAO HÀNG THÀNH CÔNG!</h3>
-            <p class="text-sm text-slate-300 mb-4">Bạn có muốn xem quảng cáo để <span class="text-yellow-400 font-black">X2</span> số đơn hàng vừa nhận không?</p>
+            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.deliverySuccessTitle"></h3>
+            <p class="text-sm text-slate-300 mb-4"><span x-text="texts.x2Question"></span> <span class="text-yellow-400 font-black">X2</span> <span x-text="texts.x2Suffix"></span></p>
             <div class="flex gap-2">
-                <button @click="skipX2Ad()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm">Không, cảm ơn</button>
-                <button @click="confirmX2Ad()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm">XEM QC X2 NGAY</button>
+                <button @click="skipX2Ad()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.noThanks"></button>
+                <button @click="confirmX2Ad()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdX2Now"></button>
             </div>
         </div>
     </div>
@@ -98,13 +118,14 @@
     <div x-show="showCoinBoxModal" class="modal-overlay" x-cloak @click.self="showCoinBoxModal = false">
         <div class="modal-content">
             <div class="text-6xl mb-3">🎁</div>
-            <h3 class="text-lg font-black text-yellow-400 mb-2">HỘP QUÀ BÍ MẬT</h3>
-            <p class="text-sm text-slate-300 mb-4">Xem quảng cáo để mở hộp quà và nhận phần thưởng ngẫu nhiên!</p>
+            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.coinBoxTitle"></h3>
+            <p class="text-sm text-slate-300 mb-4" x-text="texts.coinBoxDesc"></p>
             <div class="flex gap-2">
-                <button @click="showCoinBoxModal = false" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm">Để sau</button>
-                <button @click="openCoinBoxWithAd()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm">XEM QC NHẬN QUÀ</button>
+                <button @click="showCoinBoxModal = false" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.later"></button>
+                <button @click="openCoinBoxWithAd()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdGetGift"></button>
             </div>
         </div>
+
     </div>
 
     <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
@@ -125,23 +146,23 @@
     <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
     <div x-show="!joinedGroups && !dismissedJoinBanner" class="join-banner">
         <div class="join-banner-close" @click="dismissedJoinBanner = true">✕</div>
-        <div class="font-black text-sm mb-1">🎉 Tham gia Cộng Đồng Kho Hàng để mở khóa!</div>
-        <div class="text-[10px] opacity-90 mb-1">Vào nhóm chat + kênh thông báo để nhận tin khuyến mãi, và xem QC để x2 phần thưởng mỗi lần giao hàng 🚀</div>
+        <div class="font-black text-sm mb-1" x-text="texts.joinBannerTitle"></div>
+        <div class="text-[10px] opacity-90 mb-1" x-text="texts.joinBannerDesc"></div>
         <div class="join-banner-btns">
-            <a href="https://t.me/khohangkiemtien" target="_blank" class="bg-blue-500 text-white">📢 Kênh thông báo</a>
-            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="bg-yellow-500 text-slate-900">💬 Cộng đồng chat</a>
-            <button @click="checkGroupMembership()" class="bg-green-500 text-white">✅ Kiểm tra</button>
+            <a href="https://t.me/khohangkiemtien" target="_blank" class="bg-blue-500 text-white" x-text="texts.channel"></a>
+            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="bg-yellow-500 text-slate-900" x-text="texts.group"></a>
+            <button @click="checkGroupMembership()" class="bg-green-500 text-white" x-text="texts.checkJoin"></button>
         </div>
     </div>
 
     <!-- BANNER QUẢNG BÁ XEM QC X2 (chỉ hiện khi đã vào được app, có nút X để tắt) -->
     <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
         <div class="join-banner-close" @click="dismissedPromoBanner = true">✕</div>
-        <div class="font-black text-sm mb-1">📺 Xem QC nhận X2 Đơn Hàng mỗi lần giao hàng!</div>
-        <div class="text-[10px] opacity-90">Đừng quên tham gia Cộng đồng chat để không bỏ lỡ sự kiện & mã quà tặng 🎁</div>
+        <div class="font-black text-sm mb-1" x-text="texts.promoBannerTitle"></div>
+        <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
     </div>
 
-    <div x-show="joinedGroups" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
+    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
         <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
                 <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base"><i class="fa-solid fa-warehouse"></i></div>
@@ -202,7 +223,8 @@
                         </div>
                         <span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span>
                     </button>
-                    <button x-show="showX2Ad" @click="watchAdX2()" class="w-full py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[10px] uppercase text-green-400 hover:bg-green-600/50 transition btn-text">📺 XEM AD X2 ĐƠN HÀNG</button>
+                    <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
+                    <button x-show="showX2Ad" @click="watchAdX2()" class="w-full py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[10px] uppercase text-green-400 hover:bg-green-600/50 transition btn-text" x-text="texts.watchAdX2Orders"></button>
                 </div>
                 <div class="p-3 glass rounded-[25px] flex justify-between items-center card-padding">
                     <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
@@ -222,8 +244,8 @@
                         <span class="text-sm font-black" x-text="'Lượt Mở Rương miễn phí: ' + spinFree"></span>
                     </div>
                     <div class="mt-3 flex flex-col gap-2">
-                        <button @click="watchAdForChest()" :disabled="spinAdCount >= spinAdLimit" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[9px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text">📺 XEM AD +1 LƯỢT MỞ (<span x-text="spinAdCount + '/' + spinAdLimit"></span>)</button>
-                        <button @click="buyChestWithOrders()" :disabled="orders < 500" class="w-full py-2 bg-yellow-600/30 border border-yellow-500 rounded-[25px] font-black text-[9px] uppercase text-yellow-400 hover:bg-yellow-600/50 transition disabled:opacity-40 btn-text">🔄 ĐỔI 500 ĐH = 1 LƯỢT MỞ</button>
+                        <button @click="watchAdForChest()" :disabled="spinAdCount >= spinAdLimit" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[9px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text">📺 <span x-text="texts.watchAdChestBtn"></span> (<span x-text="spinAdCount + '/' + spinAdLimit"></span>)</button>
+                        <button @click="buyChestWithOrders()" :disabled="orders < 500" class="w-full py-2 bg-yellow-600/30 border border-yellow-500 rounded-[25px] font-black text-[9px] uppercase text-yellow-400 hover:bg-yellow-600/50 transition disabled:opacity-40 btn-text" x-text="texts.exchangeChest"></button>
                     </div>
                 </div>
                 <div class="glass p-3 rounded-[25px] text-left card-padding">
@@ -257,8 +279,8 @@
                             <div>
                                 <span x-show="task.done" class="text-green-400 text-xs font-black" x-text="texts.claimed"></span>
                                 <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="bg-green-600 px-2 py-1 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text animate-pulse" x-text="texts.claim"></button>
-                                <span x-show="!task.done && !task.claimable && task.id !== 'smartlink15'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
-                                <button x-show="!task.done && !task.claimable && task.id === 'smartlink15'" @click="completeTask(idx)" class="bg-blue-600 px-2 py-1 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
+                                <span x-show="!task.done && !task.claimable && task.id !== 'smartlink15' && task.id !== 'zalogroup'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
+                                <button x-show="!task.done && !task.claimable && (task.id === 'smartlink15' || task.id === 'zalogroup')" @click="completeTask(idx)" class="bg-blue-600 px-2 py-1 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
                             </div>
                         </div>
                     </template>
@@ -269,11 +291,11 @@
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-black uppercase opacity-60">📺 Xem QC nhận thưởng</h3>
-                        <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/30 hôm nay'"></span>
+                        <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.watchAdRewardTitle"></h3>
+                        <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/30 ' + texts.today"></span>
                     </div>
-                    <p class="text-[9px] text-slate-400">Mỗi lần xem xong nhận ngay <span class="text-yellow-400 font-black">+100 Coin</span> &amp; <span class="text-yellow-400 font-black">+50 Đơn Hàng</span>. Tối đa 30 lần/ngày.</p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 30" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text">📺 XEM QC (+100 💰 / +50 📦)</button>
+                    <p class="text-[9px] text-slate-400"><span x-text="texts.watchAdRewardDesc"></span> <span class="text-yellow-400 font-black">+100 Coin</span> &amp; <span class="text-yellow-400 font-black" x-text="'+100 ' + texts.ordersTarget"></span>. <span x-text="texts.maxPerDay"></span></p>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 30" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="texts.watchAdRewardBtn"></button>
                 </div>
             </div>
 
@@ -281,23 +303,23 @@
             <div x-show="tab === 'leaderboard'" x-transition class="space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.leaderboardTitle"></h2>
                 <div class="glass p-3 rounded-[25px] text-center card-padding">
-                    <p class="text-xs font-bold text-yellow-400 mb-2">⏰ Thời gian còn lại:</p>
+                    <p class="text-xs font-bold text-yellow-400 mb-2" x-text="texts.timeRemaining"></p>
                     <p class="text-2xl font-black text-white" x-text="countdownText"></p>
-                    <p class="text-[10px] text-slate-400 mt-1">Đến 00:00 Chủ Nhật</p>
+                    <p class="text-[10px] text-slate-400 mt-1" x-text="texts.resetAtSunday"></p>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60 text-center" x-text="texts.weeklyRewards"></h3>
                     <div class="space-y-2">
                         <div class="rank-1 p-3 rounded-xl flex justify-between items-center">
-                            <div><p class="font-black text-white">🏆 Top 1</p><p class="text-[10px] text-white/80" x-text="texts.director"></p></div>
+                            <div><p class="font-black text-white" x-text="texts.top1"></p><p class="text-[10px] text-white/80" x-text="texts.director"></p></div>
                             <div class="text-right text-xs font-black"><p>100k</p><p>🎡10</p></div>
                         </div>
                         <div class="rank-2 p-3 rounded-xl flex justify-between items-center">
-                            <div><p class="font-black text-white">🥈 Top 2</p><p class="text-[10px] text-white/80" x-text="texts.headDept"></p></div>
+                            <div><p class="font-black text-white" x-text="texts.top2"></p><p class="text-[10px] text-white/80" x-text="texts.headDept"></p></div>
                             <div class="text-right text-xs font-black"><p>50k</p><p>🎡5</p></div>
                         </div>
                         <div class="rank-3 p-3 rounded-xl flex justify-between items-center">
-                            <div><p class="font-black text-white">🥉 Top 3</p><p class="text-[10px] text-white/80" x-text="texts.warehouseMgr"></p></div>
+                            <div><p class="font-black text-white" x-text="texts.top3"></p><p class="text-[10px] text-white/80" x-text="texts.warehouseMgr"></p></div>
                             <div class="text-right text-xs font-black"><p>25k</p><p>🎡2</p></div>
                         </div>
                     </div>
@@ -337,40 +359,42 @@
                 </div>
                 
                 <div class="glass p-3 rounded-[25px] text-left card-padding space-y-3">
-                    <h4 class="text-sm font-black uppercase text-yellow-400 flex items-center gap-2">👥 Điều kiện mời bạn bè</h4>
+                    <h4 class="text-sm font-black uppercase text-yellow-400 flex items-center gap-2">👥 <span x-text="texts.inviteCondTitle"></span></h4>
                     <div class="bg-slate-800/50 p-3 rounded-xl border border-white/5 space-y-2">
-                        <p class="text-xs font-bold text-slate-300">Người được mời phải:</p>
+                        <p class="text-xs font-bold text-slate-300" x-text="texts.inviteeMustTitle"></p>
                         <ul class="text-[10px] font-bold text-slate-400 space-y-1.5 pl-1">
-                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> Vào Mini App bằng link giới thiệu</li>
-                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> Tham gia đầy đủ nhóm Telegram theo yêu cầu</li>
-                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> Xem ít nhất 3 quảng cáo</li>
+                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond1"></span></li>
+                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond2"></span></li>
+                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond3"></span></li>
                         </ul>
                     </div>
                     
                     <!-- Hiển thị tiến độ điều kiện -->
                     <div class="bg-green-900/20 p-3 rounded-xl border border-green-500/20">
-                        <p class="text-xs font-bold text-green-300 mb-2">📊 Tiến độ hiện tại:</p>
+                        <p class="text-xs font-bold text-green-300 mb-2" x-text="texts.currentProgress"></p>
                         <div class="flex justify-between text-xs">
-                            <span>Tổng đã mời:</span>
+                            <span x-text="texts.totalInvited"></span>
                             <span class="font-black text-green-400" x-text="invitedCount"></span>
                         </div>
                         <div class="flex justify-between text-xs">
-                            <span>Hợp lệ:</span>
+                            <span x-text="texts.validLabel"></span>
                             <span class="font-black text-green-400" x-text="validInvites"></span>
                         </div>
+                        <div class="max-h-56 overflow-y-auto pr-1 space-y-2 mt-1">
                         <template x-for="(milestone, idx) in referralMilestones" :key="idx">
                             <div class="mt-2 p-2 rounded-lg" :class="milestone.claimed ? 'bg-green-500/20' : (validInvites >= milestone.friends ? 'bg-yellow-500/20' : 'bg-slate-700/30')">
                                 <div class="flex justify-between items-center">
                                     <span class="text-[10px]" x-text="milestone.friends + ' bạn: ' + milestone.reward"></span>
-                                    <button x-show="validInvites >= milestone.friends && !milestone.claimed" @click="claimReferralReward(idx)" class="px-2 py-0.5 bg-yellow-500 text-slate-900 rounded font-black text-[8px] uppercase animate-pulse">NHẬN</button>
-                                    <span x-show="milestone.claimed" class="text-green-400 text-[8px] font-black">✅ ĐÃ NHẬN</span>
+                                    <button x-show="validInvites >= milestone.friends && !milestone.claimed" @click="claimReferralReward(idx)" class="px-2 py-0.5 bg-yellow-500 text-slate-900 rounded font-black text-[8px] uppercase animate-pulse" x-text="texts.claimBtn"></button>
+                                    <span x-show="milestone.claimed" class="text-green-400 text-[8px] font-black" x-text="texts.claimedBtn"></span>
                                     <span x-show="validInvites < milestone.friends && !milestone.claimed" class="text-slate-400 text-[8px]" x-text="validInvites + '/' + milestone.friends"></span>
                                 </div>
                             </div>
                         </template>
+                        </div>
                     </div>
                     
-                    <p class="text-[9px] text-yellow-400 italic border-t border-white/10 pt-2">⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.</p>
+                    <p class="text-[9px] text-yellow-400 italic border-t border-white/10 pt-2" x-text="texts.milestoneNote"></p>
                 </div>
                 
                 <div class="glass p-3 rounded-[25px] grid grid-cols-2 gap-2 text-center card-padding">
@@ -383,8 +407,8 @@
             <div x-show="tab === 'withdraw'" x-transition class="space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.withdraw"></h2>
                 <div class="glass p-2 rounded-xl text-center card-padding">
-                    <p class="text-[10px] font-bold text-yellow-400">💱 Tỉ lệ quy đổi: 20.000 Đơn Hàng = 2.000 VNĐ (1 Đơn Hàng = 0,1 VNĐ)</p>
-                    <p class="text-[9px] text-slate-400">Rút tối thiểu: 2.000 VNĐ (20.000 Đơn Hàng)</p>
+                    <p class="text-[10px] font-bold text-yellow-400" x-text="texts.exchangeRateLine"></p>
+                    <p class="text-[9px] text-slate-400" x-text="texts.minWithdrawLine"></p>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 20.000'"></span></div>
@@ -394,14 +418,60 @@
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
                     </div>
-                    <p class="text-center text-xs font-bold" x-text="withdrawProgress >= 100 ? '🎉 Bạn đã đủ điều kiện rút tiền.' : 'Tiến độ: ' + Math.round(withdrawProgress) + '%'"></p>
-                    <button @click="requestWithdraw()" :disabled="withdrawProgress < 100 || withdrawRemain <= 0" class="w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text" x-text="texts.withdraw"></button>
+                    <p class="text-center text-xs font-bold" x-text="withdrawProgress >= 100 ? texts.withdrawReady : (texts.progressLabel + ' ' + Math.round(withdrawProgress) + '%')"></p>
                 </div>
+
+                <!-- FORM RÚT TIỀN -->
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <div class="grid grid-cols-3 gap-1">
+                        <button @click="withdrawMethod = 'bank'" class="py-2 rounded-xl text-[10px] font-black uppercase transition" :class="withdrawMethod === 'bank' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'" x-text="texts.bankLabel"></button>
+                        <button @click="withdrawMethod = 'momo'" class="py-2 rounded-xl text-[10px] font-black uppercase transition" :class="withdrawMethod === 'momo' ? 'bg-pink-600 text-white' : 'bg-slate-800 text-slate-400'" x-text="texts.momoLabel"></button>
+                        <button @click="withdrawMethod = 'zalopay'" class="py-2 rounded-xl text-[10px] font-black uppercase transition" :class="withdrawMethod === 'zalopay' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" x-text="texts.zalopayLabel"></button>
+                    </div>
+
+                    <template x-if="withdrawMethod === 'bank'">
+                        <div class="space-y-2">
+                            <input type="text" x-model="withdrawBankName" :placeholder="texts.bankNamePlaceholder" class="w-full bg-slate-800 rounded-xl px-3 py-2 text-sm border border-white/10" />
+                            <input type="text" x-model="withdrawAccountName" :placeholder="texts.accountNamePlaceholder" class="w-full bg-slate-800 rounded-xl px-3 py-2 text-sm border border-white/10" />
+                            <input type="text" x-model="withdrawAccountNumber" :placeholder="texts.accountNumberPlaceholder" class="w-full bg-slate-800 rounded-xl px-3 py-2 text-sm border border-white/10" />
+                        </div>
+                    </template>
+                    <template x-if="withdrawMethod !== 'bank'">
+                        <input type="text" x-model="withdrawAccountNumber" :placeholder="withdrawMethod === 'momo' ? texts.momoPhonePlaceholder : texts.zalopayPhonePlaceholder" class="w-full bg-slate-800 rounded-xl px-3 py-2 text-sm border border-white/10" />
+                    </template>
+
+                    <input type="number" x-model.number="withdrawOrdersAmount" :placeholder="texts.ordersAmountPlaceholder" class="w-full bg-slate-800 rounded-xl px-3 py-2 text-sm border border-white/10" />
+
+                    <div class="flex justify-between items-center bg-slate-800/60 rounded-xl px-3 py-2 border border-yellow-500/20">
+                        <span class="text-[10px] font-bold text-slate-400" x-text="texts.convertedAmountLabel"></span>
+                        <span class="font-black text-yellow-400 text-sm" x-text="formatNumber(withdrawVndAmount) + ' VNĐ'"></span>
+                    </div>
+
+                    <button @click="requestWithdraw()"
+                        :disabled="withdrawRemain <= 0 || !withdrawOrdersAmount || withdrawOrdersAmount < 20000 || orders < withdrawOrdersAmount || !withdrawAccountNumber || (withdrawMethod === 'bank' && (!withdrawBankName || !withdrawAccountName))"
+                        class="w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text">
+                        <span x-text="texts.withdraw + ' (' + formatNumber(withdrawOrdersAmount || 0) + ' 📦)'"></span>
+                    </button>
+                </div>
+
                 <div class="glass p-3 rounded-[25px] text-left card-padding">
                     <h4 class="text-xs font-black uppercase opacity-50" x-text="texts.withdrawHistory"></h4>
-                    <div class="space-y-1 mt-2 max-h-32 overflow-y-auto">
+                    <div class="space-y-2 mt-2 max-h-48 overflow-y-auto">
                         <template x-for="w in withdrawHistory" :key="w.id">
-                            <div class="flex justify-between text-xs border-b border-white/5 py-1"><span x-text="w.method + ' - ' + w.amount + ' VNĐ'"></span><span :class="w.status === 'success' ? 'text-green-400' : w.status === 'pending' ? 'text-yellow-400' : 'text-red-400'" x-text="w.status"></span></div>
+                            <div class="text-xs border-b border-white/5 py-1.5">
+                                <div class="flex justify-between items-center">
+                                    <span class="font-black" x-text="texts.txCodePrefix + (w.txCode || w.id)"></span>
+                                    <span class="font-black" :class="w.status === 'success' ? 'text-green-400' : w.status === 'pending' ? 'text-yellow-400' : 'text-red-400'" x-text="w.status === 'success' ? texts.statusApproved : w.status === 'pending' ? texts.statusPending : texts.statusRejected"></span>
+                                </div>
+                                <div class="flex justify-between text-slate-400 text-[10px] mt-0.5">
+                                    <span x-text="'ID: ' + w.userId"></span>
+                                    <span x-text="w.accountNumber || w.accountInfo"></span>
+                                </div>
+                                <div class="flex justify-between text-[10px] mt-0.5">
+                                    <span class="text-slate-400" x-text="w.method"></span>
+                                    <span class="font-black text-yellow-400" x-text="formatNumber(w.amount) + ' VNĐ'"></span>
+                                </div>
+                            </div>
                         </template>
                         <p x-show="withdrawHistory.length === 0" class="text-center text-slate-500 text-xs italic" x-text="texts.noTransactions"></p>
                     </div>
@@ -431,7 +501,7 @@
                     <a href="https://t.me/khohangchatkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.group"></a>
                 </div>
                 <div class="glass p-3 rounded-[25px] border-2 border-red-500/20 card-padding">
-                    <p class="font-bold text-xs opacity-60">🎁 Giftcode</p>
+                    <p class="font-bold text-xs opacity-60" x-text="texts.giftcodeLabel"></p>
                     <div class="flex mt-2">
                         <input type="text" x-model="giftCode" :placeholder="texts.enterCode" class="flex-1 bg-slate-800 rounded-l-xl px-3 py-1 text-sm border border-white/10" />
                         <button @click="redeemGift()" class="bg-blue-600 px-3 py-1 rounded-r-xl font-black text-sm uppercase" x-text="texts.redeem"></button>
@@ -446,7 +516,7 @@
                 <template x-for="m in menuItems" :key="m.id">
                     <button @click="tab = m.id" :class="tab === m.id ? 'text-blue-500 scale-110 -translate-y-1 font-black opacity-100 duration-300' : 'text-slate-500 opacity-50 grayscale'" class="flex flex-col items-center flex-shrink-0 transition-all px-1 cursor-pointer">
                         <i :class="m.icon" class="text-base"></i>
-                        <span class="text-[6px] font-extrabold uppercase mt-0.5 tracking-widest italic" x-text="m.name"></span>
+                        <span class="text-[6px] font-extrabold uppercase mt-0.5 tracking-widest italic" x-text="texts['nav_' + m.id]"></span>
                     </button>
                 </template>
             </div>
@@ -488,7 +558,32 @@
                 settings: 'Cài Đặt', userName: 'Tên', truckLevelLabel: 'Cấp xe', languageLabel: 'Ngôn ngữ',
                 contactAdmin: 'Liên hệ Admin', enterCode: 'Mã...', redeem: 'Nhận',
                 deliveryComplete: 'Giao hàng thành công! +', ordersTarget: 'Đơn hàng',
-                adsTarget: 'Quảng cáo', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Lượt rút'
+                adsTarget: 'Quảng cáo', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Lượt rút',
+                bannedTitle: 'Tài Khoản Của Bạn Đã Bị Khóa', bannedDesc: 'Vui Lòng Liên Hệ Admin Để Được Hỗ Trợ!', bannedContact: '☎️ Liên hệ Admin',
+                deliverySuccessTitle: 'GIAO HÀNG THÀNH CÔNG!', x2Question: 'Bạn có muốn xem quảng cáo để', x2Suffix: 'số đơn hàng vừa nhận không?',
+                noThanks: 'Không, cảm ơn', watchAdX2Now: 'XEM QC X2 NGAY',
+                coinBoxTitle: 'HỘP QUÀ BÍ MẬT', coinBoxDesc: 'Xem quảng cáo để mở hộp quà và nhận phần thưởng ngẫu nhiên!',
+                later: 'Để sau', watchAdGetGift: 'XEM QC NHẬN QUÀ',
+                joinBannerTitle: '🎉 Tham gia Cộng Đồng Kho Hàng để mở khóa!', joinBannerDesc: 'Vào nhóm chat + kênh thông báo để nhận tin khuyến mãi, và xem QC để x2 phần thưởng mỗi lần giao hàng 🚀', checkJoin: '✅ Kiểm tra',
+                promoBannerTitle: '📺 Xem QC nhận X2 Đơn Hàng mỗi lần giao hàng!', promoBannerDesc: 'Đừng quên tham gia Cộng đồng chat để không bỏ lỡ sự kiện & mã quà tặng 🎁',
+                speedUpBtn: '⚡ TĂNG TỐC X2 (XEM QC GIẢM 1/2 THỜI GIAN CHỜ)', watchAdX2Orders: '📺 XEM AD X2 ĐƠN HÀNG',
+                watchAdChestBtn: 'XEM AD +1 LƯỢT MỞ', exchangeChest: '🔄 ĐỔI 500 ĐH = 1 LƯỢT MỞ',
+                watchAdRewardDesc: 'Mỗi lần xem xong nhận ngay', watchAdRewardBtn: '📺 XEM QC (+100 💰 / +100 📦)',
+                timeRemaining: '⏰ Thời gian còn lại:', resetAtSunday: 'Đến 00:00 Chủ Nhật',
+                top1: '🏆 Top 1', top2: '🥈 Top 2', top3: '🥉 Top 3',
+                inviteeMustTitle: 'Người được mời phải:', currentProgress: '📊 Tiến độ hiện tại:',
+                totalInvited: 'Tổng đã mời:', validLabel: 'Hợp lệ:', claimBtn: 'NHẬN', claimedBtn: '✅ ĐÃ NHẬN',
+                exchangeRateLine: '💱 Tỉ lệ quy đổi: 20.000 Đơn Hàng = 2.000 VNĐ (1 Đơn Hàng = 0,1 VNĐ)', minWithdrawLine: 'Rút tối thiểu: 2.000 VNĐ (20.000 Đơn Hàng)',
+                bankLabel: '🏦 Ngân hàng', momoLabel: '💗 Momo', zalopayLabel: '💙 ZaloPay',
+                bankNamePlaceholder: 'Tên ngân hàng (VD: Vietcombank)', accountNamePlaceholder: 'Tên chủ tài khoản', accountNumberPlaceholder: 'Số tài khoản',
+                momoPhonePlaceholder: 'Số điện thoại Momo', zalopayPhonePlaceholder: 'Số điện thoại ZaloPay', ordersAmountPlaceholder: 'Số đơn hàng muốn rút (tối thiểu 20.000)',
+                convertedAmountLabel: '💰 Số tiền quy đổi:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
+                giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 30 lần/ngày.',
+                inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo',
+                milestoneNote: '⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.',
+                withdrawReady: '🎉 Bạn đã đủ điều kiện rút tiền.', progressLabel: 'Tiến độ:',
+                txCodePrefix: 'Mã #', statusApproved: 'Đã duyệt', statusPending: 'Chờ duyệt', statusRejected: 'Hủy',
+                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_settings: 'Cài đặt'
             },
             en: {
                 verifyTitle: 'Verify Transport Team', verifyDesc: 'Join our community to start your journey.',
@@ -510,7 +605,32 @@
                 settings: 'Settings', userName: 'Name', truckLevelLabel: 'Truck Level', languageLabel: 'Language',
                 contactAdmin: 'Contact Admin', enterCode: 'Code...', redeem: 'Redeem',
                 deliveryComplete: 'Delivery successful! +', ordersTarget: 'Orders',
-                adsTarget: 'Ads', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Withdraws left'
+                adsTarget: 'Ads', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Withdraws left',
+                bannedTitle: 'Your Account Has Been Banned', bannedDesc: 'Please Contact Admin For Support!', bannedContact: '☎️ Contact Admin',
+                deliverySuccessTitle: 'DELIVERY SUCCESSFUL!', x2Question: 'Do you want to watch an ad to', x2Suffix: 'the orders you just received?',
+                noThanks: 'No, thanks', watchAdX2Now: 'WATCH AD X2 NOW',
+                coinBoxTitle: 'MYSTERY GIFT BOX', coinBoxDesc: 'Watch an ad to open the gift box and get a random reward!',
+                later: 'Later', watchAdGetGift: 'WATCH AD FOR GIFT',
+                joinBannerTitle: '🎉 Join the Warehouse Community to unlock!', joinBannerDesc: 'Join the chat group + notification channel for promos, and watch ads to x2 your reward on every delivery 🚀', checkJoin: '✅ Check',
+                promoBannerTitle: '📺 Watch ads to get X2 Orders on every delivery!', promoBannerDesc: "Don't forget to join the Community chat so you don't miss events & gift codes 🎁",
+                speedUpBtn: '⚡ SPEED UP X2 (WATCH AD, HALVE WAIT TIME)', watchAdX2Orders: '📺 WATCH AD FOR X2 ORDERS',
+                watchAdChestBtn: 'WATCH AD +1 CHEST OPEN', exchangeChest: '🔄 EXCHANGE 500 ORDERS = 1 CHEST OPEN',
+                watchAdRewardDesc: 'Get instantly after each ad:', watchAdRewardBtn: '📺 WATCH AD (+100 💰 / +100 📦)',
+                timeRemaining: '⏰ Time remaining:', resetAtSunday: 'Resets Sunday 00:00',
+                top1: '🏆 Top 1', top2: '🥈 Top 2', top3: '🥉 Top 3',
+                inviteeMustTitle: 'The invited friend must:', currentProgress: '📊 Current progress:',
+                totalInvited: 'Total invited:', validLabel: 'Valid:', claimBtn: 'CLAIM', claimedBtn: '✅ CLAIMED',
+                exchangeRateLine: '💱 Exchange rate: 20,000 Orders = 2,000 VND (1 Order = 0.1 VND)', minWithdrawLine: 'Minimum withdrawal: 2,000 VND (20,000 Orders)',
+                bankLabel: '🏦 Bank', momoLabel: '💗 Momo', zalopayLabel: '💙 ZaloPay',
+                bankNamePlaceholder: 'Bank name (e.g. Vietcombank)', accountNamePlaceholder: 'Account holder name', accountNumberPlaceholder: 'Account number',
+                momoPhonePlaceholder: 'Momo phone number', zalopayPhonePlaceholder: 'ZaloPay phone number', ordersAmountPlaceholder: 'Orders to withdraw (min. 20,000)',
+                convertedAmountLabel: '💰 Converted amount:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
+                giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 30 times/day.',
+                inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads',
+                milestoneNote: '⚠️ Each milestone can only be claimed once. Only valid friends count.',
+                withdrawReady: '🎉 You are eligible to withdraw.', progressLabel: 'Progress:',
+                txCodePrefix: 'Code #', statusApproved: 'Approved', statusPending: 'Pending', statusRejected: 'Rejected',
+                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_settings: 'Settings'
             }
         };
 
@@ -522,22 +642,25 @@
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
                 showX2Ad: false, pendingOrders: 0, coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
-                spinFree: 1, spinAdCount: 0, spinAdLimit: 5, spinAngle: 0, spinHistory: [],
+                spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, bonusAdsToday: 0, walletSyncedAt: null,
-                withdrawRemain: 2, withdrawHistory: [], language: 'vi', giftCode: '',
+                withdrawRemain: 2, withdrawHistory: [], language: 'vi', giftCode: '', bannedScreen: false,
+                withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
+                spinAdProgress: 0, clickTimestamps: [],
                 bannerText: '📦 Chúc mừng Admin nhận hũ 100k đơn hàng • 🚛 Shipper LH-45 vừa rút 50.000 VNĐ...',
                 banners: ['💰 Th****** nhận 500 Coin', '⚡ Ho****** nhận thưởng đặc biệt', '💎 Mi****** trúng 100.000 Đơn Hàng', '🚛 A****** vừa nâng cấp lên xe Container 40ft'],
                 bannerIndex: 0, lastResetDate: '', lastWeekReset: '',
                 dailyTasks: [
-                    { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, done: false, claimable: false },
-                    { id: 'deliver5', name: '🚚 Giao hàng 5 lần', icon: '🚚', reward: 150, done: false, claimable: false },
-                    { id: 'deliver10', name: '🚚 Giao hàng 10 lần', icon: '🚚', reward: 250, done: false, claimable: false },
-                    { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, done: false, claimable: false },
-                    { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, done: false, claimable: false },
-                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, done: false, claimable: false },
-                    { id: 'smartlink15', name: '🔗 SmartLink 15 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, done: false, claimable: false }
+                    { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'deliver5', name: '🚚 Giao hàng 5 lần', icon: '🚚', reward: 200, rewardOrders: 20, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'deliver10', name: '🚚 Giao hàng 10 lần', icon: '🚚', reward: 400, rewardOrders: 40, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false },
+                    { id: 'smartlink15', name: '🔗 SmartLink 15 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
@@ -573,6 +696,17 @@
                     const adProgress = Math.min(this.adsToday / 5, 1) * 0.15;
                     const linkProgress = Math.min(this.smartlinksToday / 2, 1) * 0.15;
                     return Math.min((orderProgress + adProgress + linkProgress) * 100, 100);
+                },
+                // Tỉ lệ quy đổi: 20.000 Đơn Hàng = 2.000 VNĐ => 1 Đơn Hàng = 0,1 VNĐ
+                get withdrawVndAmount() {
+                    return Math.floor((this.withdrawOrdersAmount || 0) * 0.1);
+                },
+                // Tăng Tốc x2 chỉ hiện khi kho chưa đầy và vẫn còn đang đếm ngược chờ sản xuất
+                get canSpeedUp() {
+                    const _ = this.tick;
+                    if (this.currentProducts >= this.maxProducts) return false;
+                    const remaining = this.productionInterval - (Date.now() - this.lastProducedAt);
+                    return remaining > 0;
                 },
                 get allTasksDone() { return this.dailyTasks.every(t => t.done) && !this.allTasksClaimed; },
                 get productionCountdown() {
@@ -642,6 +776,7 @@
                             this.productionAmount = data.productionAmount || 100;
                             this.spinFree = data.spins || 1; // 'spins' in DB is 'spinFree' in frontend
                             this.spinAdCount = data.spinAdCount || 0;
+                            this.spinAdProgress = data.spinAdProgress || 0;
                             this.spinHistory = data.spinHistory || [];
                             this.invitedCount = data.invitedCount || 0;
                             this.validInvites = data.validInvites || 0;
@@ -651,7 +786,7 @@
                             this.bonusAdsToday = data.bonusAdsToday || 0;
                             this.walletSyncedAt = data.walletUpdatedAt || null;
                             if (data.isBanned) {
-                                alert('❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.');
+                                this.bannedScreen = true;
                                 return;
                             }
                             this.withdrawRemain = data.withdrawRemain || 2;
@@ -744,6 +879,24 @@
                         }
                     });
                     
+                    // Chống spam: click quá 5 lần trong 3 giây trên cùng 1 nút sẽ bị chặn + cảnh báo
+                    document.addEventListener('click', (e) => {
+                        const btn = e.target.closest('button');
+                        if (!btn) return;
+                        const now = Date.now();
+                        this.clickTimestamps = (this.clickTimestamps || []).filter(t => now - t < 3000);
+                        this.clickTimestamps.push(now);
+                        if (this.clickTimestamps.length > 5) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            this.showNotification('⚠️ Bạn Đang Thao Tác Quá Nhanh, Vui Lòng Chậm Lại!!!');
+                        }
+                    }, true);
+
+                    // Đồng bộ trạng thái rút tiền (Chờ duyệt/Đã duyệt/Hủy) từ server để phản ánh ngay khi admin xử lý
+                    this.fetchWithdrawHistory();
+                    setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
+
                     setInterval(() => { this.bannerIndex = (this.bannerIndex + 1) % this.banners.length; this.bannerText = this.banners[this.bannerIndex]; }, 7000);
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
@@ -809,16 +962,23 @@
                     const cooldown = 10 * 60 * 1000; // 10 minutes cooldown for smartlink
                     this.smartlinkCooldown = diff < cooldown ? Math.floor((cooldown - diff) / 1000) : 0;
                 },
-                initRankList() {
-                    const names = ['CEO', 'Quản kho', 'Xe tải hố', 'Shipper Pro', 'Vận tải sao', 'Tài xế vàng', 'Nhân viên kho', 'Shipper cao cấp', 'Shipper', 'Thực tập sinh'];
+                // BXH lấy dữ liệu THẬT từ DB (số bạn mời hợp lệ thực tế của từng user), không còn random
+                async initRankList() {
                     const titles = ['👑 Giám đốc Logistics', '🚛 Trưởng phòng Vận chuyển', '🚚 Quản lý Kho', '🚚 Tổ trưởng Giao hàng', '🚛 Tài xế Xuất sắc', 'Tài xế Chuyên nghiệp', '📦 Nhân viên Kho', '📦 Shipper Cao cấp', '📦 Shipper', '📦 Thực tập sinh Logistics'];
-                    // These are example ranks, in a real app you'd fetch from DB
-                    this.rankList = [];
-                    for (let i = 0; i < 10; i++) {
-                        this.rankList.push({ rank: i + 1, name: names[i] || 'Shipper ' + (i+1), invites: Math.floor(Math.random() * 200) + 50, title: titles[i] || 'Shipper' });
+                    try {
+                        const res = await fetch(`${API_URL}/api/leaderboard`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.rankList = (data.leaderboard || []).map((u, idx) => ({
+                                rank: idx + 1,
+                                name: u.name || ('User ' + u.id),
+                                invites: u.validInvites || 0,
+                                title: titles[idx] || 'Shipper'
+                            }));
+                        }
+                    } catch (e) {
+                        console.error('Lỗi tải bảng xếp hạng:', e);
                     }
-                    this.rankList.sort((a, b) => b.invites - a.invites);
-                    this.rankList.forEach((r, idx) => r.rank = idx + 1);
                 },
                 getWeekIdentifier(date) {
                     const d = new Date(date); d.setHours(0,0,0,0);
@@ -830,11 +990,12 @@
                     if (this.lastResetDate !== today) {
                         this.spinFree = 1; 
                         this.spinAdCount = 0; 
+                        this.spinAdProgress = 0;
                         this.adsToday = 0; 
                         this.smartlinksToday = 0; 
                         this.bonusAdsToday = 0;
                         this.withdrawRemain = 2;
-                        this.dailyTasks.forEach(t => { t.done = false; t.claimable = false; });
+                        this.dailyTasks.forEach(t => { if (!t.once) { t.done = false; t.claimable = false; } });
                         this.allTasksClaimed = false; 
                         this.deliveryCount = 0; 
                         this.smartlinkCount = 0;
@@ -844,6 +1005,34 @@
                         const loginTask = this.dailyTasks.find(t => t.id === 'login');
                         if (loginTask) loginTask.claimable = true;
                         this.saveState();
+                    }
+                },
+                // Xem QC Tăng Tốc x2: giảm 1 nửa thời gian chờ còn lại của mẻ hàng đang sản xuất
+                speedUpProduction() {
+                    if (this.currentProducts >= this.maxProducts) {
+                        this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
+                        return;
+                    }
+                    const remaining = this.productionInterval - (Date.now() - this.lastProducedAt);
+                    if (remaining <= 0) {
+                        this.showNotification('✅ Đã sẵn sàng, không cần tăng tốc!');
+                        return;
+                    }
+                    const applyBoost = () => {
+                        this.lastProducedAt -= Math.floor(remaining / 2);
+                        this.adsToday++;
+                        this.checkTaskProgress('watchAd');
+                        this.onAdWatched();
+                        this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
+                        this.saveState();
+                    };
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(applyBoost).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                        this.showNotification('(Demo) Đang xem quảng cáo tăng tốc...');
+                        setTimeout(applyBoost, 1000);
                     }
                 },
                 produceLoop() {
@@ -1040,14 +1229,15 @@
                     }, 500);
                 },
                 doChestReward() {
+                    // Tỉ lệ trúng Jackpot 100.000 Đơn Hàng: siêu thấp, 10.000 lần mở mới có 1 lần (0.0001)
                     const rewardPool = [
-                        { label: '❌', prob: 0.65, type: 'none' },
+                        { label: '❌', prob: 0.6549, type: 'none' },
                         { label: '100💰', prob: 0.18, type: 'coin', value: 100 },
                         { label: '500💰', prob: 0.08, type: 'coin', value: 500 },
                         { label: '1k💰', prob: 0.04, type: 'coin', value: 1000 },
                         { label: '1 Lượt', prob: 0.025, type: 'spin', value: 1 },
                         { label: '3k📦', prob: 0.02, type: 'order', value: 3000 },
-                        { label: '💎100k', prob: 0.005, type: 'order', value: 100000 }
+                        { label: '💎100k', prob: 0.0001, type: 'order', value: 100000 }
                     ];
                     let rand = Math.random(), cumulative = 0, chosen = rewardPool[0];
                     for (let r of rewardPool) {
@@ -1085,35 +1275,29 @@
                     }, 500);
                     this.checkTaskProgress('spin');
                 },
+                // Xem 1 QC = +1 Lượt Mở Rương ngay, giới hạn ngày đã tăng từ 5 lên 10 (spinAdLimit)
                 watchAdForChest() {
                     if (this.spinAdCount >= this.spinAdLimit) {
                         this.showNotification('⚠️ Bạn đã xem đủ QC hôm nay (tối đa ' + this.spinAdLimit + ')');
                         return;
                     }
+                    const grantSpin = () => {
+                        this.spinAdCount++;
+                        this.adsToday++;
+                        this.spinFree++;
+                        this.checkTaskProgress('watchAd');
+                        this.onAdWatched();
+                        this.showNotification('📺 +1 Lượt Mở Rương!');
+                        this.saveState();
+                    };
                     if (typeof show_11457064 === 'function') {
-                        show_11457064().then(() => {
-                            this.spinFree++;
-                            this.spinAdCount++;
-                            this.adsToday++;
-                            this.checkTaskProgress('watchAd');
-                            this.onAdWatched();
-                            this.showNotification('📺 +1 Lượt Mở Rương');
-                            this.saveState();
-                        }).catch(() => {
+                        show_11457064().then(grantSpin).catch(() => {
                             this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
                         });
                     } else {
                          // Demo fallback
                         this.showNotification('(Demo) Đang xem quảng cáo...');
-                        setTimeout(() => {
-                            this.spinFree++;
-                            this.spinAdCount++;
-                            this.adsToday++;
-                            this.checkTaskProgress('watchAd');
-                            this.onAdWatched();
-                            this.showNotification('📺 +1 Lượt Mở Rương');
-                            this.saveState();
-                        }, 1000);
+                        setTimeout(grantSpin, 1000);
                     }
                 },
                 buyChestWithOrders() {
@@ -1168,10 +1352,10 @@
                     }
                     const grantReward = () => {
                         this.coins += 100;
-                        this.orders += 50;
+                        this.orders += 100;
                         this.bonusAdsToday = (this.bonusAdsToday || 0) + 1;
                         this.onAdWatched();
-                        this.showNotification('📺 +100 Coin & +50 Đơn Hàng (' + this.bonusAdsToday + '/30)');
+                        this.showNotification('📺 +100 Coin & +100 Đơn Hàng (' + this.bonusAdsToday + '/30)');
                         this.saveState();
                     };
                     if (typeof show_11457064 === 'function') {
@@ -1193,9 +1377,15 @@
                     task.done = true;
                     task.claimable = false;
                     this.coins += task.reward;
+                    if (task.rewardOrders) this.orders += task.rewardOrders;
+                    if (task.rewardSpins) this.spinFree += task.rewardSpins;
                     this.dailyTasks = [...this.dailyTasks]; // Force Alpine to re-render array
                     this.saveState();
-                    this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(task.reward) + ' 💰)');
+                    let msg = '✅ ' + task.name + ' (+' + this.formatNumber(task.reward) + ' 💰';
+                    if (task.rewardOrders) msg += ' +' + this.formatNumber(task.rewardOrders) + ' 📦';
+                    if (task.rewardSpins) msg += ' +' + this.formatNumber(task.rewardSpins) + ' 🎁';
+                    msg += ')';
+                    this.showNotification(msg);
                 },
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
@@ -1208,9 +1398,21 @@
                         this.showNotification('⏳ Vui lòng ở lại trang SmartLink ít nhất 10 giây để được tính!');
                         return;
                     }
+                    if (task.id === 'zalogroup') {
+                        window.open('https://zalo.me/g/uezhllnddogpf8kihtqq', '_blank');
+                        task.done = true;
+                        this.coins += task.reward;
+                        if (task.rewardOrders) this.orders += task.rewardOrders;
+                        this.dailyTasks = [...this.dailyTasks];
+                        this.saveState();
+                        this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(task.reward) + ' 💰 +' + this.formatNumber(task.rewardOrders) + ' 📦)');
+                        return;
+                    }
                     // For other tasks, if there were any that just needed a button click
                     task.done = true;
                     this.coins += task.reward;
+                    if (task.rewardOrders) this.orders += task.rewardOrders;
+                    if (task.rewardSpins) this.spinFree += task.rewardSpins;
                     this.dailyTasks = [...this.dailyTasks];
                     this.saveState();
                     this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(task.reward) + ' 💰)');
@@ -1227,26 +1429,25 @@
                     }
                 },
                 async requestWithdraw() {
-                    if (this.withdrawProgress < 100) {
-                        this.showNotification('❌ Bạn chưa đủ điều kiện rút tiền!');
-                        return;
-                    }
                     if (this.withdrawRemain <= 0) {
                         this.showNotification('❌ Bạn đã hết lượt rút tiền trong ngày!');
                         return;
                     }
-
-                    // For demo, assume MoMo, bank account details input
-                    const withdrawalMethod = 'MoMo'; // Or prompt user for choice
-                    const accountNumber = prompt("Vui lòng nhập SĐT/STK Momo/Ngân hàng của bạn:");
-                    if (!accountNumber) {
-                        this.showNotification('❌ Vui lòng nhập thông tin tài khoản rút tiền.');
+                    if (!this.withdrawOrdersAmount || this.withdrawOrdersAmount < 20000) {
+                        this.showNotification('❌ Số đơn hàng rút tối thiểu là 20.000 Đơn Hàng (2.000 VNĐ).');
                         return;
                     }
-
-                    const amountToWithdraw = Math.floor(this.orders / 10000) * 1000; // 10000 orders = 1000 VNĐ
-                    if (amountToWithdraw < 2000) { // Mức rút tối thiểu: 2.000 VNĐ (tương ứng 20.000 Đơn Hàng)
-                        this.showNotification('❌ Số tiền rút tối thiểu là 2.000 VNĐ (tương ứng 20.000 Đơn Hàng).');
+                    if (this.orders < this.withdrawOrdersAmount) {
+                        this.showNotification('❌ Bạn không đủ đơn hàng để rút số lượng này.');
+                        return;
+                    }
+                    if (this.withdrawMethod === 'bank') {
+                        if (!this.withdrawBankName.trim() || !this.withdrawAccountName.trim() || !this.withdrawAccountNumber.trim()) {
+                            this.showNotification('❌ Vui lòng nhập đầy đủ Tên ngân hàng, Tên chủ tài khoản và Số tài khoản.');
+                            return;
+                        }
+                    } else if (!this.withdrawAccountNumber.trim()) {
+                        this.showNotification('❌ Vui lòng nhập số điện thoại nhận tiền.');
                         return;
                     }
 
@@ -1256,27 +1457,45 @@
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 userId: this.user.id,
-                                amount: amountToWithdraw,
-                                method: withdrawalMethod,
-                                accountInfo: accountNumber
+                                method: this.withdrawMethod,
+                                bankName: this.withdrawMethod === 'bank' ? this.withdrawBankName.trim() : null,
+                                accountName: this.withdrawMethod === 'bank' ? this.withdrawAccountName.trim() : null,
+                                accountNumber: this.withdrawAccountNumber.trim(),
+                                ordersAmount: this.withdrawOrdersAmount
                             })
                         });
                         const result = await res.json();
                         if (result.success) {
-                            // Update local state after successful request
-                            this.orders -= (amountToWithdraw / 1000) * 10000; // Deduct corresponding orders
+                            const vndAmount = this.withdrawVndAmount;
+                            this.orders -= this.withdrawOrdersAmount;
                             this.withdrawRemain--;
-                            this.adsToday = 0; // Reset daily ad count for withdraw condition
-                            this.smartlinksToday = 0; // Reset daily smartlink count
-                            this.withdrawHistory.unshift({ id: Date.now(), method: withdrawalMethod, amount: amountToWithdraw, status: 'pending' });
+                            this.withdrawOrdersAmount = null;
+                            this.withdrawBankName = '';
+                            this.withdrawAccountName = '';
+                            this.withdrawAccountNumber = '';
+                            this.showNotification('💸 Yêu cầu rút ' + this.formatNumber(vndAmount) + ' VNĐ đã gửi! Vui lòng chờ Admin duyệt.');
+                            this.fetchWithdrawHistory();
                             this.saveState();
-                            this.showNotification('💸 Yêu cầu rút ' + this.formatNumber(amountToWithdraw) + ' VNĐ đã gửi! Vui lòng chờ Admin duyệt.');
                         } else {
                             this.showNotification('❌ ' + (result.error || 'Lỗi khi gửi yêu cầu rút tiền.'));
                         }
                     } catch (e) {
                         console.error("Lỗi rút tiền:", e);
                         this.showNotification('❌ Lỗi kết nối server khi rút tiền.');
+                    }
+                },
+                // Lấy lịch sử rút tiền + trạng thái mới nhất trực tiếp từ bảng withdrawals trên server,
+                // để phản ánh NGAY trạng thái Chờ duyệt/Đã duyệt/Hủy khi admin xử lý.
+                async fetchWithdrawHistory() {
+                    if (!this.user.id) return;
+                    try {
+                        const res = await fetch(`${API_URL}/api/withdrawals/${this.user.id}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.withdrawHistory = data.withdrawals || [];
+                        }
+                    } catch (e) {
+                        console.error('Lỗi tải lịch sử rút tiền:', e);
                     }
                 },
                 copyRefLink() {
@@ -1364,6 +1583,7 @@
                         productionAmount: this.productionAmount,
                         coinBoxVisible: this.coinBoxVisible,
                         spinAdCount: this.spinAdCount,
+                        spinAdProgress: this.spinAdProgress,
                         spinHistory: this.spinHistory,
                         invitedCount: this.invitedCount,
                         validInvites: this.validInvites,
@@ -1393,22 +1613,21 @@
                         if (res.status === 403) {
                             const errData = await res.json().catch(() => ({}));
                             if (errData.isBanned) {
-                                alert('❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.');
+                                this.bannedScreen = true;
                                 return;
                             }
                         }
                         const result = await res.json().catch(() => null);
                         if (result?.walletOverridden && result.wallet) {
                             // Admin vừa sửa ví (coin/đơn hàng/level/khóa TK) sau lần đồng bộ trước -> lấy lại giá trị mới nhất
+                            // (âm thầm đồng bộ lại, không hiện thông báo vì đây không phải phần thưởng)
                             this.coins = result.wallet.coins ?? this.coins;
                             this.orders = result.wallet.orders ?? this.orders;
                             this.spinFree = result.wallet.spins ?? this.spinFree;
                             this.truckLevel = result.wallet.truckLevel ?? this.truckLevel;
                             this.walletSyncedAt = result.wallet.walletUpdatedAt || this.walletSyncedAt;
                             if (result.wallet.isBanned) {
-                                alert('❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.');
-                            } else {
-                                this.showNotification('🔄 Dữ liệu vừa được Admin cập nhật, đã đồng bộ lại!');
+                                this.bannedScreen = true;
                             }
                         } else if (result?.walletUpdatedAt) {
                             this.walletSyncedAt = result.walletUpdatedAt;
