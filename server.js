@@ -404,6 +404,65 @@ bot.command('resetdaily', async (ctx) => {
     ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
 });
 
+// Toàn bộ field cần đưa về 0 / trạng thái khởi đầu khi reset 1 user hoặc tất cả user
+// (đơn hàng, coin, lượt mở rương, số bạn mời được, số qc đã xem, số smartlink đã ấn, số lv xe)
+function fullResetFields() {
+    return {
+        coins: 0,
+        orders: 0,
+        spins: 0,
+        truckLevel: 1, // Cấp xe thấp nhất hệ thống hỗ trợ (không có cấp 0)
+        currentProducts: 0,
+        lastProducedAt: Date.now(),
+        productionInterval: 30 * 60 * 1000,
+        adsToday: 0,
+        smartlinksToday: 0,
+        smartlinkCount: 0,
+        usedSmartlinks: JSON.stringify([]),
+        spinAdCount: 0,
+        spinAdProgress: 0,
+        bonusAdsToday: 0,
+        lifetimeAdsWatched: 0,
+        invitedCount: 0,
+        validInvites: 0,
+        deliveryCount: 0,
+        referralMilestones: JSON.stringify([
+            { friends: 5, reward: '1,000 Coin + 500 Đơn Hàng', coins: 1000, orders: 500, spins: 0, claimed: false },
+            { friends: 10, reward: '1,500 Coin + 2 Lượt Mở Rương', coins: 1500, orders: 0, spins: 2, claimed: false },
+            { friends: 20, reward: '2,000 Coin + 1,500 Đơn Hàng', coins: 2000, orders: 1500, spins: 0, claimed: false },
+            { friends: 30, reward: '5,000 Đơn Hàng + 2 Lượt Mở Rương', coins: 0, orders: 5000, spins: 2, claimed: false },
+            { friends: 50, reward: '5,000 Coin + 7,000 Đơn Hàng', coins: 5000, orders: 7000, spins: 0, claimed: false },
+            { friends: 75, reward: '10,000 Đơn Hàng + 5 Lượt Mở Rương', coins: 0, orders: 10000, spins: 5, claimed: false },
+            { friends: 100, reward: '20,000 Đơn Hàng + 10 Lượt Mở Rương', coins: 0, orders: 20000, spins: 10, claimed: false }
+        ]),
+        lastResetDate: new Date(new Date().setDate(new Date().getDate() - 1)).toDateString()
+    };
+}
+
+// /reset <userId> - Reset TOÀN BỘ dữ liệu của 1 user về 0
+bot.command('reset', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const targetId = ctx.message.text.split(' ')[1];
+    if (!targetId) return ctx.reply("❌ Sử dụng: /reset <userId>");
+    const ok = await touchWallet(targetId, fullResetFields());
+    if (ok) ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${targetId} về 0.`);
+    else ctx.reply(`❌ Lỗi khi reset dữ liệu user ${targetId}.`);
+});
+
+// /resetall - Reset TOÀN BỘ dữ liệu của TẤT CẢ user về 0
+bot.command('resetall', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const { error } = await supabase.from('users').update({
+        ...fullResetFields(),
+        walletUpdatedAt: new Date().toISOString()
+    }).not('id', 'is', null);
+    if (error) {
+        console.error("Lỗi /resetall:", error);
+        return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
+    }
+    ctx.reply(`✅ Đã reset toàn bộ dữ liệu của TẤT CẢ user về 0.`);
+});
+
 // /deleteuser
 bot.command('deleteuser', async (ctx) => {
     if (!isAdmin(ctx)) return;
@@ -820,19 +879,24 @@ app.post('/api/check-referral/:id', async (req, res) => {
     }
 });
 
-// API rút tiền
+// API rút tiền - Hỗ trợ Ngân hàng / Momo / ZaloPay với các trường tách riêng
+// (bankName, accountName, accountNumber cho ngân hàng; accountNumber = SĐT cho Momo/ZaloPay)
+// LƯU Ý SCHEMA: bảng "withdrawals" trên Supabase cần có thêm các cột:
+// ordersAmount (int8), bankName (text), accountName (text), accountNumber (text), txCode (int8)
 app.post('/api/withdraw', async (req, res) => {
-    const { userId, amount, method, accountInfo } = req.body;
-    
-    if (!userId || !amount || !method || !accountInfo) {
-        return res.status(400).json({ error: "Missing required fields" });
+    const { userId, method, bankName, accountName, accountNumber, ordersAmount } = req.body;
+
+    if (!userId || !method || !accountNumber || !ordersAmount) {
+        return res.status(400).json({ error: "Vui lòng nhập đầy đủ thông tin rút tiền." });
     }
-    if (amount < 2000) { // Mức rút tối thiểu: 2.000 VNĐ (20.000 Đơn Hàng)
-        return res.status(400).json({ error: "Số tiền rút tối thiểu là 2.000 VNĐ (20.000 Đơn Hàng)." });
+    if (ordersAmount < 20000) { // Mức rút tối thiểu: 20.000 Đơn Hàng (2.000 VNĐ)
+        return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 20.000 Đơn Hàng (2.000 VNĐ)." });
+    }
+    if (method === 'bank' && (!bankName || !accountName)) {
+        return res.status(400).json({ error: "Vui lòng nhập đầy đủ tên ngân hàng và tên chủ tài khoản." });
     }
 
-    // Lấy thông tin user để kiểm tra số đơn hàng trước
-    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned').eq('id', userId).single();
+    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned, name').eq('id', userId).single();
     if (userFetchError || !userData) {
         console.error("Lỗi lấy user khi rút tiền:", userFetchError);
         return res.status(404).json({ error: "User not found or database error." });
@@ -840,35 +904,70 @@ app.post('/api/withdraw', async (req, res) => {
     if (userData.isBanned) {
         return res.status(403).json({ error: "Tài khoản đã bị khóa." });
     }
-
-    // Trừ đơn hàng (1000 VNĐ = 10000 đơn hàng, tức 20.000 Đơn Hàng = 2.000 VNĐ)
-    const ordersToDeduct = Math.floor(amount / 1000) * 10000;
-    if (userData.orders < ordersToDeduct) {
-        return res.status(400).json({ error: "Không đủ đơn hàng để rút số tiền này." });
+    if (userData.orders < ordersAmount) {
+        return res.status(400).json({ error: "Không đủ đơn hàng để rút số lượng này." });
     }
-    const newOrders = Math.max(0, userData.orders - ordersToDeduct);
 
-    // Bắt đầu giao dịch để đảm bảo tính nhất quán
+    // Tỉ lệ quy đổi: 20.000 Đơn Hàng = 2.000 VNĐ => 1 Đơn Hàng = 0,1 VNĐ
+    const amountVnd = Math.floor(ordersAmount * 0.1);
+    const newOrders = userData.orders - ordersAmount;
+    const methodLabel = method === 'bank' ? (bankName || 'Ngân hàng') : (method === 'momo' ? 'Momo' : 'ZaloPay');
+    const accountInfoText = method === 'bank' ? `${bankName} - ${accountName} - ${accountNumber}` : accountNumber;
+
     try {
-        // Tạo yêu cầu rút tiền
-        const { error: withdrawInsertError } = await supabase.from('withdrawals').insert({ 
-            userId, 
-            amount, 
-            method, 
-            accountInfo: accountInfo || '',
-            status: 'pending' 
+        // Mã giao dịch tuần tự cho TOÀN BỘ bot (đơn rút thứ 1, 2, 3...)
+        const { count } = await supabase.from('withdrawals').select('*', { count: 'exact', head: true });
+        const txCode = (count || 0) + 1;
+
+        const { error: withdrawInsertError } = await supabase.from('withdrawals').insert({
+            userId,
+            amount: amountVnd,
+            ordersAmount,
+            method: methodLabel,
+            bankName: bankName || null,
+            accountName: accountName || null,
+            accountNumber,
+            accountInfo: accountInfoText,
+            status: 'pending',
+            txCode
         });
         if (withdrawInsertError) throw withdrawInsertError;
 
-        // Cập nhật số đơn hàng của người dùng
         const walletOk = await touchWallet(userId, { orders: newOrders });
         if (!walletOk) throw new Error("Không thể cập nhật số đơn hàng sau khi rút.");
-        
-        res.json({ success: true });
+
+        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT
+        const masked = accountNumber.length > 2 ? accountNumber.substring(0, 2) + '*'.repeat(Math.max(accountNumber.length - 2, 3)) : accountNumber;
+        await safeSendMessage(GROUP_2_ID,
+            `🔔 *Yêu cầu rút tiền mới:*\n👤 ${userId} - ${userData.name || ''}\n💳 STK/SĐT: ${masked} (${methodLabel})\n💰 Số tiền rút: ${amountVnd.toLocaleString()} VNĐ`,
+            { parse_mode: 'Markdown' }
+        );
+
+        res.json({ success: true, txCode });
     } catch (error) {
         console.error("Lỗi trong quá trình rút tiền:", error);
         res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
     }
+});
+
+// API lấy lịch sử rút tiền của 1 user (đọc trực tiếp từ bảng withdrawals để luôn khớp trạng thái admin duyệt)
+app.get('/api/withdrawals/:userId', async (req, res) => {
+    const { data, error } = await supabase.from('withdrawals').select('*').eq('userId', req.params.userId).order('createdAt', { ascending: false }).limit(50);
+    if (error) {
+        console.error("Lỗi lấy lịch sử rút tiền:", error);
+        return res.status(500).json({ error: "Lỗi lấy lịch sử rút tiền." });
+    }
+    res.json({ withdrawals: data || [] });
+});
+
+// API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
+app.get('/api/leaderboard', async (req, res) => {
+    const { data, error } = await supabase.from('users').select('id, name, validInvites').order('validInvites', { ascending: false }).limit(10);
+    if (error) {
+        console.error("Lỗi lấy bảng xếp hạng:", error);
+        return res.status(500).json({ error: "Lỗi lấy bảng xếp hạng." });
+    }
+    res.json({ leaderboard: data || [] });
 });
 
 // API redeem code
@@ -942,16 +1041,36 @@ app.post('/api/redeem-code', async (req, res) => {
     });
 });
 
-// Admin: cập nhật trạng thái rút tiền
+// Admin: cập nhật trạng thái rút tiền (miniapp sẽ tự đồng bộ trạng thái mới qua polling /api/withdrawals/:userId)
 app.post('/api/admin/update-withdrawal', async (req, res) => {
     if (req.query.pass !== ADMIN_PASS) return res.status(403).json({ error: "Access Denied" });
     const { id, status, reason } = req.body;
+
+    const { data: current, error: fetchErr } = await supabase.from('withdrawals').select('*').eq('id', id).single();
+    if (fetchErr || !current) return res.status(404).json({ success: false, error: "Không tìm thấy đơn rút." });
+
     const { error } = await supabase.from('withdrawals').update({ status, reason }).eq('id', id);
     if (error) {
         console.error("Lỗi cập nhật trạng thái rút tiền:", error);
         return res.status(500).json({ success: false, error: error.message });
     }
-    // Gửi thông báo đến user nếu cần thiết (có thể lấy userId từ id của withdrawal trước khi update)
+
+    // Hoàn trả đơn hàng nếu đơn đang Chờ duyệt bị chuyển sang Từ chối/Hoàn trả
+    if (current.status === 'pending' && (status === 'rejected' || status === 'refunded')) {
+        const refundOrders = current.ordersAmount || (Math.floor((current.amount || 0) / 1000) * 10000);
+        const { data: u } = await supabase.from('users').select('orders').eq('id', current.userId).single();
+        if (u) await touchWallet(current.userId, { orders: (u.orders || 0) + refundOrders });
+        await safeSendMessage(current.userId,
+            `❌ Yêu cầu rút tiền #${current.txCode || current.id} đã bị *HỦY*.\n📝 Lý do: ${reason || 'Không có'}\n📦 Đã hoàn trả: ${refundOrders.toLocaleString()} Đơn Hàng`,
+            { parse_mode: 'Markdown' }
+        );
+    } else if (status === 'success') {
+        await safeSendMessage(current.userId,
+            `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!\n💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+
     res.json({ success: true });
 });
 
@@ -982,7 +1101,7 @@ app.get('/admin', async (req, res) => {
     let withdrawsHtml = withdrawals ? withdrawals.map(w => {
         let statusClass = w.status === 'success' ? 'status-success' : (w.status === 'pending' ? 'status-pending' : (w.status === 'rejected' ? 'status-rejected' : 'status-refunded'));
         return `<tr>
-            <td>${w.id}</td><td>${w.userId}</td><td>${w.amount}</td><td>${w.method}</td>
+            <td>#${w.txCode || w.id}</td><td>${w.userId}</td><td>${w.amount}</td><td>${w.method}</td>
             <td>${w.accountInfo || 'N/A'}</td>
             <td class="${statusClass}">${w.status}</td><td>${w.reason || '-'}</td>
             <td>
