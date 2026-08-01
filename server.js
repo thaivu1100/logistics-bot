@@ -57,6 +57,67 @@ async function checkDuplicateIP(userId, ip) {
     return data || [];
 }
 
+// Đánh dấu thời điểm "ví" (coins/orders/spins/truckLevel/isBanned) của user vừa bị ADMIN sửa trực tiếp.
+// Frontend sẽ so sánh mốc này với mốc nó biết để tránh việc tự lưu game đè mất thay đổi của admin.
+async function touchWallet(userId, extraFields = {}) {
+    const { error } = await supabase.from('users').update({
+        ...extraFields,
+        walletUpdatedAt: new Date().toISOString()
+    }).eq('id', userId);
+    if (error) console.error(`Lỗi touchWallet ${userId}:`, error);
+    return !error;
+}
+
+// Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
+// 1) Người được mời đã tham gia đủ nhóm Telegram bắt buộc
+// 2) Người được mời đã xem tối thiểu 3 quảng cáo (lifetimeAdsWatched >= 3)
+// 3) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
+// Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
+// không tin tưởng dữ liệu client gửi lên.
+async function tryFinalizeReferral(userId) {
+    const { data: userRecord, error: userError } = await supabase.from('users')
+        .select('id, name, referrerId, referrerCounted, lifetimeAdsWatched, isBanned')
+        .eq('id', userId).single();
+    if (userError || !userRecord) return { ok: false, reason: 'user_not_found' };
+    if (!userRecord.referrerId || userRecord.referrerId === userId) return { ok: false, reason: 'no_referrer' };
+    if (userRecord.referrerCounted) return { ok: false, reason: 'already_counted' };
+    if (userRecord.isBanned) return { ok: false, reason: 'banned' };
+
+    const isMember = await checkUserMembership(userId);
+    if (!isMember) return { ok: false, reason: 'not_member' };
+
+    if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
+
+    const { data: refUser, error: refError } = await supabase.from('users')
+        .select('validInvites, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
+    if (refError || !refUser) return { ok: false, reason: 'referrer_not_found' };
+
+    const newValid = (refUser.validInvites || 0) + 1;
+    const INSTANT_REF_COINS = 1000;
+    const INSTANT_REF_ORDERS = 3000;
+
+    await touchWallet(userRecord.referrerId, {
+        validInvites: newValid,
+        coins: (refUser.coins || 0) + INSTANT_REF_COINS,
+        orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
+    });
+    // Đánh dấu người được mời đã tính hợp lệ (không thuộc nhóm field "ví" nên update thường, không cần touchWallet)
+    await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
+
+    const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
+    const nextMilestone = milestonesData.find(m => m.friends > newValid);
+    const progressText = nextMilestone
+        ? `🎯 Tiến độ: ${newValid}/${nextMilestone.friends} bạn (Phần thưởng mốc: ${nextMilestone.reward})`
+        : '🏆 Đã đạt tất cả các mốc!';
+
+    await safeSendMessage(userRecord.referrerId,
+        `✅ *Xác nhận hợp lệ!* ${userRecord.name} đã tham gia đủ nhóm và xem đủ QC.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
+        { parse_mode: 'Markdown' }
+    );
+
+    return { ok: true, validInvites: newValid };
+}
+
 // ==================== BOT LOGIC ====================
 
 // /start - Kiểm tra tham gia nhóm BẮT BUỘC TRƯỚC khi cho vào miniapp
@@ -92,7 +153,10 @@ bot.start(async (ctx) => {
                     { friends: 100, reward: '20,000 Đơn Hàng + 10 Lượt Mở Rương', coins: 0, orders: 20000, spins: 10, claimed: false }
                 ]),
                 isBanned: false,
-                referrerCounted: false // Thêm trường này để kiểm soát việc đã đếm hợp lệ cho người mời hay chưa
+                referrerCounted: false, // Thêm trường này để kiểm soát việc đã đếm hợp lệ cho người mời hay chưa
+                lifetimeAdsWatched: 0, // Tổng số QC đã xem trọn đời (không reset theo ngày) - điều kiện xét mời bạn hợp lệ
+                bonusAdsToday: 0, // Số lần đã xem QC nhiệm vụ "Xem QC" hôm nay (tối đa 30)
+                walletUpdatedAt: new Date().toISOString() // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
             };
             const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUser).select().single();
             if (insertError) {
@@ -127,36 +191,9 @@ bot.start(async (ctx) => {
         const isMember = await checkUserMembership(userId);
 
         if (isMember) {
-            // Nếu có referrer và chưa được đếm hợp lệ -> đếm
-            if (userRecord.referrerId && userRecord.referrerId !== userId && !userRecord.referrerCounted) {
-                const { data: refUser, error: refError } = await supabase.from('users').select('validInvites, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
-                if (refUser && !refError) {
-                    const newValid = (refUser.validInvites || 0) + 1;
-                    // Thưởng tức thì cho MỖI lượt mời hợp lệ: 1,000 Coin + 3,000 Đơn Hàng
-                    const INSTANT_REF_COINS = 1000;
-                    const INSTANT_REF_ORDERS = 3000;
-                    await supabase.from('users').update({ 
-                        validInvites: newValid,
-                        coins: (refUser.coins || 0) + INSTANT_REF_COINS,
-                        orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
-                    }).eq('id', userRecord.referrerId);
-                    // Đánh dấu người được mời là đã được tính hợp lệ
-                    await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
-                    
-                    // Thông báo chi tiết cho người mời
-                    const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
-                    const nextMilestone = milestonesData.find(m => m.friends > newValid);
-                    const progressText = nextMilestone 
-                        ? `🎯 Tiến độ: ${newValid}/${nextMilestone.friends} bạn (Phần thưởng mốc: ${nextMilestone.reward})`
-                        : '🏆 Đã đạt tất cả các mốc!';
-                    
-                    await safeSendMessage(userRecord.referrerId,
-                        `✅ *Xác nhận hợp lệ!* ${userName} đã tham gia đủ nhóm.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
-                        { parse_mode: 'Markdown' }
-                    );
-                }
-            }
-            
+            // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
+            await tryFinalizeReferral(userId);
+
             // Gửi nút mở Mini App
             ctx.reply(`Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`, {
                 reply_markup: { 
@@ -206,33 +243,8 @@ bot.on('callback_query', async (ctx) => {
                 return ctx.editMessageText("⚠️ Có lỗi xảy ra, vui lòng thử lại sau!");
             }
 
-            // Nếu có referrer và chưa được đếm hợp lệ
-            if (userRecord.referrerId && userRecord.referrerId !== userId && !userRecord.referrerCounted) {
-                const { data: refUser, error: refError } = await supabase.from('users').select('validInvites, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
-                if (refUser && !refError) {
-                    const newValid = (refUser.validInvites || 0) + 1;
-                    const INSTANT_REF_COINS = 1000;
-                    const INSTANT_REF_ORDERS = 3000;
-                    await supabase.from('users').update({ 
-                        validInvites: newValid,
-                        coins: (refUser.coins || 0) + INSTANT_REF_COINS,
-                        orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
-                    }).eq('id', userRecord.referrerId);
-                    // Đánh dấu người được mời là đã được tính hợp lệ
-                    await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
-                    
-                    const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
-                    const nextMilestone = milestonesData.find(m => m.friends > newValid);
-                    const progressText = nextMilestone 
-                        ? `🎯 Tiến độ: ${newValid}/${nextMilestone.friends} bạn (Phần thưởng mốc: ${nextMilestone.reward})`
-                        : '🏆 Đã đạt tất cả các mốc!';
-                    
-                    await safeSendMessage(userRecord.referrerId,
-                        `✅ *Xác nhận hợp lệ!* ${userName} đã tham gia đủ nhóm.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
-                        { parse_mode: 'Markdown' }
-                    );
-                }
-            }
+            // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
+            await tryFinalizeReferral(userId);
             
             await ctx.editMessageText(
                 `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
@@ -296,7 +308,7 @@ bot.command('ban', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /ban <userId>");
-    await supabase.from('users').update({ isBanned: true }).eq('id', targetId);
+    await touchWallet(targetId, { isBanned: true });
     ctx.reply(`✅ Đã ban user ${targetId}`);
 });
 
@@ -305,7 +317,7 @@ bot.command('unban', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /unban <userId>");
-    await supabase.from('users').update({ isBanned: false }).eq('id', targetId);
+    await touchWallet(targetId, { isBanned: false });
     ctx.reply(`✅ Đã unban user ${targetId}`);
 });
 
@@ -318,7 +330,7 @@ bot.command('congcoin', async (ctx) => {
     const amount = parseInt(parts[2]);
     const { data, error } = await supabase.from('users').select('coins').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await supabase.from('users').update({ coins: (data.coins || 0) + amount }).eq('id', targetId);
+    await touchWallet(targetId, { coins: (data.coins || 0) + amount });
     ctx.reply(`✅ Đã cộng ${amount} coin cho ${targetId}. Số dư mới: ${(data.coins || 0) + amount}`);
 });
 
@@ -332,7 +344,7 @@ bot.command('trucoin', async (ctx) => {
     const { data, error } = await supabase.from('users').select('coins').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     const newCoins = Math.max(0, (data.coins || 0) - amount);
-    await supabase.from('users').update({ coins: newCoins }).eq('id', targetId);
+    await touchWallet(targetId, { coins: newCoins });
     ctx.reply(`✅ Đã trừ ${amount} coin của ${targetId}. Số dư mới: ${newCoins}`);
 });
 
@@ -345,7 +357,7 @@ bot.command('addspin', async (ctx) => {
     const amount = parseInt(parts[2]);
     const { data, error } = await supabase.from('users').select('spins').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await supabase.from('users').update({ spins: (data.spins || 0) + amount }).eq('id', targetId);
+    await touchWallet(targetId, { spins: (data.spins || 0) + amount });
     ctx.reply(`✅ Đã cộng ${amount} lượt mở rương cho ${targetId}`);
 });
 
@@ -358,7 +370,7 @@ bot.command('adddonhang', async (ctx) => {
     const amount = parseInt(parts[2]);
     const { data, error } = await supabase.from('users').select('orders').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await supabase.from('users').update({ orders: (data.orders || 0) + amount }).eq('id', targetId);
+    await touchWallet(targetId, { orders: (data.orders || 0) + amount });
     ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`);
 });
 
@@ -370,7 +382,7 @@ bot.command('setlevel', async (ctx) => {
     const targetId = parts[1];
     const level = parseInt(parts[2]);
     if (level < 1 || level > 10) return ctx.reply("❌ Cấp độ phải từ 1-10");
-    await supabase.from('users').update({ truckLevel: level }).eq('id', targetId);
+    await touchWallet(targetId, { truckLevel: level });
     ctx.reply(`✅ Đã đặt cấp độ xe của ${targetId} lên ${level}`);
 });
 
@@ -379,15 +391,16 @@ bot.command('resetdaily', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /resetdaily <userId>");
-    await supabase.from('users').update({ 
+    await touchWallet(targetId, { 
         adsToday: 0, 
         smartlinksToday: 0,
+        bonusAdsToday: 0,
         deliveryCount: 0,
         smartlinkCount: 0,
         spinAdCount: 0,
         spinFree: 1,
         lastResetDate: new Date(new Date().setDate(new Date().getDate() - 1)).toDateString() // Đặt ngày reset về hôm qua để kích hoạt reset khi mini app load
-    }).eq('id', targetId);
+    });
     ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
 });
 
@@ -522,7 +535,7 @@ bot.command('hoantra', async (ctx) => {
             continue; // Bỏ qua nếu lỗi, cố gắng xử lý các yêu cầu rút khác
         }
         const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await supabase.from('users').update({ orders: newOrders }).eq('id', targetId);
+        await touchWallet(targetId, { orders: newOrders });
         
         totalRefundedOrdersValue += ordersToRefund; // Đây là giá trị đơn hàng, không phải số tiền
         await safeSendMessage(targetId, `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${ordersToRefund.toLocaleString()}`);
@@ -582,7 +595,7 @@ bot.command('huy', async (ctx) => {
             continue;
         }
         const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await supabase.from('users').update({ orders: newOrders }).eq('id', targetId);
+        await touchWallet(targetId, { orders: newOrders });
         
         totalRefundedOrdersValue += ordersToRefund;
         await safeSendMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${ordersToRefund.toLocaleString()}`, { parse_mode: 'Markdown' });
@@ -734,15 +747,46 @@ app.get('/api/user/:id', async (req, res) => {
     res.json(data);
 });
 
-// API cập nhật user (chính xác, dùng increment chính xác)
+// API cập nhật user. QUAN TRỌNG: các field "ví" (coins/orders/spins/truckLevel/isBanned) được đối chiếu
+// qua walletUpdatedAt để KHÔNG cho phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ) ghi đè
+// mất các thay đổi mà ADMIN vừa thực hiện trực tiếp trên database (đây là nguyên nhân gây lỗi "lệnh admin
+// không áp dụng được"). Cách hoạt động: client gửi kèm clientWalletSyncedAt = mốc walletUpdatedAt mà nó
+// biết gần nhất. Nếu mốc đó CŨ HƠN mốc hiện tại trong DB (tức admin vừa sửa ví sau khi client đồng bộ lần
+// cuối) thì server sẽ BỎ QUA phần ví client gửi lên, giữ nguyên giá trị admin đã đặt, và trả lại giá trị
+// mới nhất để client tự cập nhật lại local state.
+const WALLET_FIELDS = ['coins', 'orders', 'spins', 'truckLevel', 'isBanned'];
 app.post('/api/user/:id', async (req, res) => {
     try {
         const userId = req.params.id;
-        let updateData = { ...req.body };
+        const { clientWalletSyncedAt, ...body } = req.body;
+        let updateData = { ...body };
 
         // Handle referralMilestones as JSON string
         if (updateData.referralMilestones) {
             updateData.referralMilestones = JSON.stringify(updateData.referralMilestones);
+        }
+
+        const { data: current, error: currentError } = await supabase.from('users')
+            .select('walletUpdatedAt, isBanned, coins, orders, spins, truckLevel').eq('id', userId).single();
+        if (currentError || !current) {
+            console.error(`Lỗi lấy user hiện tại ${userId}:`, currentError);
+            return res.status(404).json({ success: false, error: "User not found" });
+        }
+        if (current.isBanned) {
+            return res.status(403).json({ success: false, error: "Tài khoản đã bị khóa.", isBanned: true });
+        }
+
+        const dbWalletTime = current.walletUpdatedAt ? new Date(current.walletUpdatedAt).getTime() : 0;
+        const clientTime = clientWalletSyncedAt ? new Date(clientWalletSyncedAt).getTime() : 0;
+        let walletOverridden = false;
+
+        if (dbWalletTime > clientTime) {
+            // Admin vừa sửa ví sau lần client đồng bộ gần nhất -> bỏ các field ví trong request này
+            WALLET_FIELDS.forEach(f => { delete updateData[f]; });
+            walletOverridden = true;
+        } else {
+            // Client đang là bản mới nhất -> cho phép lưu, đồng thời cập nhật lại mốc walletUpdatedAt
+            updateData.walletUpdatedAt = new Date().toISOString();
         }
 
         const { error } = await supabase.from('users').update(updateData).eq('id', userId);
@@ -750,10 +794,29 @@ app.post('/api/user/:id', async (req, res) => {
             console.error(`Lỗi cập nhật user ${userId}:`, error);
             return res.status(500).json({ success: false, error: error.message });
         }
-        res.json({ success: true });
+
+        if (walletOverridden) {
+            // Trả về giá trị ví mới nhất từ DB để client tự đồng bộ lại, tránh mất thay đổi của admin
+            const { data: fresh } = await supabase.from('users')
+                .select('coins, orders, spins, truckLevel, isBanned, walletUpdatedAt').eq('id', userId).single();
+            return res.json({ success: true, walletOverridden: true, wallet: fresh });
+        }
+
+        res.json({ success: true, walletOverridden: false, walletUpdatedAt: updateData.walletUpdatedAt });
     } catch (e) {
         console.error("Lỗi API cập nhật user:", e);
         res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// API kiểm tra và xác nhận mời bạn hợp lệ (gọi từ frontend mỗi khi user xem QC)
+app.post('/api/check-referral/:id', async (req, res) => {
+    try {
+        const result = await tryFinalizeReferral(req.params.id);
+        res.json(result);
+    } catch (e) {
+        console.error("Lỗi check-referral:", e);
+        res.status(500).json({ ok: false, error: e.message });
     }
 });
 
@@ -764,15 +827,21 @@ app.post('/api/withdraw', async (req, res) => {
     if (!userId || !amount || !method || !accountInfo) {
         return res.status(400).json({ error: "Missing required fields" });
     }
+    if (amount < 2000) { // Mức rút tối thiểu: 2.000 VNĐ (20.000 Đơn Hàng)
+        return res.status(400).json({ error: "Số tiền rút tối thiểu là 2.000 VNĐ (20.000 Đơn Hàng)." });
+    }
 
     // Lấy thông tin user để kiểm tra số đơn hàng trước
-    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders').eq('id', userId).single();
+    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned').eq('id', userId).single();
     if (userFetchError || !userData) {
         console.error("Lỗi lấy user khi rút tiền:", userFetchError);
         return res.status(404).json({ error: "User not found or database error." });
     }
+    if (userData.isBanned) {
+        return res.status(403).json({ error: "Tài khoản đã bị khóa." });
+    }
 
-    // Trừ đơn hàng (1000 VNĐ = 10000 đơn hàng)
+    // Trừ đơn hàng (1000 VNĐ = 10000 đơn hàng, tức 20.000 Đơn Hàng = 2.000 VNĐ)
     const ordersToDeduct = Math.floor(amount / 1000) * 10000;
     if (userData.orders < ordersToDeduct) {
         return res.status(400).json({ error: "Không đủ đơn hàng để rút số tiền này." });
@@ -792,8 +861,8 @@ app.post('/api/withdraw', async (req, res) => {
         if (withdrawInsertError) throw withdrawInsertError;
 
         // Cập nhật số đơn hàng của người dùng
-        const { error: userUpdateError } = await supabase.from('users').update({ orders: newOrders }).eq('id', userId);
-        if (userUpdateError) throw userUpdateError;
+        const walletOk = await touchWallet(userId, { orders: newOrders });
+        if (!walletOk) throw new Error("Không thể cập nhật số đơn hàng sau khi rút.");
         
         res.json({ success: true });
     } catch (error) {
@@ -810,9 +879,22 @@ app.post('/api/redeem-code', async (req, res) => {
     const { data: gc, error: gcError } = await supabase.from('giftcodes').select('*').eq('code', code).single();
     if (gcError || !gc) return res.status(404).json({ error: "Mã code không hợp lệ hoặc không tồn tại." });
     if (gc.usedCount >= gc.limitUses) return res.status(400).json({ error: "Mã code đã hết lượt sử dụng." });
-    
-    // Kiểm tra xem user đã sử dụng code này chưa (có thể thêm bảng user_giftcodes nếu muốn chi tiết hơn)
-    // Hiện tại chỉ dựa vào usedCount chung
+
+    const { data: userCheck } = await supabase.from('users').select('isBanned').eq('id', userId).single();
+    if (userCheck?.isBanned) return res.status(403).json({ error: "Tài khoản đã bị khóa." });
+
+    // FIX LỖI: mỗi user chỉ được nhập 1 code MỘT LẦN DUY NHẤT (trước đây chỉ kiểm tra usedCount chung của
+    // code, không phân biệt user nên 1 người có thể spam nhập lại nhiều lần). Ghi nhận vào bảng
+    // giftcode_redemptions (code, userId) với khóa chính kép -> insert lần 2 của cùng 1 user sẽ báo lỗi.
+    const { error: redemptionError } = await supabase.from('giftcode_redemptions').insert({ code, userId });
+    if (redemptionError) {
+        // Mã lỗi 23505 = vi phạm unique/primary key -> nghĩa là user đã nhập code này rồi
+        if (redemptionError.code === '23505') {
+            return res.status(400).json({ error: "Bạn đã sử dụng mã code này rồi." });
+        }
+        console.error("Lỗi ghi nhận redemption:", redemptionError);
+        return res.status(500).json({ error: "Lỗi khi xử lý code." });
+    }
     
     // Tăng số lượt đã dùng CỦA CODE
     const { error: updateGcError } = await supabase.from('giftcodes').update({ usedCount: gc.usedCount + 1 }).eq('code', code);
@@ -846,9 +928,8 @@ app.post('/api/redeem-code', async (req, res) => {
         updateData.spins += gc.rewardAmount;
     }
     
-    const { error: userUpdateError } = await supabase.from('users').update(updateData).eq('id', userId);
-    if (userUpdateError) {
-        console.error("Lỗi cập nhật user khi redeem code:", userUpdateError);
+    const walletOk = await touchWallet(userId, updateData);
+    if (!walletOk) {
         return res.status(500).json({ error: "Lỗi khi cộng thưởng cho người dùng." });
     }
 
