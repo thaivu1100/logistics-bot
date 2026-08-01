@@ -606,8 +606,11 @@
                             await this.saveState(); 
                         } else if (res.ok) {
                             const data = await res.json();
-                            Object.assign(this, data);
-                            this.user = data.user || this.user; // Ensure user object is updated
+                            // Dữ liệu từ Supabase là phẳng (flat), gán trực tiếp vào this.user
+                            this.user.name = data.name || this.user.name;
+                            this.user.referrerId = data.referrerId || null;
+                            this.user.referrerCounted = data.referrerCounted || false;
+                            this.user.joinDate = data.joinDate || '';
                             this.orders = data.orders || 0;
                             this.coins = data.coins || 0;
                             this.truckLevel = data.truckLevel || 1;
@@ -1272,14 +1275,14 @@
                 },
                 async saveState() {
                     const data = {
-                        user: { // Only update changeable user fields here, ID and name are usually static
-                            id: this.user.id,
-                            name: this.user.name,
-                            joinDate: this.user.joinDate,
-                            // Ensure referrerId and referrerCounted are saved if they exist in this.user
-                            referrerId: this.user.referrerId,
-                            referrerCounted: this.user.referrerCounted
-                        },
+                        // QUAN TRỌNG: các field phải nằm PHẲNG (top-level) để khớp với tên cột trong bảng
+                        // Supabase "users". Trước đây các field này bị lồng trong object "user" khiến
+                        // PostgREST từ chối TOÀN BỘ request update (vì cột "user" không tồn tại) ->
+                        // đây chính là nguyên nhân dữ liệu không được lưu / bị mất khi khởi động lại bot.
+                        name: this.user.name,
+                        joinDate: this.user.joinDate,
+                        referrerId: this.user.referrerId,
+                        referrerCounted: this.user.referrerCounted,
                         coins: this.coins,
                         orders: this.orders,
                         spins: this.spinFree, // 'spins' in DB is 'spinFree' in frontend
