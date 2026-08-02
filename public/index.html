@@ -975,10 +975,15 @@
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
-                        const nextSunday = new Date();
-                        nextSunday.setDate(now.getDate() + (7 - now.getDay()) % 7);
+                        const nextSunday = new Date(now);
                         nextSunday.setHours(0, 0, 0, 0);
-                        if (now.getDay() === 0 && now.getHours() === 0) { // If it's Sunday 00:00, count to next Sunday
+                        const daysUntilSunday = (7 - now.getDay()) % 7; // 0 nếu hôm nay là Chủ Nhật
+                        nextSunday.setDate(now.getDate() + daysUntilSunday);
+                        // FIX LỖI: nếu mốc vừa tính ra đã ở QUÁ KHỨ so với hiện tại (tức đang là Chủ Nhật
+                        // và đã qua 00:00, không chỉ riêng giờ đầu tiên) thì phải nhảy sang Chủ Nhật tuần sau.
+                        // Trước đây chỉ kiểm tra "now.getHours() === 0" nên cả ngày Chủ Nhật (trừ giờ đầu)
+                        // bị tính ra hiệu số ÂM, khiến đồng hồ đếm ngược hiển thị sai như đang tăng lên.
+                        if (nextSunday <= now) {
                             nextSunday.setDate(nextSunday.getDate() + 7);
                         }
                         const diff = nextSunday - now;
