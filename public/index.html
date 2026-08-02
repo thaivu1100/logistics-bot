@@ -12,7 +12,7 @@
     <script src='//libtl.com/sdk.js' data-zone='10406527' data-sdk='show_10406527'></script>
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
     <style>
         [x-cloak] { display: none !important; }
         html { -webkit-text-size-adjust: 100%; }
@@ -238,7 +238,7 @@
     <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
         <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
-                <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base"><i class="fa-solid fa-warehouse"></i></div>
+                <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦</div>
                 <div>
                     <p class="font-bold text-xs tracking-tight flex items-center header-text"><span x-text="user.name || 'Shipper'"></span><span class="bg-blue-500/20 text-blue-400 text-[8px] px-2 py-0.5 rounded-full ml-2" x-text="'LV.' + truckLevel"></span></p>
                     <p class="text-[7px] font-bold text-slate-500 tracking-widest mt-0.5 italic" x-text="'ID: ' + user.id"></p>
@@ -614,7 +614,7 @@
                 <template x-for="m in menuItems" :key="m.id">
                     <button @click="tab = m.id" :class="tab === m.id ? 'text-blue-500 scale-110 -translate-y-1 font-black opacity-100 duration-300' : 'text-slate-500 opacity-50 grayscale'" class="flex flex-col items-center flex-shrink-0 transition-all px-1 cursor-pointer">
                         <div x-show="tab === m.id" class="nav-pill"></div>
-                        <i :class="m.icon" class="text-base"></i>
+                        <span class="text-base" x-text="m.icon"></span>
                         <span class="text-[6px] font-extrabold uppercase mt-0.5 tracking-widest italic" x-text="texts['nav_' + m.id]"></span>
                     </button>
                 </template>
@@ -2009,13 +2009,13 @@
                     } catch (e) { console.error("Lỗi lưu DB:", e); }
                 },
                 menuItems: [
-                    { id: 'home', name: 'Trang chủ', icon: 'fa-solid fa-house-chimney-window' },
-                    { id: 'chest', name: 'Rương', icon: 'fa-solid fa-gift' },
-                    { id: 'tasks', name: 'Nhiệm vụ', icon: 'fa-solid fa-list-check' },
-                    { id: 'leaderboard', name: 'BXH', icon: 'fa-solid fa-trophy' },
-                    { id: 'friends', name: 'Mời bạn', icon: 'fa-solid fa-user-group' },
-                    { id: 'withdraw', name: 'Rút tiền', icon: 'fa-solid fa-credit-card' },
-                    { id: 'settings', name: 'Cài đặt', icon: 'fa-solid fa-gears' }
+                    { id: 'home', name: 'Trang chủ', icon: '🏠' },
+                    { id: 'chest', name: 'Rương', icon: '🎁' },
+                    { id: 'tasks', name: 'Nhiệm vụ', icon: '📋' },
+                    { id: 'leaderboard', name: 'BXH', icon: '🏆' },
+                    { id: 'friends', name: 'Mời bạn', icon: '👥' },
+                    { id: 'withdraw', name: 'Rút tiền', icon: '💳' },
+                    { id: 'settings', name: 'Cài đặt', icon: '⚙️' }
                 ]
             };
         }
