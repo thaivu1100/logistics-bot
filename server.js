@@ -351,6 +351,16 @@ bot.start(async (ctx) => {
             if (userRecord.isBanned) {
                 return ctx.reply("❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.");
             }
+            // FIX LỖI TÊN BỊ GHI ĐÈ SAI (vd hiện "🚫 BANNED - RESET 🚫" thay vì tên thật): trường "name"
+            // trước đây chỉ được ghi 1 LẦN DUY NHẤT lúc tạo tài khoản, không bao giờ tự làm mới lại từ
+            // Telegram. Nếu dữ liệu "name" từng bị chỉnh sai (vd admin sửa tay trong Supabase làm dấu
+            // ghi chú nội bộ rồi quên đổi lại) thì tên sai đó tồn tại vĩnh viễn. Giờ mỗi lần user gõ
+            // /start, tự đồng bộ lại đúng tên thật hiện tại từ Telegram (ctx.from.first_name) nếu khác
+            // với tên đang lưu, giúp tự "chữa lành" mọi trường hợp tên bị sai mà không cần admin sửa tay.
+            if (userName && userRecord.name !== userName) {
+                await supabase.from('users').update({ name: userName }).eq('id', userId);
+                userRecord.name = userName;
+            }
         }
 
         // Kiểm tra tham gia nhóm
@@ -673,6 +683,18 @@ bot.command('deleteuser', async (ctx) => {
     if (!targetId) return ctx.reply("❌ Sử dụng: /deleteuser <userId>");
     await supabase.from('users').delete().eq('id', targetId);
     ctx.reply(`✅ Đã xóa vĩnh viễn user ${targetId}`);
+});
+
+// /doiten - Sửa tên hiển thị của 1 user thủ công (dùng khi tên bị lỗi/ghi sai, không cần chờ user gõ lại /start)
+bot.command('doiten', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /doiten <userId> <tên mới>");
+    const targetId = parts[1];
+    const newName = parts.slice(2).join(' ');
+    const { error } = await supabase.from('users').update({ name: newName }).eq('id', targetId);
+    if (error) return ctx.reply("❌ Lỗi: " + error.message);
+    ctx.reply(`✅ Đã đổi tên user ${targetId} thành: ${newName}`);
 });
 
 // /taocode - Tạo code (số đơn hàng + coin + mở rương + số lượt nhập)
@@ -1222,10 +1244,16 @@ app.post('/api/withdraw', async (req, res) => {
         const walletOk = await touchWallet(userId, { orders: newOrders });
         if (!walletOk) throw new Error("Không thể cập nhật số đơn hàng sau khi rút.");
 
-        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT (chỉ hiện 2 số đầu, còn lại che bằng ****)
-        const masked = accountNumber.length > 2 ? accountNumber.substring(0, 2) + '*'.repeat(Math.max(accountNumber.length - 2, 3)) : accountNumber;
+        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT và Chủ TK (chỉ hiện 2 ký tự đầu, còn lại che bằng ****)
+        const maskText = (txt) => {
+            const clean = (txt || '').toString().trim();
+            if (!clean) return 'Không có';
+            return clean.length > 2 ? clean.substring(0, 2) + '*'.repeat(Math.max(clean.length - 2, 3)) : clean + '***';
+        };
+        const masked = maskText(accountNumber);
+        const maskedAccountName = maskText(accountName);
         await safeSendMessage(GROUP_2_ID,
-            `🔔 *Yêu cầu rút tiền mới:*\n🆔 ID: ${userId}\n💳 Phương Thức: ${methodLabel}\n📱 STK/SĐT: ${masked}\n👤 Chủ TK: ${accountName || 'Không có'}\n💰 Số Tiền: ${amountVnd.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersAmount.toLocaleString()}`,
+            `🔔 *Yêu cầu rút tiền mới:*\n🆔 ID: ${userId}\n💳 Phương Thức: ${methodLabel}\n📱 STK/SĐT: ${masked}\n👤 Chủ TK: ${maskedAccountName}\n💰 Số Tiền: ${amountVnd.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersAmount.toLocaleString()}`,
             { parse_mode: 'Markdown' }
         );
 
