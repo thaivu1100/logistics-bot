@@ -33,7 +33,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    alter table giftcodes add column if not exists scope text default 'nguoidung';
 //    alter table giftcodes add column if not exists createdBy text;
 // 3) Thêm cột snapshot phần thưởng + thời gian + tên cho bảng giftcode_redemptions
-//    (để hiển thị lịch sử nhập code riêng tư của từng user và cho /thuhoi, /nhapcode hoạt động):
+//    (để hiển thị lịch sử nhập code riêng tư của từng user và cho /thuhoi, /listnguoinhapcode hoạt động):
 //    alter table giftcode_redemptions add column if not exists rewardCoin integer default 0;
 //    alter table giftcode_redemptions add column if not exists rewardOrders integer default 0;
 //    alter table giftcode_redemptions add column if not exists rewardSpins integer default 0;
@@ -798,23 +798,39 @@ bot.command('taocode', async (ctx) => {
 
     const [, code, coin, orders, spins, limit, scopeRaw] = parts;
     const scope = scopeRaw.toLowerCase() === 'admin' ? 'admin' : 'nguoidung';
-    const { error } = await supabase.from('giftcodes').insert({
+    const baseRow = {
         code: code,
         rewardType: 'multi',
         rewardAmount: parseInt(coin) || 0,
         orders: parseInt(orders) || 0,
         spins: parseInt(spins) || 0,
         limitUses: parseInt(limit) || 0,
-        usedCount: 0,
-        scope: scope,
-        createdBy: String(ctx.from.id)
-    });
+        usedCount: 0
+    };
+
+    // Thử insert đầy đủ (kèm scope/createdBy) trước. Nếu bảng "giftcodes" trên Supabase CHƯA được thêm 2
+    // cột này (chưa chạy SQL migration), Postgres sẽ báo lỗi "column does not exist" (mã 42703 hoặc
+    // PGRST204) -> tự động fallback insert KHÔNG kèm scope/createdBy để code vẫn được tạo bình thường
+    // (khi đó phạm vi sẽ mặc định là "Người dùng" cho tới khi admin chạy SQL migration để bật được tính
+    // năng phạm vi "Chỉ Admin"). Nhờ vậy lệnh /taocode KHÔNG BAO GIỜ bị lỗi vì thiếu cột nữa.
+    let { error } = await supabase.from('giftcodes').insert({ ...baseRow, scope, createdBy: String(ctx.from.id) });
+    let scopeSaved = true;
+
+    if (error && (error.code === '42703' || error.code === 'PGRST204' || /column|scope|createdBy/i.test(error.message || ''))) {
+        scopeSaved = false;
+        const retry = await supabase.from('giftcodes').insert(baseRow);
+        error = retry.error;
+    }
 
     if (error) {
         console.error("Lỗi tạo code:", error);
-        return ctx.reply("❌ Lỗi: Mã code đã tồn tại hoặc dữ liệu không hợp lệ (kiểm tra đã thêm cột \"scope\"/\"createdBy\" vào bảng giftcodes chưa).");
+        return ctx.reply(`❌ Lỗi: Mã code \`${code}\` đã tồn tại hoặc dữ liệu không hợp lệ.\n${error.message ? 'Chi tiết: ' + error.message : ''}`, { parse_mode: 'Markdown' });
     }
-    ctx.reply(`✅ Đã tạo code: \`${code}\`\n🪙 Coin: ${coin}\n📦 Đơn hàng: ${orders}\n🎡 Lượt mở rương: ${spins}\n🔢 Giới hạn: ${limit} lần\n🔒 Phạm vi: *${scope === 'admin' ? 'Chỉ Admin' : 'Người dùng'}*`, { parse_mode: 'Markdown' });
+    let msg = `✅ Đã tạo code: \`${code}\`\n🪙 Coin: ${coin}\n📦 Đơn hàng: ${orders}\n🎡 Lượt mở rương: ${spins}\n🔢 Giới hạn: ${limit} lần\n🔒 Phạm vi: *${scope === 'admin' ? 'Chỉ Admin' : 'Người dùng'}*`;
+    if (!scopeSaved) {
+        msg += `\n\n⚠️ *Lưu ý:* chưa lưu được phạm vi (bảng \`giftcodes\` thiếu cột \`scope\`/\`createdBy\`) nên code này tạm thời áp dụng cho *Người dùng*. Chạy SQL migration ở đầu file server.js rồi tạo lại code để bật đúng phạm vi *Chỉ Admin*.`;
+    }
+    ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 
 // /listcodes
@@ -855,17 +871,25 @@ bot.command('delcode', async (ctx) => {
     ctx.reply(`✅ Đã xóa code: ${code}`);
 });
 
-// /nhapcode <mã> - Xem TẤT CẢ người dùng đã nhập 1 mã code cụ thể (ID, tên, phần thưởng nhận, thời gian)
-bot.command('nhapcode', async (ctx) => {
+// /listnguoinhapcode <mã> - Xem TẤT CẢ người dùng đã từng nhập 1 mã code cụ thể (ID, tên, phần thưởng
+// nhận, thời gian) - hoạt động ĐƯỢC kể cả khi admin đã /delcode xoá mã đó rồi, vì lệnh này đọc từ lịch sử
+// nhập (giftcode_redemptions) chứ không phụ thuộc mã code còn tồn tại trong bảng giftcodes hay không.
+bot.command('listnguoinhapcode', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const code = ctx.message.text.split(' ')[1];
-    if (!code) return ctx.reply("❌ Sử dụng: /nhapcode <mã_code>");
+    if (!code) return ctx.reply("❌ Sử dụng: /listnguoinhapcode <mã_code>");
 
-    const { data: redemptions, error } = await supabase.from('giftcode_redemptions')
+    let { data: redemptions, error } = await supabase.from('giftcode_redemptions')
         .select('*').eq('code', code).order('createdAt', { ascending: false });
     if (error) {
+        // Bảng chưa có cột "createdAt" (chưa chạy SQL migration) -> thử lại KHÔNG sắp xếp theo thời gian
+        const retry = await supabase.from('giftcode_redemptions').select('*').eq('code', code);
+        redemptions = retry.data;
+        error = retry.error;
+    }
+    if (error) {
         console.error("Lỗi lấy danh sách người nhập code:", error);
-        return ctx.reply("❌ Lỗi khi lấy dữ liệu (kiểm tra đã thêm cột \"createdAt\" vào bảng giftcode_redemptions chưa).");
+        return ctx.reply("❌ Lỗi khi lấy dữ liệu từ database.");
     }
     if (!redemptions || redemptions.length === 0) return ctx.reply(`📭 Chưa có ai nhập mã \`${code}\`.`, { parse_mode: 'Markdown' });
 
@@ -1494,12 +1518,24 @@ app.post('/api/redeem-code', async (req, res) => {
     // Đồng thời lưu luôn "snapshot" phần thưởng + thời gian nhập để: (1) hiển thị lịch sử nhập code CHỈ
     // RIÊNG user đó thấy được (không thông báo lên banner toàn server nữa), và (2) cho phép admin /thuhoi
     // thu hồi chính xác đúng số đã phát ra dù sau này admin có đổi phần thưởng của code.
-    const { error: redemptionError } = await supabase.from('giftcode_redemptions').insert({
-        code, userId,
-        userName: userCheck?.name || null,
-        rewardCoin, rewardOrders, rewardSpins,
-        createdAt: new Date().toISOString()
-    });
+    // Nếu bảng giftcode_redemptions trên Supabase CHƯA được thêm các cột snapshot (chưa chạy SQL migration)
+    // -> tự động fallback insert chỉ với (code, userId) để việc nhập code KHÔNG BỊ LỖI/chặn đứng; khi đó
+    // lịch sử nhập code của user sẽ hiển thị thiếu số phần thưởng cho tới khi admin chạy migration.
+    let redemptionError;
+    {
+        const full = await supabase.from('giftcode_redemptions').insert({
+            code, userId,
+            userName: userCheck?.name || null,
+            rewardCoin, rewardOrders, rewardSpins,
+            createdAt: new Date().toISOString()
+        });
+        redemptionError = full.error;
+        if (redemptionError && redemptionError.code !== '23505' &&
+            (redemptionError.code === '42703' || redemptionError.code === 'PGRST204' || /column/i.test(redemptionError.message || ''))) {
+            const fallback = await supabase.from('giftcode_redemptions').insert({ code, userId });
+            redemptionError = fallback.error;
+        }
+    }
     if (redemptionError) {
         // Mã lỗi 23505 = vi phạm unique/primary key -> nghĩa là user đã nhập code này rồi
         if (redemptionError.code === '23505') {
