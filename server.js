@@ -116,9 +116,37 @@ async function tryFinalizeReferral(userId) {
 
     if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
 
+    // FIX LỖI "MỜI 1 BẠN NHƯNG BÁO 2 HỢP LỆ" (race condition): hàm này có thể bị gọi gần như đồng thời từ
+    // nhiều nơi (bot /start, nút "Xác Nhận" callback_query, và API /api/check-referral gọi mỗi lần user
+    // xem xong 1 QC). Trước đây, TẤT CẢ các lệnh gọi đều đọc referrerCounted=false rồi mới ghi true ở CUỐI
+    // cùng -> nếu 2 lệnh gọi trùng thời điểm, cả 2 đều "lọt qua" điều kiện referrerCounted=false phía trên
+    // và đều cộng thưởng cho người mời -> user thấy 2 tin nhắn xác nhận hợp lệ dù chỉ mời đúng 1 bạn.
+    // Cách fix: "khóa" (claim) NGAY LÚC NÀY bằng 1 lệnh UPDATE có điều kiện WHERE referrerCounted = false.
+    // Do Postgres xử lý UPDATE tuần tự cho từng dòng, chỉ DUY NHẤT 1 lệnh gọi trúng điều kiện và nhận được
+    // dòng trả về; các lệnh gọi thua cuộc (dù đọc thấy referrerCounted=false trước đó) sẽ nhận mảng RỖNG ở
+    // đây và dừng lại ngay, không cộng thưởng lần 2.
+    const { data: claimRows, error: claimError } = await supabase.from('users')
+        .update({ referrerCounted: true })
+        .eq('id', userId)
+        .eq('referrerCounted', false)
+        .select('id');
+    if (claimError) {
+        console.error(`Lỗi claim referral cho ${userId}:`, claimError);
+        return { ok: false, reason: 'claim_error' };
+    }
+    if (!claimRows || claimRows.length === 0) {
+        // Một lệnh gọi khác đã claim và xử lý xong trong lúc hàm này đang chạy các bước kiểm tra ở trên
+        return { ok: false, reason: 'already_counted' };
+    }
+
     const { data: refUser, error: refError } = await supabase.from('users')
         .select('validInvites, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
-    if (refError || !refUser) return { ok: false, reason: 'referrer_not_found' };
+    if (refError || !refUser) {
+        // Đã claim (referrerCounted=true) nhưng không cộng thưởng được -> hoàn tác claim để không mất
+        // vĩnh viễn lượt hợp lệ này, cho phép hệ thống tự thử lại ở lần gọi tiếp theo.
+        await supabase.from('users').update({ referrerCounted: false }).eq('id', userId);
+        return { ok: false, reason: 'referrer_not_found' };
+    }
 
     const newValid = (refUser.validInvites || 0) + 1;
     const INSTANT_REF_COINS = 1000;
@@ -129,8 +157,6 @@ async function tryFinalizeReferral(userId) {
         coins: (refUser.coins || 0) + INSTANT_REF_COINS,
         orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
     });
-    // Đánh dấu người được mời đã tính hợp lệ (không thuộc nhóm field "ví" nên update thường, không cần touchWallet)
-    await supabase.from('users').update({ referrerCounted: true }).eq('id', userId);
 
     const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
     const nextMilestone = milestonesData.find(m => m.friends > newValid);
@@ -968,7 +994,33 @@ app.post('/api/user/:id', async (req, res) => {
 // API kiểm tra và xác nhận mời bạn hợp lệ (gọi từ frontend mỗi khi user xem QC)
 app.post('/api/check-referral/:id', async (req, res) => {
     try {
-        const result = await tryFinalizeReferral(req.params.id);
+        const userId = req.params.id;
+
+        // FIX LỖI "BẠN BÈ ĐÃ ĐỦ ĐIỀU KIỆN NHƯNG KHÔNG ĐƯỢC CỘNG THƯỞNG": trước đây API này chỉ đọc
+        // lifetimeAdsWatched TRỰC TIẾP TỪ DB. Nhưng phía client, ngay sau khi xem xong 1 QC, gọi
+        // saveState() (lưu lifetimeAdsWatched mới lên DB) và gọi API này CÙNG LÚC, không chờ cái nào lưu
+        // xong trước -> rất nhiều trường hợp API check này chạy/đọc DB TRƯỚC KHI saveState() kịp lưu, nên
+        // đọc phải giá trị lifetimeAdsWatched CŨ (vd 2 thay vì 3) -> bị đánh giá sai là "chưa đủ 3 QC" dù
+        // thực tế người được mời đã xem đủ -> người mời không được cộng thưởng ở đúng thời điểm đủ điều
+        // kiện. Nay cho phép client gửi kèm số QC hiện tại nó đang giữ, server đồng bộ luôn giá trị này
+        // vào DB (chỉ cho phép TĂNG, không bao giờ giảm, và bỏ qua nếu admin vừa sửa ví sau lần client
+        // đồng bộ gần nhất - dùng chung cơ chế walletUpdatedAt/clientWalletSyncedAt như API lưu user)
+        // TRƯỚC khi chạy kiểm tra, đảm bảo điều kiện luôn được xét trên dữ liệu mới nhất.
+        const clientAdsWatched = parseInt(req.body?.lifetimeAdsWatched);
+        const clientWalletSyncedAt = req.body?.clientWalletSyncedAt;
+        if (!isNaN(clientAdsWatched) && clientAdsWatched > 0) {
+            const { data: cur } = await supabase.from('users')
+                .select('lifetimeAdsWatched, walletUpdatedAt').eq('id', userId).single();
+            if (cur) {
+                const dbWalletTime = cur.walletUpdatedAt ? new Date(cur.walletUpdatedAt).getTime() : 0;
+                const clientTime = clientWalletSyncedAt ? new Date(clientWalletSyncedAt).getTime() : 0;
+                if (dbWalletTime <= clientTime && clientAdsWatched > (cur.lifetimeAdsWatched || 0)) {
+                    await supabase.from('users').update({ lifetimeAdsWatched: clientAdsWatched }).eq('id', userId);
+                }
+            }
+        }
+
+        const result = await tryFinalizeReferral(userId);
         res.json(result);
     } catch (e) {
         console.error("Lỗi check-referral:", e);
