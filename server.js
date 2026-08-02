@@ -26,6 +26,21 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
+// ==================== CẦN CHẠY 1 LẦN TRÊN SUPABASE (SQL Editor) TRƯỚC KHI DEPLOY ====================
+// 1) Bảng quản lý admin phụ:
+//    create table if not exists admins (id text primary key, addedBy text, createdAt timestamptz default now());
+// 2) Thêm cột "phạm vi" + "người tạo" cho bảng giftcodes:
+//    alter table giftcodes add column if not exists scope text default 'nguoidung';
+//    alter table giftcodes add column if not exists createdBy text;
+// 3) Thêm cột snapshot phần thưởng + thời gian + tên cho bảng giftcode_redemptions
+//    (để hiển thị lịch sử nhập code riêng tư của từng user và cho /thuhoi, /nhapcode hoạt động):
+//    alter table giftcode_redemptions add column if not exists rewardCoin integer default 0;
+//    alter table giftcode_redemptions add column if not exists rewardOrders integer default 0;
+//    alter table giftcode_redemptions add column if not exists rewardSpins integer default 0;
+//    alter table giftcode_redemptions add column if not exists userName text;
+//    alter table giftcode_redemptions add column if not exists createdAt timestamptz default now();
+// =======================================================================================================
+
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -36,7 +51,33 @@ const ADMIN_PASS = process.env.ADMIN_PASS;
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
 
 const bot = new Telegraf(BOT_TOKEN);
-const isAdmin = (ctx) => ctx.from.id === ADMIN_ID;
+
+// ==================== HỆ THỐNG ADMIN PHỤ (SUB-ADMIN) ====================
+// ADMIN_ID (hardcode) luôn là "Admin chính" - có toàn quyền, không ai xoá được.
+// Admin chính có thể phong thêm "admin phụ" bằng /addadmin <ID>, admin phụ dùng được TẤT CẢ lệnh admin
+// (trừ /addadmin và /xoaadmin - 2 lệnh này CHỈ Admin chính mới dùng được, để tránh admin phụ tự phong
+// thêm admin khác hoặc xoá quyền lẫn nhau). Danh sách admin phụ lưu ở bảng "admins" trên Supabase để
+// không bị mất khi Render restart, đồng thời cache vào bộ nhớ (Set) để kiểm tra quyền cực nhanh mỗi lệnh.
+// CẦN TẠO BẢNG NÀY 1 LẦN TRÊN SUPABASE (SQL Editor):
+//   create table if not exists admins (id text primary key, addedBy text, createdAt timestamptz default now());
+let subAdminIds = new Set();
+
+async function loadAdmins() {
+    try {
+        const { data, error } = await supabase.from('admins').select('id');
+        if (error) throw error;
+        subAdminIds = new Set((data || []).map(r => String(r.id)));
+    } catch (e) {
+        console.error('Lỗi tải danh sách admin phụ (bảng "admins" có thể chưa tồn tại):', e.message);
+        subAdminIds = new Set();
+    }
+}
+loadAdmins();
+
+// Admin chính: chỉ đúng 1 ID hardcode, không thể bị xoá quyền.
+const isMainAdmin = (ctx) => ctx.from.id === ADMIN_ID;
+// Admin (chính hoặc phụ): dùng cho hầu hết lệnh quản trị.
+const isAdmin = (ctx) => ctx.from.id === ADMIN_ID || subAdminIds.has(String(ctx.from.id));
 
 // ==================== KHOÁ BOT / MINI APP (BẢO TRÌ) ====================
 // Trạng thái khoá được lưu ở bảng "app_settings" (key/value) để KHÔNG bị mất khi Render restart/deploy lại
@@ -280,6 +321,55 @@ bot.command('mokhoabot', async (ctx) => {
     if (!isAdmin(ctx)) return;
     await setBotLocked(false);
     ctx.reply("🔓 Đã mở khoá Bot & Mini App. Người dùng có thể sử dụng bình thường trở lại.");
+});
+
+// /addadmin <ID> - Phong 1 user làm admin phụ (CHỈ Admin chính được dùng lệnh này)
+// Admin phụ dùng được tất cả lệnh admin khác nhưng KHÔNG thể tự thêm/xoá admin (vẫn dưới quyền Admin chính).
+bot.command('addadmin', async (ctx) => {
+    if (!isMainAdmin(ctx)) return;
+    const targetId = ctx.message.text.split(' ')[1];
+    if (!targetId) return ctx.reply("❌ Sử dụng: /addadmin <ID>");
+    if (targetId === String(ADMIN_ID)) return ctx.reply("⚠️ ID này đã là Admin chính.");
+    if (subAdminIds.has(targetId)) return ctx.reply("⚠️ User này đã là admin phụ rồi.");
+
+    const { error } = await supabase.from('admins').upsert({ id: targetId, addedBy: String(ctx.from.id) });
+    if (error) {
+        console.error('Lỗi thêm admin phụ:', error);
+        return ctx.reply("❌ Lỗi khi thêm admin (kiểm tra đã tạo bảng \"admins\" trên Supabase chưa).");
+    }
+    await loadAdmins(); // Nạp lại cache ngay để có hiệu lực tức thì
+    ctx.reply(`✅ Đã phong user ${targetId} làm *Admin phụ*.\nUser này giờ dùng được tất cả lệnh admin (trừ /addadmin, /xoaadmin).`, { parse_mode: 'Markdown' });
+    safeSendMessage(targetId, "🎉 Bạn vừa được phong làm *Admin phụ*! Giờ bạn có thể dùng các lệnh quản trị của bot.", { parse_mode: 'Markdown' });
+});
+
+// /xoaadmin <ID> - Hạ 1 admin phụ xuống lại thành user thường (CHỈ Admin chính được dùng lệnh này)
+bot.command('xoaadmin', async (ctx) => {
+    if (!isMainAdmin(ctx)) return;
+    const targetId = ctx.message.text.split(' ')[1];
+    if (!targetId) return ctx.reply("❌ Sử dụng: /xoaadmin <ID>");
+    if (targetId === String(ADMIN_ID)) return ctx.reply("❌ Không thể xoá quyền Admin chính.");
+    if (!subAdminIds.has(targetId)) return ctx.reply("⚠️ User này không phải admin phụ.");
+
+    const { error } = await supabase.from('admins').delete().eq('id', targetId);
+    if (error) {
+        console.error('Lỗi xoá admin phụ:', error);
+        return ctx.reply("❌ Lỗi khi xoá admin.");
+    }
+    await loadAdmins();
+    ctx.reply(`✅ Đã hạ user ${targetId} xuống lại thành người dùng thường.`);
+    safeSendMessage(targetId, "ℹ️ Bạn đã bị gỡ quyền *Admin phụ*.", { parse_mode: 'Markdown' });
+});
+
+// /listadmins - Xem danh sách admin hiện tại
+bot.command('listadmins', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    let msg = `👑 *Admin chính:* \`${ADMIN_ID}\`\n\n`;
+    if (subAdminIds.size === 0) {
+        msg += "📭 Chưa có admin phụ nào.";
+    } else {
+        msg += `🛡️ *Admin phụ (${subAdminIds.size}):*\n` + [...subAdminIds].map(id => `\`${id}\``).join('\n');
+    }
+    ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 
 // /start - Kiểm tra tham gia nhóm BẮT BUỘC TRƯỚC khi cho vào miniapp
@@ -697,29 +787,34 @@ bot.command('doiten', async (ctx) => {
     ctx.reply(`✅ Đã đổi tên user ${targetId} thành: ${newName}`);
 });
 
-// /taocode - Tạo code (số đơn hàng + coin + mở rương + số lượt nhập)
+// /taocode - Tạo code (số đơn hàng + coin + mở rương + số lượt nhập + phạm vi áp dụng)
+// Cú pháp: /taocode <mã> <coin> <orders> <spins> <giới_hạn> <phạm_vi>
+// <phạm_vi> = "admin" (chỉ Admin chính/phụ mới nhập được, dùng để test code nội bộ)
+//           hoặc "nguoidung" (ai cũng nhập được - mặc định dùng cho sự kiện public)
 bot.command('taocode', async (ctx) => {
     if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    // /taocode <mã> <coin> <orders> <spins> <limit>
-    if (parts.length < 6) return ctx.reply("❌ Sử dụng: /taocode <mã> <coin> <orders> <spins> <giới_hạn>\nVí dụ: /taocode TET2024 500 1000 2 100");
-    
-    const [, code, coin, orders, spins, limit] = parts;
+    const parts = ctx.message.text.trim().split(/\s+/);
+    if (parts.length < 7) return ctx.reply("❌ Sử dụng: /taocode <mã> <coin> <orders> <spins> <giới_hạn> <phạm_vi>\nPhạm vi: admin hoặc nguoidung\nVí dụ: /taocode TET2024 500 1000 2 100 nguoidung");
+
+    const [, code, coin, orders, spins, limit, scopeRaw] = parts;
+    const scope = scopeRaw.toLowerCase() === 'admin' ? 'admin' : 'nguoidung';
     const { error } = await supabase.from('giftcodes').insert({
         code: code,
         rewardType: 'multi',
-        rewardAmount: parseInt(coin),
-        orders: parseInt(orders),
-        spins: parseInt(spins),
-        limitUses: parseInt(limit),
-        usedCount: 0
+        rewardAmount: parseInt(coin) || 0,
+        orders: parseInt(orders) || 0,
+        spins: parseInt(spins) || 0,
+        limitUses: parseInt(limit) || 0,
+        usedCount: 0,
+        scope: scope,
+        createdBy: String(ctx.from.id)
     });
-    
+
     if (error) {
         console.error("Lỗi tạo code:", error);
-        return ctx.reply("❌ Lỗi: Mã code đã tồn tại hoặc dữ liệu không hợp lệ.");
+        return ctx.reply("❌ Lỗi: Mã code đã tồn tại hoặc dữ liệu không hợp lệ (kiểm tra đã thêm cột \"scope\"/\"createdBy\" vào bảng giftcodes chưa).");
     }
-    ctx.reply(`✅ Đã tạo code: \`${code}\`\n🪙 Coin: ${coin}\n📦 Đơn hàng: ${orders}\n🎡 Lượt mở rương: ${spins}\n🔢 Giới hạn: ${limit} lần`, { parse_mode: 'Markdown' });
+    ctx.reply(`✅ Đã tạo code: \`${code}\`\n🪙 Coin: ${coin}\n📦 Đơn hàng: ${orders}\n🎡 Lượt mở rương: ${spins}\n🔢 Giới hạn: ${limit} lần\n🔒 Phạm vi: *${scope === 'admin' ? 'Chỉ Admin' : 'Người dùng'}*`, { parse_mode: 'Markdown' });
 });
 
 // /listcodes
@@ -742,6 +837,7 @@ bot.command('listcodes', async (ctx) => {
             msg += `   SL: ${row.rewardAmount}\n`;
         }
         msg += `   Đã dùng: ${row.usedCount}/${row.limitUses}\n`;
+        msg += `   🔒 Phạm vi: ${row.scope === 'admin' ? 'Chỉ Admin' : 'Người dùng'}\n`;
     });
     ctx.reply(msg, { parse_mode: 'Markdown' });
 });
@@ -757,6 +853,81 @@ bot.command('delcode', async (ctx) => {
         return ctx.reply("❌ Lỗi: Không tìm thấy code hoặc lỗi database.");
     }
     ctx.reply(`✅ Đã xóa code: ${code}`);
+});
+
+// /nhapcode <mã> - Xem TẤT CẢ người dùng đã nhập 1 mã code cụ thể (ID, tên, phần thưởng nhận, thời gian)
+bot.command('nhapcode', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const code = ctx.message.text.split(' ')[1];
+    if (!code) return ctx.reply("❌ Sử dụng: /nhapcode <mã_code>");
+
+    const { data: redemptions, error } = await supabase.from('giftcode_redemptions')
+        .select('*').eq('code', code).order('createdAt', { ascending: false });
+    if (error) {
+        console.error("Lỗi lấy danh sách người nhập code:", error);
+        return ctx.reply("❌ Lỗi khi lấy dữ liệu (kiểm tra đã thêm cột \"createdAt\" vào bảng giftcode_redemptions chưa).");
+    }
+    if (!redemptions || redemptions.length === 0) return ctx.reply(`📭 Chưa có ai nhập mã \`${code}\`.`, { parse_mode: 'Markdown' });
+
+    let msg = `📜 *Danh sách người đã nhập code \`${code}\`* (${redemptions.length} lượt)\n`;
+    redemptions.slice(0, 50).forEach(r => {
+        const time = r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : 'N/A';
+        msg += `\n👤 ID: \`${r.userId}\`${r.userName ? ` (${r.userName})` : ''}\n`;
+        msg += `   🪙 +${r.rewardCoin || 0} Coin | 📦 +${r.rewardOrders || 0} ĐH | 🎡 +${r.rewardSpins || 0} lượt\n`;
+        msg += `   🕒 ${time}\n`;
+    });
+    if (redemptions.length > 50) msg += `\n... và ${redemptions.length - 50} lượt khác (đã ẩn bớt để tránh tin nhắn quá dài).`;
+    ctx.reply(msg, { parse_mode: 'Markdown' });
+});
+
+// /thuhoi <mã> - Thu hồi TOÀN BỘ phần thưởng mà mã code này đã phát cho người dùng (Coin, Đơn hàng, Lượt mở rương)
+// Cách hoạt động: trừ lại đúng số Coin/Đơn hàng/Lượt mở rương mà code đã cộng cho từng user, giới hạn không
+// cho âm (vì Coin/Đơn hàng là 1 quỹ chung dùng chung cho nhiều hoạt động khác nhau, không thể tách riêng
+// "đồng nào đến từ code" một khi đã tiêu - nên nếu user đã tiêu hết, số dư sẽ về 0 thay vì âm). Nếu user
+// không còn đủ Lượt mở rương để trừ (đã dùng để mở rương rồi) thì lượt mở rương cũng chỉ về tối thiểu 0 -
+// tương đương thu hồi lại các lượt mở rương CHƯA DÙNG; những phần thưởng đã nhận được TỪ các lượt mở rương
+// đó (ví dụ vật phẩm ngẫu nhiên, hay đơn hàng dùng để nâng cấp xe) không thể truy ngược chính xác 100% vì
+// hệ thống không lưu "phả hệ" của từng đồng Coin/Đơn hàng - đây là giới hạn chung của mọi hệ thống có quỹ
+// tiền tệ dùng chung (fungible), không riêng gì bot này. Sau khi thu hồi, xoá lịch sử nhập code để user có
+// thể nhập lại từ đầu nếu admin mở lại mã, và trả lại đúng usedCount cho code.
+bot.command('thuhoi', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const code = ctx.message.text.split(' ')[1];
+    if (!code) return ctx.reply("❌ Sử dụng: /thuhoi <mã_code>");
+
+    const { data: redemptions, error: redErr } = await supabase.from('giftcode_redemptions').select('*').eq('code', code);
+    if (redErr) {
+        console.error("Lỗi lấy redemptions để thu hồi:", redErr);
+        return ctx.reply("❌ Lỗi khi lấy dữ liệu người đã nhập code.");
+    }
+    if (!redemptions || redemptions.length === 0) return ctx.reply(`📭 Chưa có ai nhập mã \`${code}\`, không có gì để thu hồi.`, { parse_mode: 'Markdown' });
+
+    ctx.reply(`⏳ Đang thu hồi mã \`${code}\` từ ${redemptions.length} người dùng, vui lòng đợi...`, { parse_mode: 'Markdown' });
+
+    let successCount = 0, failCount = 0;
+    for (const r of redemptions) {
+        const { data: u } = await supabase.from('users').select('coins, orders, spins, name').eq('id', r.userId).single();
+        if (!u) { failCount++; continue; }
+        const newCoins = Math.max(0, (u.coins || 0) - (r.rewardCoin || 0));
+        const newOrders = Math.max(0, (u.orders || 0) - (r.rewardOrders || 0));
+        const newSpins = Math.max(0, (u.spins || 0) - (r.rewardSpins || 0));
+        const ok = await touchWallet(r.userId, { coins: newCoins, orders: newOrders, spins: newSpins });
+        if (ok) {
+            successCount++;
+            safeSendMessage(r.userId,
+                `⚠️ Mã code \`${code}\` bạn đã nhập trước đây vừa bị *Admin thu hồi*.\n🪙 -${r.rewardCoin || 0} Coin | 📦 -${r.rewardOrders || 0} Đơn hàng | 🎡 -${r.rewardSpins || 0} Lượt mở rương\n(Số dư không thể âm nên nếu bạn đã tiêu hết, phần đã tiêu không thể trừ thêm).`,
+                { parse_mode: 'Markdown' }
+            );
+        } else {
+            failCount++;
+        }
+    }
+
+    // Xoá lịch sử nhập + trả usedCount về 0 để mã có thể được nhập lại từ đầu nếu admin muốn mở lại
+    await supabase.from('giftcode_redemptions').delete().eq('code', code);
+    await supabase.from('giftcodes').update({ usedCount: 0 }).eq('code', code);
+
+    ctx.reply(`✅ Đã thu hồi mã \`${code}\`.\n👥 Thành công: ${successCount} user\n❌ Lỗi: ${failCount} user\n📋 Đã xoá lịch sử nhập, mã có thể được nhập lại từ đầu.`, { parse_mode: 'Markdown' });
 });
 
 // /checkID
@@ -1293,13 +1464,42 @@ app.post('/api/redeem-code', async (req, res) => {
     if (gcError || !gc) return res.status(404).json({ error: "Mã code không hợp lệ hoặc không tồn tại." });
     if (gc.usedCount >= gc.limitUses) return res.status(400).json({ error: "Mã code đã hết lượt sử dụng." });
 
-    const { data: userCheck } = await supabase.from('users').select('isBanned').eq('id', userId).single();
+    // Kiểm tra PHẠM VI của code: nếu scope = "admin" thì chỉ Admin chính/phụ mới nhập được (code nội bộ).
+    const uid = String(userId);
+    const isRequesterAdmin = uid === String(ADMIN_ID) || subAdminIds.has(uid);
+    if (gc.scope === 'admin' && !isRequesterAdmin) {
+        return res.status(403).json({ error: "Mã code này chỉ dành riêng cho Admin." });
+    }
+
+    const { data: userCheck } = await supabase.from('users').select('isBanned, name').eq('id', userId).single();
     if (userCheck?.isBanned) return res.status(403).json({ error: "Tài khoản đã bị khóa." });
+
+    // Tính sẵn phần thưởng thực tế của code (để lưu snapshot vào lịch sử + có thể thu hồi chính xác sau này)
+    let rewardCoin = 0, rewardOrders = 0, rewardSpins = 0;
+    if (gc.rewardType === 'multi') {
+        rewardCoin = gc.rewardAmount || 0;
+        rewardOrders = gc.orders || 0;
+        rewardSpins = gc.spins || 0;
+    } else if (gc.rewardType === 'coin') {
+        rewardCoin = gc.rewardAmount || 0;
+    } else if (gc.rewardType === 'orders') {
+        rewardOrders = gc.rewardAmount || 0;
+    } else if (gc.rewardType === 'spins') {
+        rewardSpins = gc.rewardAmount || 0;
+    }
 
     // FIX LỖI: mỗi user chỉ được nhập 1 code MỘT LẦN DUY NHẤT (trước đây chỉ kiểm tra usedCount chung của
     // code, không phân biệt user nên 1 người có thể spam nhập lại nhiều lần). Ghi nhận vào bảng
     // giftcode_redemptions (code, userId) với khóa chính kép -> insert lần 2 của cùng 1 user sẽ báo lỗi.
-    const { error: redemptionError } = await supabase.from('giftcode_redemptions').insert({ code, userId });
+    // Đồng thời lưu luôn "snapshot" phần thưởng + thời gian nhập để: (1) hiển thị lịch sử nhập code CHỈ
+    // RIÊNG user đó thấy được (không thông báo lên banner toàn server nữa), và (2) cho phép admin /thuhoi
+    // thu hồi chính xác đúng số đã phát ra dù sau này admin có đổi phần thưởng của code.
+    const { error: redemptionError } = await supabase.from('giftcode_redemptions').insert({
+        code, userId,
+        userName: userCheck?.name || null,
+        rewardCoin, rewardOrders, rewardSpins,
+        createdAt: new Date().toISOString()
+    });
     if (redemptionError) {
         // Mã lỗi 23505 = vi phạm unique/primary key -> nghĩa là user đã nhập code này rồi
         if (redemptionError.code === '23505') {
@@ -1323,38 +1523,44 @@ app.post('/api/redeem-code', async (req, res) => {
         return res.status(404).json({ error: "Không tìm thấy người dùng." });
     }
 
-    let updateData = { 
-        coins: (u.coins || 0),
-        orders: (u.orders || 0),
-        spins: (u.spins || 0)
+    const updateData = {
+        coins: (u.coins || 0) + rewardCoin,
+        orders: (u.orders || 0) + rewardOrders,
+        spins: (u.spins || 0) + rewardSpins
     };
-    
-    if (gc.rewardType === 'multi') {
-        updateData.coins += (gc.rewardAmount || 0);
-        updateData.orders += (gc.orders || 0);
-        updateData.spins += (gc.spins || 0);
-    } else if (gc.rewardType === 'coin') {
-        updateData.coins += gc.rewardAmount;
-    } else if (gc.rewardType === 'orders') {
-        updateData.orders += gc.rewardAmount;
-    } else if (gc.rewardType === 'spins') {
-        updateData.spins += gc.rewardAmount;
-    }
-    
+
     const walletOk = await touchWallet(userId, updateData);
     if (!walletOk) {
         return res.status(500).json({ error: "Lỗi khi cộng thưởng cho người dùng." });
     }
-    const { data: redeemUser } = await supabase.from('users').select('name').eq('id', userId).single();
-    logActivity(`🎁 ${maskName(redeemUser?.name)} vừa nhập code "${code}" nhận thưởng`);
+
+    // KHÔNG còn ghi vào activity_log / banner toàn server nữa: việc nhập code + phần thưởng nhận được giờ
+    // là RIÊNG TƯ, chỉ chính user đó thấy được qua "Lịch sử nhập code" (GET /api/redeem-history/:userId).
 
     res.json({ 
         success: true, 
         rewardType: gc.rewardType, 
-        rewardAmount: gc.rewardAmount || 0,
-        orders: gc.orders || 0,
-        spins: gc.spins || 0
+        rewardAmount: rewardCoin,
+        orders: rewardOrders,
+        spins: rewardSpins
     });
+});
+
+// Lấy lịch sử nhập code CỦA RIÊNG 1 user (mã code, phần thưởng, thời gian) - chỉ user đó xem được vì phải
+// biết đúng userId của mình (Mini App tự truyền userId của Telegram đang đăng nhập).
+app.get('/api/redeem-history/:userId', async (req, res) => {
+    try {
+        const { data, error } = await supabase.from('giftcode_redemptions')
+            .select('code, rewardCoin, rewardOrders, rewardSpins, createdAt')
+            .eq('userId', req.params.userId)
+            .order('createdAt', { ascending: false })
+            .limit(50);
+        if (error) throw error;
+        res.json({ history: data || [] });
+    } catch (e) {
+        console.error('Lỗi lấy redeem-history:', e.message);
+        res.json({ history: [] });
+    }
 });
 
 // User vừa trúng Jackpot 100.000 Đơn Hàng khi mở rương -> ghi vào banner thật toàn server
