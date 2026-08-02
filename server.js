@@ -94,7 +94,7 @@ async function tryFinalizeReferral(userId) {
 
     const newValid = (refUser.validInvites || 0) + 1;
     const INSTANT_REF_COINS = 1000;
-    const INSTANT_REF_ORDERS = 3000;
+    const INSTANT_REF_ORDERS = 2000;
 
     await touchWallet(userRecord.referrerId, {
         validInvites: newValid,
@@ -667,7 +667,7 @@ bot.command('huy', async (ctx) => {
 bot.command('donrutall', async (ctx) => {
     if (!isAdmin(ctx)) return;
     
-    const { data, error } = await supabase.from('withdrawals').select('id, userId, amount, method, accountInfo, status, createdAt').eq('status', 'pending').order('createdAt', { ascending: true });
+    const { data, error } = await supabase.from('withdrawals').select('id, userId, amount, ordersAmount, method, accountInfo, bankName, accountName, accountNumber, status, createdAt').eq('status', 'pending').order('createdAt', { ascending: true });
     if (error) {
         console.error("Lỗi lấy danh sách đơn rút:", error);
         return ctx.reply("❌ Lỗi lấy danh sách đơn rút.");
@@ -684,13 +684,16 @@ bot.command('donrutall', async (ctx) => {
         }
 
         const ip = userData?.ip || 'Chưa có';
-        const ordersDeducted = Math.floor((w.amount || 0) / 1000) * 10000;
+        const ordersDeducted = w.ordersAmount || (Math.floor((w.amount || 0) / 1000) * 10000);
+        const stkSdt = w.accountNumber || w.accountInfo || 'N/A';
+        const chuTK = w.accountName || 'Không có';
+        const thoiGian = w.createdAt ? new Date(w.createdAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'N/A';
         
         // Check IP trùng
         const duplicates = await checkDuplicateIP(w.userId, userData?.ip);
         const dupText = duplicates.length > 0 ? `\n⚠️ *IP TRÙNG:* ${duplicates.map(d => `${d.name} (${d.id})`).join(', ')}` : '';
         
-        msg += `\n🆔 User ID: ${w.userId}\n👤 Tên: ${userData?.name || 'N/A'}\n💳 Phương thức: ${w.method}\n📝 TTKH: ${w.accountInfo || 'N/A'}\n💰 Số tiền: ${w.amount.toLocaleString()} VNĐ\n📦 Đơn đã trừ: ${ordersDeducted.toLocaleString()}\n🌐 IP: ${ip}${dupText}\n---\n`;
+        msg += `\n🆔 ID: ${w.userId}\n👤 Tên: ${userData?.name || 'N/A'}\n💳 Phương Thức: ${w.method}\n📱 STK/SĐT: ${stkSdt}\n👤 Chủ TK: ${chuTK}\n💰 Số Tiền: ${w.amount.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersDeducted.toLocaleString()}\n🌐 IP: ${ip}\n🕒 Thời Gian Rút Tiền: ${thoiGian}${dupText}\n---\n`;
         
         // Gửi tin nhắn riêng cho admin nếu IP trùng
         if (duplicates.length > 0) {
@@ -936,10 +939,10 @@ app.post('/api/withdraw', async (req, res) => {
         const walletOk = await touchWallet(userId, { orders: newOrders });
         if (!walletOk) throw new Error("Không thể cập nhật số đơn hàng sau khi rút.");
 
-        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT
+        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT (chỉ hiện 2 số đầu, còn lại che bằng ****)
         const masked = accountNumber.length > 2 ? accountNumber.substring(0, 2) + '*'.repeat(Math.max(accountNumber.length - 2, 3)) : accountNumber;
         await safeSendMessage(GROUP_2_ID,
-            `🔔 *Yêu cầu rút tiền mới:*\n👤 ${userId} - ${userData.name || ''}\n💳 STK/SĐT: ${masked} (${methodLabel})\n💰 Số tiền rút: ${amountVnd.toLocaleString()} VNĐ`,
+            `🔔 *Yêu cầu rút tiền mới:*\n🆔 ID: ${userId}\n💳 Phương Thức: ${methodLabel}\n📱 STK/SĐT: ${masked}\n👤 Chủ TK: ${accountName || 'Không có'}\n💰 Số Tiền: ${amountVnd.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersAmount.toLocaleString()}`,
             { parse_mode: 'Markdown' }
         );
 
