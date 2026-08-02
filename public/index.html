@@ -358,6 +358,12 @@
                     </div>
                 </div>
                 
+                <div class="glass p-3 rounded-[25px] text-left card-padding space-y-1 border border-green-500/30 bg-green-900/10">
+                    <h4 class="text-sm font-black uppercase text-green-400 flex items-center gap-2" x-text="texts.instantRewardTitle"></h4>
+                    <p class="text-[10px] font-bold text-slate-300" x-text="texts.instantRewardDesc"></p>
+                    <p class="text-lg font-black text-green-400" x-text="texts.instantRewardValue"></p>
+                </div>
+
                 <div class="glass p-3 rounded-[25px] text-left card-padding space-y-3">
                     <h4 class="text-sm font-black uppercase text-yellow-400 flex items-center gap-2">👥 <span x-text="texts.inviteCondTitle"></span></h4>
                     <div class="bg-slate-800/50 p-3 rounded-xl border border-white/5 space-y-2">
@@ -395,6 +401,7 @@
                     </div>
                     
                     <p class="text-[9px] text-yellow-400 italic border-t border-white/10 pt-2" x-text="texts.milestoneNote"></p>
+                    <p class="text-[9px] text-red-500 font-bold italic" x-text="texts.ipWarningNote"></p>
                 </div>
                 
                 <div class="glass p-3 rounded-[25px] grid grid-cols-2 gap-2 text-center card-padding">
@@ -581,6 +588,8 @@
                 giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 30 lần/ngày.',
                 inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo',
                 milestoneNote: '⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.',
+                instantRewardTitle: '🎁 Phần Thưởng Mời Bạn Thành Công', instantRewardDesc: 'Mỗi bạn bè mời thành công (đủ điều kiện), bạn nhận ngay:', instantRewardValue: '+1.000 Coin + 2.000 Đơn Hàng',
+                ipWarningNote: '⚠️ Bạn Bè Phải Làm Đúng Điều Kiện Mới Tính Là Thành Công. 1 Người Dùng Chỉ Được Tạo 1 Tài Khoản / 1 IP. Nếu Admin Phát Hiện Sẽ Xử Lí!!! (CÓ Hệ Thống Check IP)',
                 withdrawReady: '🎉 Bạn đã đủ điều kiện rút tiền.', progressLabel: 'Tiến độ:',
                 txCodePrefix: 'Mã #', statusApproved: 'Đã duyệt', statusPending: 'Chờ duyệt', statusRejected: 'Hủy',
                 nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_settings: 'Cài đặt'
@@ -628,6 +637,8 @@
                 giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 30 times/day.',
                 inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads',
                 milestoneNote: '⚠️ Each milestone can only be claimed once. Only valid friends count.',
+                instantRewardTitle: '🎁 Successful Invite Reward', instantRewardDesc: 'For every friend you invite successfully (meets all conditions), you instantly get:', instantRewardValue: '+1,000 Coin + 2,000 Orders',
+                ipWarningNote: '⚠️ Your friend must fully meet the conditions to count as successful. Only 1 account is allowed per IP. Admins will take action if abuse is detected!!! (IP checking system in place)',
                 withdrawReady: '🎉 You are eligible to withdraw.', progressLabel: 'Progress:',
                 txCodePrefix: 'Code #', statusApproved: 'Approved', statusPending: 'Pending', statusRejected: 'Rejected',
                 nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_settings: 'Settings'
@@ -641,6 +652,7 @@
                 tab: 'home', user: { id: '', name: '', joinDate: '' }, truckLevel: 1, orders: 0, coins: 0,
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
+                speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
                 showX2Ad: false, pendingOrders: 0, coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
                 spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
@@ -705,6 +717,7 @@
                 get canSpeedUp() {
                     const _ = this.tick;
                     if (this.currentProducts >= this.maxProducts) return false;
+                    if (this.speedUpUsed) return false; // Đã dùng Tăng Tốc x2 cho mẻ này rồi
                     const remaining = this.productionInterval - (Date.now() - this.lastProducedAt);
                     return remaining > 0;
                 },
@@ -1013,6 +1026,10 @@
                         this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
                         return;
                     }
+                    if (this.speedUpUsed) {
+                        this.showNotification('⚠️ Bạn chỉ được Tăng Tốc X2 1 lần cho mỗi mẻ hàng đang sản xuất!');
+                        return;
+                    }
                     const remaining = this.productionInterval - (Date.now() - this.lastProducedAt);
                     if (remaining <= 0) {
                         this.showNotification('✅ Đã sẵn sàng, không cần tăng tốc!');
@@ -1020,6 +1037,7 @@
                     }
                     const applyBoost = () => {
                         this.lastProducedAt -= Math.floor(remaining / 2);
+                        this.speedUpUsed = true; // Đánh dấu đã dùng cho mẻ hàng hiện tại
                         this.adsToday++;
                         this.checkTaskProgress('watchAd');
                         this.onAdWatched();
@@ -1044,6 +1062,7 @@
                             let amount = this.productionAmount;
                             this.currentProducts = Math.min(this.currentProducts + amount, this.maxProducts);
                             this.lastProducedAt = Date.now();
+                            this.speedUpUsed = false; // Mẻ hàng mới -> cho phép Tăng Tốc X2 lại 1 lần
                             this.saveState();
                         }
                     }, 1000);
@@ -1089,6 +1108,7 @@
                     this.currentProducts = 0;
                     this.orders += delivered;
                     this.lastProducedAt = Date.now(); // Reset production timer
+                    this.speedUpUsed = false; // Mẻ hàng mới sau khi giao -> cho phép Tăng Tốc X2 lại 1 lần
                     this.deliveryCount = (this.deliveryCount || 0) + 1;
                     this.checkTaskProgress('deliver');
                     this.saveState();
