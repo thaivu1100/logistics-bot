@@ -805,6 +805,25 @@
                     this.showNotification(`🎉 Nhận thưởng mốc ${milestone.friends} bạn: ${milestone.reward}`);
                 },
                 
+                // FIX LỖI "CÓ MÁY MẤT DỮ LIỆU, CÓ MÁY KHÔNG" khi tải lại / khởi động lại bot: trước đây code
+                // đọc Telegram.WebApp.initDataUnsafe.user NGAY LẬP TỨC lúc app khởi động. Một số client
+                // Telegram (đặc biệt WebView Android khởi động nguội, mạng chậm) cần thêm vài trăm mili-giây
+                // mới "bơm" dữ liệu user vào trang, dù object window.Telegram.WebApp đã tồn tại. Những lần
+                // tải chậm này đọc initDataUnsafe.user ra rỗng -> app tưởng nhầm là "không lấy được thông tin
+                // Telegram" -> rơi vào nhánh tạo/dùng ID KHÁCH (guest) thay vì ID Telegram thật -> nhìn như
+                // toàn bộ dữ liệu biến mất. Những lần tải nhanh hơn thì initDataUnsafe.user đã kịp có sẵn nên
+                // không bị lỗi -> đúng hiện tượng "có máy bị, có máy không" người dùng gặp phải. Hàm dưới đây
+                // chờ tối đa 1.5 giây (kiểm tra mỗi 100ms), chỉ khi vẫn không có mới thật sự coi là không có.
+                async waitForTelegramUser(maxWaitMs = 1500, stepMs = 100) {
+                    let waited = 0;
+                    while (waited < maxWaitMs) {
+                        const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
+                        if (u) return u;
+                        await new Promise(r => setTimeout(r, stepMs));
+                        waited += stepMs;
+                    }
+                    return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
+                },
                 async initApp() {
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
@@ -813,7 +832,7 @@
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
-                        const tgUser = window.Telegram.WebApp.initDataUnsafe?.user;
+                        const tgUser = await this.waitForTelegramUser();
                         if (tgUser) {
                             this.user.id = tgUser.id.toString();
                             this.user.name = tgUser.first_name || 'Shipper';
@@ -1497,7 +1516,17 @@
                 onAdWatched() {
                     this.lifetimeAdsWatched = (this.lifetimeAdsWatched || 0) + 1;
                     if (this.user?.referrerId && !this.user?.referrerCounted) {
-                        fetch(`${API_URL}/api/check-referral/${this.user.id}`, { method: 'POST' })
+                        // Gửi kèm số QC hiện tại + mốc đồng bộ ví để server tự đồng bộ lifetimeAdsWatched
+                        // TRƯỚC khi kiểm tra, tránh trường hợp saveState() (chạy song song) chưa lưu kịp
+                        // khiến server đọc phải số QC cũ và bỏ lỡ xác nhận hợp lệ.
+                        fetch(`${API_URL}/api/check-referral/${this.user.id}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                lifetimeAdsWatched: this.lifetimeAdsWatched,
+                                clientWalletSyncedAt: this.walletSyncedAt
+                            })
+                        })
                             .then(r => r.json())
                             .then(result => {
                                 if (result && result.ok) {
@@ -1583,6 +1612,12 @@
                     if (task.id === 'smartlink15') {
                         const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
                         const randomLink = availableLinks.length > 0 ? availableLinks[Math.floor(Math.random() * availableLinks.length)] : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)];
+                        // FIX LỖI SMARTLINK LẶP LẠI: trước đây link được chọn ra nhưng KHÔNG BAO GIỜ được
+                        // thêm vào usedSmartlinks, nên bộ lọc "availableLinks" ở trên luôn coi TẤT CẢ link là
+                        // chưa dùng -> cùng 1 SmartLink có thể bị chọn trúng lặp đi lặp lại nhiều lần trong 15
+                        // lượt, thay vì xoay vòng đủ các link như thiết kế ban đầu. Nay ghi nhận + lưu ngay.
+                        this.usedSmartlinks = [...this.usedSmartlinks, randomLink];
+                        this.saveState();
                         this.smartlinkStartTime = Date.now();
                         window.open(randomLink, '_blank');
                         this.showNotification('⏳ Vui lòng ở lại trang SmartLink ít nhất 10 giây để được tính!');
