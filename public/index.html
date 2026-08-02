@@ -15,11 +15,15 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
         [x-cloak] { display: none !important; }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0f172a; color: white; user-select: none; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .gold-glow { box-shadow: 0 0 30px rgba(251, 191, 36, 0.4); border: 1px solid rgba(251, 191, 36, 0.3); }
-        .neon-blue { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; }
+        .glass { background: linear-gradient(160deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.75) 100%); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.25); transition: box-shadow 0.2s ease, transform 0.2s ease; }
+        .gold-glow { box-shadow: 0 0 34px rgba(251, 191, 36, 0.45), inset 0 1px 0 rgba(255,255,255,0.25); border: 1px solid rgba(251, 191, 36, 0.35); }
+        .neon-blue { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 4px 16px rgba(37, 99, 235, 0.35); }
         .text-neon { text-shadow: 0 0 10px rgba(251, 191, 36, 0.8); color: #fbbf24; }
+        button { transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease; }
+        button:active { transform: scale(0.95); filter: brightness(0.95); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: rgba(251, 191, 36, 0.4); border-radius: 10px; }
         @keyframes floatingBox { 0%, 100% { transform: translateY(0) scale(1) rotate(0deg); } 50% { transform: translateY(-20px) scale(1.1) rotate(5deg); } }
         .float-box { animation: floatingBox 4s ease-in-out infinite; cursor: pointer; }
         .nav-scroll::-webkit-scrollbar { display: none; }
@@ -518,7 +522,7 @@
             </div>
         </main>
 
-        <nav class="fixed bottom-0 left-0 right-0 h-16 bg-slate-950/90 backdrop-blur-3xl border-t border-white/5 z-[200] px-1">
+        <nav class="fixed bottom-0 left-0 right-0 h-16 bg-slate-950/90 backdrop-blur-3xl border-t border-white/5 z-[200] px-1" style="box-shadow: 0 -8px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(251,191,36,0.15);">
             <div class="flex h-full items-center justify-around nav-scroll overflow-x-auto space-x-1 px-1 scroll-smooth">
                 <template x-for="m in menuItems" :key="m.id">
                     <button @click="tab = m.id" :class="tab === m.id ? 'text-blue-500 scale-110 -translate-y-1 font-black opacity-100 duration-300' : 'text-slate-500 opacity-50 grayscale'" class="flex flex-col items-center flex-shrink-0 transition-all px-1 cursor-pointer">
@@ -864,32 +868,16 @@
                     this.scheduleCoinBox();
                     this.startCountdown();
                     
+                    // Xử lý khi user quay lại app sau khi mở SmartLink. Dùng CẢ 'visibilitychange' lẫn 'focus'
+                    // vì 1 số client (đặc biệt Telegram Desktop trên PC) không bắn 'visibilitychange' đáng tin cậy
+                    // khi mở link ngoài bằng window.open() -> khiến nhiệm vụ SmartLink không bao giờ được tính dù
+                    // đã đợi đủ 10 giây. Hàm dùng chung, tự reset smartlinkStartTime ngay khi xử lý để tránh bị
+                    // tính 2 lần nếu cả 2 sự kiện cùng bắn.
                     document.addEventListener('visibilitychange', () => {
-                        if (!document.hidden && this.tab === 'tasks') {
-                            const task = this.dailyTasks.find(t => t.id === 'smartlink15');
-                            if (task && !task.done && this.smartlinkStartTime > 0) {
-                                const timeSpent = Date.now() - this.smartlinkStartTime;
-                                if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
-                                    this.smartlinkCount = (this.smartlinkCount || 0) + 1;
-                                    this.smartlinksToday = (this.smartlinksToday || 0) + 1;
-                                    this.smartlinkStartTime = 0; // Reset
-                                    this.saveState();
-                                    if (this.smartlinkCount >= 15) {
-                                        task.done = true;
-                                        task.claimable = true;
-                                        this.coins += 500;
-                                        this.spinFree += 2;
-                                        this.saveState();
-                                        this.showNotification('✅ Hoàn thành 15 SmartLink! Nhận 500 💰 + 2 🎡');
-                                    } else {
-                                        this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/15 SmartLink!`);
-                                    }
-                                } else {
-                                    this.smartlinkStartTime = 0; // Reset
-                                    this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 10 giây để được tính!');
-                                }
-                            }
-                        }
+                        if (!document.hidden && this.tab === 'tasks') this.handleSmartlinkReturn();
+                    });
+                    window.addEventListener('focus', () => {
+                        if (this.tab === 'tasks') this.handleSmartlinkReturn();
                     });
                     
                     // Chống spam: click quá 5 lần trong 3 giây trên cùng 1 nút sẽ bị chặn + cảnh báo
@@ -1407,6 +1395,32 @@
                     msg += ')';
                     this.showNotification(msg);
                 },
+                // Xử lý dùng chung khi user quay lại app sau khi mở SmartLink (gọi từ visibilitychange, focus,
+                // và bộ đếm dự phòng bên dưới). Tự reset smartlinkStartTime NGAY khi xử lý để nếu nhiều nguồn
+                // cùng gọi (vd cả focus lẫn bộ đếm dự phòng cùng lúc) thì chỉ tính 1 lần duy nhất.
+                handleSmartlinkReturn() {
+                    const task = this.dailyTasks.find(t => t.id === 'smartlink15');
+                    if (!task || task.done || this.smartlinkStartTime <= 0) return;
+                    const timeSpent = Date.now() - this.smartlinkStartTime;
+                    this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
+                    if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
+                        this.smartlinkCount = (this.smartlinkCount || 0) + 1;
+                        this.smartlinksToday = (this.smartlinksToday || 0) + 1;
+                        this.saveState();
+                        if (this.smartlinkCount >= 15) {
+                            task.done = true;
+                            task.claimable = true;
+                            this.coins += 500;
+                            this.spinFree += 2;
+                            this.saveState();
+                            this.showNotification('✅ Hoàn thành 15 SmartLink! Nhận 500 💰 + 2 🎡');
+                        } else {
+                            this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/15 SmartLink!`);
+                        }
+                    } else {
+                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 10 giây để được tính!');
+                    }
+                },
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
                     if (!task || task.done) return;
@@ -1416,6 +1430,13 @@
                         this.smartlinkStartTime = Date.now();
                         window.open(randomLink, '_blank');
                         this.showNotification('⏳ Vui lòng ở lại trang SmartLink ít nhất 10 giây để được tính!');
+                        // Bộ đếm dự phòng: 1 số client (Telegram Desktop trên PC) không bắn sự kiện focus/visibilitychange
+                        // khi mở link ngoài -> nhiệm vụ sẽ không bao giờ được tính dù đã đợi đủ. Sau 12 giây, tự kiểm tra
+                        // và tính nếu chưa được xử lý bởi sự kiện nào khác (so khớp đúng mốc thời gian bắt đầu).
+                        const startedAt = this.smartlinkStartTime;
+                        setTimeout(() => {
+                            if (this.smartlinkStartTime === startedAt) this.handleSmartlinkReturn();
+                        }, 12000);
                         return;
                     }
                     if (task.id === 'zalogroup') {
