@@ -417,15 +417,15 @@
                     <div class="space-y-2">
                         <div class="rank-1 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top1"></p><p class="text-[10px] text-white/80" x-text="texts.director"></p></div>
-                            <div class="text-right text-xs font-black"><p>100k</p><p>🎡10</p></div>
+                            <div class="text-right text-xs font-black"><p>🪙5.000</p><p>📦15.000</p></div>
                         </div>
                         <div class="rank-2 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top2"></p><p class="text-[10px] text-white/80" x-text="texts.headDept"></p></div>
-                            <div class="text-right text-xs font-black"><p>50k</p><p>🎡5</p></div>
+                            <div class="text-right text-xs font-black"><p>🪙3.000</p><p>📦10.000</p></div>
                         </div>
                         <div class="rank-3 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top3"></p><p class="text-[10px] text-white/80" x-text="texts.warehouseMgr"></p></div>
-                            <div class="text-right text-xs font-black"><p>25k</p><p>🎡2</p></div>
+                            <div class="text-right text-xs font-black"><p>🪙1.500</p><p>📦5.000</p></div>
                         </div>
                     </div>
                 </div>
@@ -1176,15 +1176,17 @@
                 },
                 changeLanguage() { this.texts = translations[this.language]; this.saveState(); },
                 checkWeeklyRewards() {
+                    // LƯU Ý: việc trao thưởng Top 1-3 hàng tuần và tính toán "tuần hiện tại" giờ đã chuyển
+                    // hẳn sang xử lý ở SERVER (weeklyLeaderboardReset trong server.js), đáng tin cậy hơn vì
+                    // chạy đúng giờ dù không có ai mở app. Hàm này ở client giờ chỉ đơn thuần tự làm mới lại
+                    // BXH hiển thị khi phát hiện sang tuần mới - KHÔNG tự xóa/reset dữ liệu cục bộ nào cả,
+                    // tránh gây hiểu lầm "mất dữ liệu BXH" như lỗi trước đây.
                     const now = new Date();
                     const currentWeek = this.getWeekIdentifier(now);
                     if (this.lastWeekReset !== currentWeek) {
-                        // Reset rank related data at the beginning of a new week
-                        this.rankList.forEach(r => r.invites = 0); // Assuming invites contribute to rank for the week
-                        // Optionally reset specific user stats that are weekly based
                         this.lastWeekReset = currentWeek;
                         this.saveState();
-                        this.initRankList(); // Re-initialize leaderboard if needed
+                        this.initRankList(); // Tải lại BXH mới nhất từ server
                     }
                 },
                 updateSmartlinkCooldown() {
@@ -1212,9 +1214,11 @@
                     }
                 },
                 getWeekIdentifier(date) {
+                    // Mốc Chủ Nhật 00:00, khớp với server (weeklyLeaderboardReset) và đồng hồ đếm ngược "Reset vào 00:00 Chủ Nhật"
                     const d = new Date(date); d.setHours(0,0,0,0);
-                    const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-                    return new Date(d.setDate(diff)).toISOString().slice(0,10);
+                    const day = d.getDay();
+                    d.setDate(d.getDate() - day);
+                    return d.toISOString().slice(0,10);
                 },
                 resetDailyIfNeeded() {
                     const today = new Date().toDateString();
