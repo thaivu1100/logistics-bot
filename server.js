@@ -9,7 +9,22 @@ const path = require('path');
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// FIX LỖI "1 SỐ USER BỊ KẸT PHIÊN BẢN CŨ/DEMO": trước đây express.static dùng cache mặc định của trình
+// duyệt/Telegram WebView cho file index.html, khiến sau khi deploy bản mới, một số thiết bị vẫn tiếp tục
+// đọc bản HTML/JS đã lưu cache cục bộ trước đó thay vì tải lại. Ép index.html luôn "no-store" (không lưu
+// cache) để MỌI thiết bị luôn nhận đúng 1 phiên bản mới nhất ngay khi mở lại Mini App, không cần xoá cache
+// thủ công nữa. Các file tĩnh khác (nếu có) vẫn cache bình thường để không tốn băng thông.
+app.use(express.static(path.join(__dirname, 'public'), {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        }
+    }
+}));
 
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
@@ -155,7 +170,7 @@ async function touchWallet(userId, extraFields = {}) {
 // 3) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
 // Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
 // không tin tưởng dữ liệu client gửi lên.
-async function tryFinalizeReferral(userId) {
+async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     const { data: userRecord, error: userError } = await supabase.from('users')
         .select('id, name, referrerId, referrerCounted, lifetimeAdsWatched, isBanned')
         .eq('id', userId).single();
@@ -164,7 +179,7 @@ async function tryFinalizeReferral(userId) {
     if (userRecord.referrerCounted) return { ok: false, reason: 'already_counted' };
     if (userRecord.isBanned) return { ok: false, reason: 'banned' };
 
-    const isMember = await checkUserMembership(userId);
+    const isMember = precomputedIsMember !== null ? precomputedIsMember : await checkUserMembership(userId);
     if (!isMember) return { ok: false, reason: 'not_member' };
 
     if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
@@ -320,11 +335,13 @@ bot.start(async (ctx) => {
             if (referrerId && referrerId !== userId) { // Đảm bảo người mời không phải chính mình
                 const newCount = await atomicIncrement(referrerId, 'invitedCount', 1);
                 if (newCount !== null) {
-                    // THÔNG BÁO RIÊNG CHO NGƯỜI MỜI (tên bạn + tiến độ)
-                    const milestones = [5, 10, 20, 30, 50, 75, 100];
-                    const nextMilestone = milestones.find(m => m > newCount) || 'Hoàn thành';
+                    // FIX: trước đây thông báo ghi "🎉 Bạn vừa mời thành công" ngay khi bạn bè chỉ mới BẤM
+                    // VÀO LINK (chưa tham gia đủ nhóm, chưa xem QC nào) khiến người mời hiểu lầm là đã nhận
+                    // thưởng. Đổi thành thông báo trung thực: chỉ báo có người vào bằng link, CHƯA thành
+                    // công, kèm nhắc nhở đúng 2 điều kiện cần hoàn tất. Thưởng + thông báo "thành công" thật
+                    // sự chỉ được gửi trong tryFinalizeReferral() khi bạn bè ĐÃ đủ điều kiện.
                     await safeSendMessage(referrerId, 
-                        `🎉 Bạn vừa mời thành công: *${userName}*\n📊 Tổng số người đã mời: *${newCount}*\n🎯 Tiến độ đến mốc tiếp theo: ${newCount}/${nextMilestone}`,
+                        `👋 *${userName}* vừa vào Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *CHƯA được tính thành công*.\n📋 Hãy nhắc bạn ấy hoàn tất 2 điều kiện sau để bạn nhận được thưởng mời bạn:\n1️⃣ Tham gia đầy đủ nhóm Telegram bắt buộc\n2️⃣ Xem ít nhất 3 quảng cáo trong Mini App (ngoại trừ SmartLink)\n\n✅ Khi bạn ấy hoàn tất, bot sẽ tự động thông báo cho bạn kèm phần thưởng.`,
                         { parse_mode: 'Markdown' }
                     );
                 }
@@ -341,7 +358,7 @@ bot.start(async (ctx) => {
 
         if (isMember) {
             // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
-            await tryFinalizeReferral(userId);
+            await tryFinalizeReferral(userId, true);
 
             // Gửi nút mở Mini App
             ctx.reply(`Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`, {
@@ -393,7 +410,7 @@ bot.on('callback_query', async (ctx) => {
             }
 
             // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
-            await tryFinalizeReferral(userId);
+            await tryFinalizeReferral(userId, true);
             
             await ctx.editMessageText(
                 `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
@@ -973,6 +990,13 @@ app.use('/api', (req, res, next) => {
 app.get('/api/verify/:id', async (req, res) => {
     try {
         const isMember = await checkUserMembership(req.params.id);
+        // FIX LỖ HỔNG: trước đây route này chỉ trả về true/false, không thử chốt lượt mời bạn. Nếu user
+        // bấm "✅ Kiểm tra" ngay trong Mini App (thay vì qua bot) sau khi đã lỡ xem đủ 3 QC từ trước, lượt
+        // mời sẽ không bao giờ được tính vì onAdWatched() chỉ gọi check-referral khi lifetimeAdsWatched<=3.
+        // Gọi tại đây để MỌI đường xác nhận thành viên đều tự thử chốt, không phụ thuộc thứ tự thao tác.
+        if (isMember) {
+            tryFinalizeReferral(req.params.id, true).catch(() => {});
+        }
         res.json({ success: isMember });
     } catch (e) {
         console.error("Lỗi API verify:", e);
