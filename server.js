@@ -739,8 +739,27 @@ bot.command('broadcast', async (ctx) => {
     ctx.reply(`✅ Đã gửi thành công đến ${successCount}/${users.length} người dùng.`);
 });
 
-bot.launch();
-console.log("✅ Bot is running...");
+// Khởi động bot ở chế độ long-polling. QUAN TRỌNG: bot.launch() trả về 1 Promise - nếu không bắt lỗi
+// (ví dụ lỗi 409 Conflict do phiên bản deploy cũ vẫn còn đang polling khi Render tạo instance mới),
+// Promise sẽ bị reject mà không ai xử lý -> Node coi là "unhandledRejection" và THOÁT TIẾN TRÌNH với mã lỗi 1
+// (đây chính là nguyên nhân phổ biến khiến deploy trên Render báo "Exited with status 1" dù code không có lỗi cú pháp).
+bot.launch()
+    .then(() => console.log("✅ Bot is running..."))
+    .catch((err) => {
+        console.error("❌ Lỗi khởi động bot (server vẫn tiếp tục chạy để phục vụ API/Web):", err.message);
+    });
+
+// Dừng bot đúng cách khi Render tắt instance cũ lúc deploy bản mới, tránh xung đột polling giữa 2 phiên bản
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// Lưới an toàn: không để 1 lỗi bất đồng bộ chưa được catch làm sập toàn bộ server ngoài ý muốn
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️ Unhandled Rejection (đã được chặn để server không bị crash):', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('⚠️ Uncaught Exception (đã được chặn để server không bị crash):', err);
+});
 
 // ==================== API CHO FRONTEND ====================
 
