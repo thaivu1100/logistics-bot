@@ -1235,12 +1235,14 @@ bot.command('broadcast', async (ctx) => {
 // tạm trên máy người đó). Chuyển toàn bộ sang SERVER để chạy đúng giờ, đáng tin cậy, và trao thưởng thật.
 
 // Xác định "mã tuần" hiện tại (tuần bắt đầu từ Thứ 2, giống hệt cách tính ở frontend) để biết đã sang tuần mới hay chưa
+// Tính "mã tuần" theo mốc CHỦ NHẬT 00:00 (khớp với đồng hồ đếm ngược "⏳ Reset vào 00:00 Chủ Nhật" hiển thị
+// cho người dùng ở tab BXH) - KHÔNG dùng ISO week (Thứ 2) để tránh lệch 1 ngày so với những gì người dùng
+// nhìn thấy trên giao diện.
 function getWeekIdentifier(date) {
     const d = new Date(date);
     d.setHours(0, 0, 0, 0);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    d.setDate(diff);
+    const day = d.getDay(); // Chủ Nhật = 0
+    d.setDate(d.getDate() - day); // Lùi về đúng Chủ Nhật gần nhất (hoặc giữ nguyên nếu hôm nay là Chủ Nhật)
     return d.toISOString().slice(0, 10);
 }
 
@@ -1608,15 +1610,19 @@ app.get('/api/withdrawals/:userId', async (req, res) => {
 
 // API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
 app.get('/api/leaderboard', async (req, res) => {
-    // Xếp hạng theo weeklyValidInvites (số bạn mời hợp lệ TRONG TUẦN NÀY, được reset về 0 mỗi tuần bởi
-    // weeklyLeaderboardReset) để đúng bản chất "Bảng Xếp Hạng Tuần" - không dùng validInvites trọn đời.
-    const { data, error } = await supabase.from('users').select('id, name, validInvites, weeklyValidInvites').order('weeklyValidInvites', { ascending: false }).limit(10);
+    // FIX LỖI "BXH MẤT HẾT DỮ LIỆU/MẤT TOP": trước đây đổi sang xếp hạng theo weeklyValidInvites (cột MỚI,
+    // ai cũng bắt đầu từ 0), khiến BXH nhìn như bị xóa sạch dù validInvites trọn đời của mọi người vẫn còn
+    // nguyên trong DB. Quay lại xếp hạng + hiển thị theo validInvites (tổng số mời hợp lệ trọn đời, không
+    // bao giờ mất). weeklyValidInvites vẫn được tính riêng ở ngầm (xem tryFinalizeReferral) chỉ để phục vụ
+    // việc xét thưởng Top 1-3 hàng tuần (weeklyLeaderboardReset), KHÔNG dùng để hiển thị BXH cho người dùng.
+    const { data, error } = await supabase.from('users').select('id, name, validInvites').order('validInvites', { ascending: false }).limit(10);
     if (error) {
         console.error("Lỗi lấy bảng xếp hạng:", error);
         return res.status(500).json({ error: "Lỗi lấy bảng xếp hạng." });
     }
-    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, validInvites: u.weeklyValidInvites || 0 })) });
+    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, validInvites: u.validInvites || 0 })) });
 });
+
 
 // API redeem code
 app.post('/api/redeem-code', async (req, res) => {
