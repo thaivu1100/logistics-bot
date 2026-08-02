@@ -361,7 +361,7 @@ bot.command('xoaadmin', async (ctx) => {
 });
 
 // /listadmins - Xem danh sách admin hiện tại
-bot.command('listadmins', async (ctx) => {
+bot.command('listadmin', async (ctx) => {
     if (!isAdmin(ctx)) return;
     let msg = `👑 *Admin chính:* \`${ADMIN_ID}\`\n\n`;
     if (subAdminIds.size === 0) {
