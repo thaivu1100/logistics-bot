@@ -806,6 +806,10 @@
                 },
                 
                 async initApp() {
+                    // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
+                    // chưa/không trả về thông tin user kịp lúc app khởi động.
+                    const savedDeviceId = localStorage.getItem('shipper_uid') || null;
+
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
@@ -814,12 +818,22 @@
                             this.user.id = tgUser.id.toString();
                             this.user.name = tgUser.first_name || 'Shipper';
                             if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
+                            localStorage.setItem('shipper_uid', this.user.id);
                         } else {
-                            this.user.id = 'guest_' + Math.floor(Math.random() * 10000);
+                            // Không lấy được thông tin user từ Telegram lúc này -> DÙNG LẠI id đã lưu trên máy
+                            // (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ liệu" khi tải lại.
+                            this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
                             this.user.name = 'Shipper Demo';
+                            localStorage.setItem('shipper_uid', this.user.id);
                         }
+                    } else {
+                        // Không chạy trong Telegram (vd mở thẳng bằng trình duyệt) -> vẫn ưu tiên dùng lại id cũ
+                        // trên máy này để tải lại trang không bị mất dữ liệu.
+                        this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
+                        this.user.name = 'Shipper Demo';
+                        localStorage.setItem('shipper_uid', this.user.id);
                     }
-                    
+
                     try {
                         const res = await fetch(`${API_URL}/api/user/${this.user.id}`);
                         if (res.status === 404) { // User not found, create new local state
@@ -862,7 +876,18 @@
                             this.withdrawHistory = data.withdrawHistory || [];
                             this.lastResetDate = data.lastResetDate || '';
                             this.lastWeekReset = data.lastWeekReset || '';
-                            this.dailyTasks = data.dailyTasks || this.dailyTasks;
+                            // Danh sách nhiệm vụ (tên/icon/phần thưởng/once) LUÔN lấy từ code hiện tại làm chuẩn,
+                            // chỉ merge lại trạng thái done/claimable đã lưu của từng user theo id nhiệm vụ.
+                            if (Array.isArray(data.dailyTasks) && data.dailyTasks.length > 0) {
+                                const savedTaskState = {};
+                                data.dailyTasks.forEach(t => { if (t && t.id) savedTaskState[t.id] = t; });
+                                this.dailyTasks = this.dailyTasks.map(defaultTask => {
+                                    const saved = savedTaskState[defaultTask.id];
+                                    return saved
+                                        ? { ...defaultTask, done: !!saved.done, claimable: !!saved.claimable }
+                                        : defaultTask;
+                                });
+                            }
                             this.allTasksClaimed = data.allTasksClaimed || false;
                             this.deliveryCount = data.deliveryCount || 0;
                             this.smartlinkCount = data.smartlinkCount || 0;
@@ -1792,14 +1817,32 @@
                         }
                         const result = await res.json().catch(() => null);
                         if (result?.walletOverridden && result.wallet) {
-                            // Admin vừa sửa ví (coin/đơn hàng/level/khóa TK) sau lần đồng bộ trước -> lấy lại giá trị mới nhất
-                            // (âm thầm đồng bộ lại, không hiện thông báo vì đây không phải phần thưởng)
-                            this.coins = result.wallet.coins ?? this.coins;
-                            this.orders = result.wallet.orders ?? this.orders;
-                            this.spinFree = result.wallet.spins ?? this.spinFree;
-                            this.truckLevel = result.wallet.truckLevel ?? this.truckLevel;
-                            this.walletSyncedAt = result.wallet.walletUpdatedAt || this.walletSyncedAt;
-                            if (result.wallet.isBanned) {
+                            // Admin vừa thay đổi dữ liệu (coin/đơn hàng/level/khóa TK/reset toàn bộ...) sau lần đồng bộ trước
+                            // -> lấy lại TOÀN BỘ giá trị mới nhất từ server (âm thầm đồng bộ lại, không hiện thông báo vì
+                            // đây không phải phần thưởng)
+                            const w = result.wallet;
+                            this.coins = w.coins ?? this.coins;
+                            this.orders = w.orders ?? this.orders;
+                            this.spinFree = w.spins ?? this.spinFree;
+                            this.truckLevel = w.truckLevel ?? this.truckLevel;
+                            this.currentProducts = w.currentProducts ?? this.currentProducts;
+                            this.lastProducedAt = w.lastProducedAt ?? this.lastProducedAt;
+                            this.productionInterval = w.productionInterval ?? this.productionInterval;
+                            this.adsToday = w.adsToday ?? this.adsToday;
+                            this.smartlinksToday = w.smartlinksToday ?? this.smartlinksToday;
+                            this.smartlinkCount = w.smartlinkCount ?? this.smartlinkCount;
+                            this.usedSmartlinks = w.usedSmartlinks ?? this.usedSmartlinks;
+                            this.spinAdCount = w.spinAdCount ?? this.spinAdCount;
+                            this.spinAdProgress = w.spinAdProgress ?? this.spinAdProgress;
+                            this.bonusAdsToday = w.bonusAdsToday ?? this.bonusAdsToday;
+                            this.lifetimeAdsWatched = w.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
+                            this.invitedCount = w.invitedCount ?? this.invitedCount;
+                            this.validInvites = w.validInvites ?? this.validInvites;
+                            this.deliveryCount = w.deliveryCount ?? this.deliveryCount;
+                            if (w.referralMilestones) this.referralMilestones = w.referralMilestones;
+                            if (w.lastResetDate) this.lastResetDate = w.lastResetDate;
+                            this.walletSyncedAt = w.walletUpdatedAt || this.walletSyncedAt;
+                            if (w.isBanned) {
                                 this.bannedScreen = true;
                             }
                         } else if (result?.walletUpdatedAt) {
