@@ -123,6 +123,19 @@
         .task-claim-btn::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,255,255,0.5), transparent); animation: taskShine 1.8s ease-in-out infinite; }
         @keyframes taskShine { 0% { left: -60%; } 100% { left: 140%; } }
         .tasks-header-truck { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
+
+        /* ==== Nâng cấp diện mạo TỔNG THỂ cho mọi mục (Trang chủ, Rương, BXH, Mời bạn, Rút tiền, Cài đặt...) ====
+           Chỉ dùng selector CHUNG (thẻ / class đã có sẵn khắp nơi trong toàn bộ giao diện) nên tự động áp
+           dụng cho TẤT CẢ các mục mà KHÔNG cần sửa từng đoạn HTML riêng lẻ -> không đụng tới bất kỳ class
+           icon Font Awesome nào, đảm bảo icon vẫn hiển thị đúng như cũ trên mọi thiết bị. */
+        i[class*="fa-"] { line-height: 1; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+        .glass:hover { transform: translateY(-3px); box-shadow: 0 14px 32px rgba(0,0,0,0.34); border-color: rgba(255,255,255,0.16); }
+        @media (hover: none) { .glass:hover { transform: none; box-shadow: 0 8px 24px rgba(0,0,0,0.25); } } /* Không áp dụng hiệu ứng hover cho màn hình cảm ứng, tránh kẹt trạng thái "nổi" sau khi chạm */
+        input, select, textarea { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: rgba(59,130,246,0.6); box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
+        main { scroll-behavior: smooth; }
+        nav button.text-blue-500 i { transform: scale(1.08); transition: transform 0.2s ease; }
+        img, svg { max-width: 100%; }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -708,6 +721,7 @@
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
+                _saveQueue: Promise.resolve(), // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
                 showX2Ad: false, pendingOrders: 0, coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
                 spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
@@ -1794,7 +1808,23 @@
                     if (typeof num !== 'number') return num; // Return as is if not a number
                     return new Intl.NumberFormat('vi-VN').format(num); 
                 },
-                async saveState() {
+                // FIX LỖI "LÀM ĐỦ 15 LẦN SMARTLINK / DÙNG TĂNG TỐC X2 XONG NHƯNG TẮT-BẬT LẠI APP LÀ BỊ CHO
+                // LÀM LẠI": saveState() được gọi RẤT NHIỀU nơi trong code, mỗi lần gọi là 1 request POST
+                // độc lập, "bắn xong không đợi" (không await, không xếp hàng). Khi nhiều hành động xảy ra
+                // gần nhau (vd vừa xem QC tăng tốc, vừa có auto-save mỗi 30s, vừa hoàn thành nhiệm vụ...),
+                // NHIỀU request lưu (mỗi request là 1 bản snapshot ĐẦY ĐỦ toàn bộ dữ liệu) có thể chạy CHỒNG
+                // CHÉO trên mạng, và do độ trễ mạng không đảm bảo request nào tới server TRƯỚC/SAU, nên 1
+                // request MANG DỮ LIỆU CŨ (vd trước khi bấm Tăng Tốc X2, hoặc trước khi hoàn thành SmartLink
+                // lần thứ 15) hoàn toàn có thể tới server SAU và GHI ĐÈ lên bản dữ liệu MỚI đã lưu đúng trước
+                // đó -> lần tải lại app kế tiếp thấy speedUpUsed / smartlinkCount / task "done" bị "lùi" về
+                // trạng thái cũ dù người dùng đã thực sự hoàn thành. Cách fix: mọi lệnh gọi saveState() giờ
+                // được XẾP HÀNG (queue) và LUÔN CHỜ lệnh lưu trước đó xong rồi mới gửi lệnh tiếp theo, đảm bảo
+                // các request luôn tới server ĐÚNG THỨ TỰ và luôn dùng dữ liệu MỚI NHẤT tại thời điểm gửi.
+                saveState() {
+                    this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => {});
+                    return this._saveQueue;
+                },
+                async _doSaveState() {
                     const data = {
                         // QUAN TRỌNG: các field phải nằm PHẲNG (top-level) để khớp với tên cột trong bảng
                         // Supabase "users". Trước đây các field này bị lồng trong object "user" khiến
@@ -1841,7 +1871,11 @@
                         const res = await fetch(`${API_URL}/api/user/${this.user.id}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(data)
+                            body: JSON.stringify(data),
+                            // keepalive: cho phép request được gửi đi trọn vẹn ngay cả khi user đóng miniapp
+                            // NGAY SAU khi hành động vừa xảy ra (vd bấm Tăng Tốc X2 rồi tắt app luôn), tránh
+                            // trường hợp trình duyệt/WebView hủy request giữa chừng làm mất bản lưu cuối cùng.
+                            keepalive: true
                         });
                         if (res.status === 403) {
                             const errData = await res.json().catch(() => ({}));
