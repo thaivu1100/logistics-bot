@@ -37,7 +37,7 @@
         .progress-bar { transition: width 0.5s ease; }
         .coin-float { position: absolute; font-size: 2.5rem; animation: floatAround 8s ease-in-out infinite; cursor: pointer; z-index: 100; pointer-events: auto; filter: drop-shadow(0 0 15px #fbbf24); }
         @keyframes floatAround { 0% { transform: translate(0, 0) scale(1); } 25% { transform: translate(20px, -30px) scale(1.1); } 50% { transform: translate(-10px, -50px) scale(1); } 75% { transform: translate(30px, -20px) scale(1.05); } 100% { transform: translate(0, 0) scale(1); } }
-        .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
+        .rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); animation: warehousePulse 2.4s ease-in-out infinite; }
         .rank-2 { background: linear-gradient(135deg, #94a3b8, #64748b); }
         .rank-3 { background: linear-gradient(135deg, #cd7f32, #b45309); }
         .chest-container { position: relative; width: 200px; height: 200px; margin: 0 auto; cursor: pointer; }
@@ -418,7 +418,7 @@
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.topPlayers"></h3>
                     <template x-for="(r, idx) in rankList" :key="idx">
-                        <div class="flex items-center justify-between p-2 rounded-xl border border-white/5 transition-all" :class="r.rank === 1 ? 'rank-1' : r.rank === 2 ? 'rank-2' : r.rank === 3 ? 'rank-3' : 'bg-slate-800/40'">
+                        <div class="flex items-center justify-between p-2 rounded-xl border border-white/5 transition-all stagger-item" :style="'animation-delay:' + (Math.min(idx, 15) * 45) + 'ms'" :class="r.rank === 1 ? 'rank-1' : r.rank === 2 ? 'rank-2' : r.rank === 3 ? 'rank-3' : 'bg-slate-800/40'">
                             <div class="flex items-center space-x-2">
                                 <span class="text-base font-black" :class="r.rank <= 3 ? 'text-white' : 'text-slate-500'" x-text="r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : r.rank + '️⃣'"></span>
                                 <div>
@@ -479,7 +479,7 @@
                         </div>
                         <div class="max-h-56 overflow-y-auto pr-1 space-y-2 mt-1">
                         <template x-for="(milestone, idx) in referralMilestones" :key="idx">
-                            <div class="mt-2 p-2 rounded-lg" :class="milestone.claimed ? 'bg-green-500/20' : (validInvites >= milestone.friends ? 'bg-yellow-500/20' : 'bg-slate-700/30')">
+                            <div class="mt-2 p-2 rounded-lg stagger-item" :style="'animation-delay:' + (idx * 50) + 'ms'" :class="milestone.claimed ? 'bg-green-500/20' : (validInvites >= milestone.friends ? 'bg-yellow-500/20' : 'bg-slate-700/30')">
                                 <div class="flex justify-between items-center">
                                     <span class="text-[10px]" x-text="milestone.friends + ' bạn: ' + milestone.reward"></span>
                                     <button x-show="validInvites >= milestone.friends && !milestone.claimed" @click="claimReferralReward(idx)" class="px-2 py-0.5 bg-yellow-500 text-slate-900 rounded font-black text-[8px] uppercase animate-pulse" x-text="texts.claimBtn"></button>
