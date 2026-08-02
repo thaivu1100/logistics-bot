@@ -9,7 +9,7 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
-    <script src='//libtl.com/sdk.js' data-zone='10406527' data-sdk='show_10406527'></script>
+    <!-- Đã bỏ zone quảng cáo Popunder (10406527) kém ổn định, toàn app giờ dùng chung 1 zone Rewarded Video -->
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
     <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
@@ -526,7 +526,7 @@
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 20.000'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 5'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 2'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 2'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
                     </div>
@@ -802,7 +802,7 @@
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, bonusAdsToday: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
-                withdrawRemain: 2, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
+                withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -993,7 +993,7 @@
                                 this.bannedScreen = true;
                                 return;
                             }
-                            this.withdrawRemain = data.withdrawRemain || 2;
+                            this.withdrawRemain = data.withdrawRemain ?? 1;
                             this.withdrawHistory = data.withdrawHistory || [];
                             this.lastResetDate = data.lastResetDate || '';
                             this.lastWeekReset = data.lastWeekReset || '';
@@ -1066,6 +1066,14 @@
                     this.checkTaskProgress('invite');
                     this.checkWeeklyRewards();
                     this.produceLoop();
+                    // FIX: trước đây resetDailyIfNeeded() và checkWeeklyRewards() chỉ chạy 1 lần lúc mở app,
+                    // nên nếu user để app mở xuyên qua mốc 00:00 (không tắt/mở lại), nhiệm vụ & lượt xem QC
+                    // sẽ KHÔNG tự reset về 0 cho đến khi họ tải lại trang. Kiểm tra định kỳ mỗi phút để tự
+                    // reset đúng lúc, không cần chờ reload.
+                    setInterval(() => {
+                        this.resetDailyIfNeeded();
+                        this.checkWeeklyRewards();
+                    }, 60000);
                     this.scheduleCoinBox();
                     this.startCountdown();
                     
@@ -1217,7 +1225,7 @@
                         this.adsToday = 0; 
                         this.smartlinksToday = 0; 
                         this.bonusAdsToday = 0;
-                        this.withdrawRemain = 2;
+                        this.withdrawRemain = 1;
                         this.dailyTasks.forEach(t => { if (!t.once) { t.done = false; t.claimable = false; } });
                         this.allTasksClaimed = false; 
                         this.deliveryCount = 0; 
@@ -1312,6 +1320,7 @@
                         // Reset animation state
                         this.showDeliveryAnimation = false;
                         this.isTruckMoving = false;
+                        this.isShipping = false; // FIX: trước đây thiếu dòng này -> nút Giao Hàng bị khóa vĩnh viễn sau lần giao đầu tiên, phải tải lại trang mới bấm được tiếp
                     }, 2500); // Animation duration
                 },
                 completeDelivery() {
@@ -1400,8 +1409,11 @@
                 },
                 openCoinBoxWithAd() {
                     this.showCoinBoxModal = false;
-                    if (typeof show_10406527 === 'function') {
-                        show_10406527('pop').then(() => {
+                    // FIX: trước đây dùng show_10406527('pop') - zone Popunder có tỉ lệ lấp đầy quảng cáo
+                    // thấp/không ổn định, khiến 1 số user hay bị báo "QC Đã Hết Hoặc Lỗi". Đổi sang dùng
+                    // chung zone Rewarded Video (show_11457064) đã chạy ổn định ở mọi nơi khác trong app.
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(() => {
                             this.completeOpenCoinBox();
                             this.adsToday++;
                             this.checkTaskProgress('watchAd');
