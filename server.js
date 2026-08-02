@@ -23,6 +23,16 @@ const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onren
 const bot = new Telegraf(BOT_TOKEN);
 const isAdmin = (ctx) => ctx.from.id === ADMIN_ID;
 
+// FIX LỖI "BOT KHÔNG PHẢN HỒI GÌ CẢ": trước đây bot KHÔNG có bot.catch() toàn cục, nên bất kỳ lỗi nào
+// xảy ra bên trong /start hoặc các lệnh admin (vd: Supabase timeout, Telegram API rate-limit khi kiểm
+// tra thành viên nhóm, dữ liệu JSON hỏng...) đều khiến Telegraf âm thầm nuốt lỗi, chỉ log ra console mà
+// KHÔNG trả lời gì cho người dùng -> nhìn như bot bị "im lặng"/"treo". bot.catch() đảm bảo mọi lỗi đều
+// được ghi log VÀ luôn có phản hồi báo lỗi cho người dùng thay vì im lặng.
+bot.catch((err, ctx) => {
+    console.error(`⚠️ Lỗi khi xử lý update (${ctx.updateType}) từ user ${ctx.from?.id}:`, err);
+    ctx.reply('❌ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây. Nếu lỗi tiếp diễn hãy liên hệ Admin.').catch(() => {});
+});
+
 // Hàm gửi tin nhắn Telegram an toàn
 async function safeSendMessage(chatId, text, options = {}) {
     try {
@@ -57,7 +67,25 @@ async function checkDuplicateIP(userId, ip) {
     return data || [];
 }
 
-// Đánh dấu thời điểm "ví" (coins/orders/spins/truckLevel/isBanned) của user vừa bị ADMIN sửa trực tiếp.
+// Che 1 phần tên user để đăng lên banner công khai mà không lộ danh tính đầy đủ (vd: "Nguyễn Văn A" -> "Ng***")
+function maskName(name) {
+    if (!name || typeof name !== 'string') return 'Người dùng';
+    const clean = name.trim();
+    if (clean.length <= 2) return clean + '***';
+    return clean.slice(0, 2) + '***';
+}
+
+// Ghi lại 1 sự kiện THẬT (rút tiền được duyệt, trúng jackpot, mời bạn thành công...) để hiển thị lên
+// banner chạy chữ toàn server, thay vì dữ liệu bịa/hardcode như trước. Không chặn luồng chính nếu lỗi.
+async function logActivity(message) {
+    try {
+        await supabase.from('activity_log').insert({ message });
+    } catch (e) {
+        console.error('Lỗi ghi activity_log:', e.message);
+    }
+}
+
+
 // Frontend sẽ so sánh mốc này với mốc nó biết để tránh việc tự lưu game đè mất thay đổi của admin.
 async function touchWallet(userId, extraFields = {}) {
     const { error } = await supabase.from('users').update({
@@ -114,6 +142,8 @@ async function tryFinalizeReferral(userId) {
         `✅ *Xác nhận hợp lệ!* ${userRecord.name} đã tham gia đủ nhóm và xem đủ QC.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
         { parse_mode: 'Markdown' }
     );
+    const { data: referrerInfo } = await supabase.from('users').select('name').eq('id', userRecord.referrerId).single();
+    logActivity(`👥 ${maskName(referrerInfo?.name)} vừa mời bạn thành công, nhận ${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng`);
 
     return { ok: true, validInvites: newValid };
 }
@@ -624,6 +654,9 @@ bot.command('duyet', async (ctx) => {
     
     await safeSendMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!\n💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ\nTiền sẽ sớm được chuyển vào tài khoản.`, { parse_mode: 'Markdown' });
     ctx.reply(`✅ Đã duyệt ${withdrawals.length} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
+
+    const { data: approvedUser } = await supabase.from('users').select('name').eq('id', targetId).single();
+    logActivity(`🚛 ${maskName(approvedUser?.name)} vừa rút thành công ${totalApprovedAmount.toLocaleString()} VNĐ`);
 });
 
 // /huy + ID + lý do
@@ -1053,6 +1086,8 @@ app.post('/api/redeem-code', async (req, res) => {
     if (!walletOk) {
         return res.status(500).json({ error: "Lỗi khi cộng thưởng cho người dùng." });
     }
+    const { data: redeemUser } = await supabase.from('users').select('name').eq('id', userId).single();
+    logActivity(`🎁 ${maskName(redeemUser?.name)} vừa nhập code "${code}" nhận thưởng`);
 
     res.json({ 
         success: true, 
@@ -1061,6 +1096,31 @@ app.post('/api/redeem-code', async (req, res) => {
         orders: gc.orders || 0,
         spins: gc.spins || 0
     });
+});
+
+// User vừa trúng Jackpot 100.000 Đơn Hàng khi mở rương -> ghi vào banner thật toàn server
+app.post('/api/log-jackpot/:id', async (req, res) => {
+    try {
+        const { data: u } = await supabase.from('users').select('name, isBanned').eq('id', req.params.id).single();
+        if (!u || u.isBanned) return res.json({ ok: false });
+        logActivity(`💎 ${maskName(u.name)} vừa trúng JACKPOT 100.000 Đơn Hàng!`);
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
+// Lấy danh sách hoạt động THẬT gần đây để hiển thị lên banner chạy chữ toàn server (thay vì dữ liệu ảo)
+app.get('/api/activity-feed', async (req, res) => {
+    try {
+        const { data, error } = await supabase.from('activity_log')
+            .select('message, createdAt').order('createdAt', { ascending: false }).limit(20);
+        if (error) throw error;
+        res.json({ messages: (data || []).map(d => d.message) });
+    } catch (e) {
+        console.error('Lỗi lấy activity-feed:', e.message);
+        res.json({ messages: [] });
+    }
 });
 
 // Admin: cập nhật trạng thái rút tiền (miniapp sẽ tự đồng bộ trạng thái mới qua polling /api/withdrawals/:userId)
