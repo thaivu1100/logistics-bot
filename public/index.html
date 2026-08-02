@@ -106,6 +106,23 @@
         .truck-idle { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
 
         .stagger-item { opacity: 0; animation: fadeInUp 0.4s ease-out forwards; }
+
+        /* ===== Khu vực Nhiệm vụ - chủ đề "con đường giao hàng" ===== */
+        .task-card { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; overflow: hidden; }
+        .task-card::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(59,130,246,0.08), transparent 40%); pointer-events: none; }
+        .task-card:active { transform: scale(0.98); }
+        .task-card.task-claimable { border-color: rgba(251, 191, 36, 0.45); box-shadow: 0 0 18px rgba(251, 191, 36, 0.18); }
+        .task-card.task-done { opacity: 0.55; }
+        .task-icon-wrap { width: 36px; height: 36px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: linear-gradient(145deg, rgba(59,130,246,0.28), rgba(37,99,235,0.06)); border: 1px solid rgba(59,130,246,0.28); box-shadow: inset 0 1px 0 rgba(255,255,255,0.08); }
+        .task-icon-wrap.icon-done { background: linear-gradient(145deg, rgba(34,197,94,0.28), rgba(21,128,61,0.06)); border-color: rgba(34,197,94,0.35); }
+        .task-once-badge { font-size: 6px; padding: 1px 5px; border-radius: 999px; background: rgba(244, 63, 94, 0.18); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); font-weight: 900; letter-spacing: 0.03em; }
+        .task-route { position: relative; height: 6px; width: 100%; border-radius: 999px; background: repeating-linear-gradient(90deg, rgba(255,255,255,0.16) 0 5px, transparent 5px 11px); overflow: visible; }
+        .task-route-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #fbbf24, #f97316); transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); box-shadow: 0 0 8px rgba(251,146,60,0.5); }
+        .task-route-truck { position: absolute; top: 50%; transform: translate(-50%, -50%); font-size: 11px; transition: left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); filter: drop-shadow(0 0 3px rgba(251,191,36,0.9)); }
+        .task-claim-btn { position: relative; overflow: hidden; }
+        .task-claim-btn::after { content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,255,255,0.5), transparent); animation: taskShine 1.8s ease-in-out infinite; }
+        @keyframes taskShine { 0% { left: -60%; } 100% { left: 140%; } }
+        .tasks-header-truck { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -282,28 +299,42 @@
             <div x-show="tab === 'tasks'" x-transition class="space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.tasksTitle"></h2>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.dailyTasks"></h3>
+                    <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
+                        <span class="tasks-header-truck">🚚</span> <span x-text="texts.dailyTasks"></span>
+                    </h3>
                     <template x-for="(task, idx) in dailyTasks" :key="idx">
-                        <div class="flex items-center justify-between p-2 bg-slate-800/40 rounded-xl border border-white/5 stagger-item" :style="'animation-delay:' + (idx * 60) + 'ms'">
-                            <div class="flex items-center space-x-2">
-                                <span class="text-lg" x-text="task.icon"></span>
-                                <div class="text-left">
-                                    <p class="text-xs font-black" x-text="task.name"></p>
-                                    <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap">
+                        <div class="task-card flex items-center justify-between p-2.5 bg-slate-800/40 rounded-2xl border border-white/5 stagger-item"
+                             :class="{ 'task-claimable': task.claimable && !task.done, 'task-done': task.done }"
+                             :style="'animation-delay:' + (idx * 60) + 'ms'">
+                            <div class="flex items-center space-x-2.5 flex-1 min-w-0">
+                                <div class="task-icon-wrap" :class="task.done ? 'icon-done' : ''">
+                                    <span class="text-base" x-text="task.done ? '✅' : task.icon"></span>
+                                </div>
+                                <div class="text-left flex-1 min-w-0">
+                                    <p class="text-xs font-black flex items-center gap-1 flex-wrap">
+                                        <span x-text="task.name"></span>
+                                        <span x-show="task.once" class="task-once-badge" x-text="texts.onceOnly"></span>
+                                    </p>
+                                    <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
                                         <span x-text="'+' + task.reward + ' 💰'"></span>
                                         <span x-show="task.rewardOrders" x-text="'+' + task.rewardOrders + ' 📦'"></span>
                                         <span x-show="task.rewardSpins" x-text="'+' + task.rewardSpins + ' 🎁'"></span>
                                     </p>
-                                    <div x-show="task.id === 'smartlink15' && !task.done" class="text-[7px] text-blue-300">
-                                        <span x-text="'Tiến độ: ' + smartlinkCount + '/15'"></span>
+                                    <!-- Thanh tiến độ dạng "con đường giao hàng" -->
+                                    <div x-show="!task.done && taskProgressText(task)" class="task-route mt-2">
+                                        <div class="task-route-fill" :style="'width:' + taskProgressPercent(task) + '%'"></div>
+                                        <span class="task-route-truck" :style="'left:' + taskProgressPercent(task) + '%'">🚚</span>
+                                    </div>
+                                    <div x-show="!task.done && taskProgressText(task)" class="text-[7px] text-blue-300 mt-1">
+                                        <span x-text="taskProgressText(task)"></span>
                                     </div>
                                 </div>
                             </div>
-                            <div>
-                                <span x-show="task.done" class="text-green-400 text-xs font-black" x-text="texts.claimed"></span>
-                                <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="bg-green-600 px-2 py-1 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text animate-pulse" x-text="texts.claim"></button>
+                            <div class="flex-shrink-0 pl-2">
+                                <span x-show="task.done" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
+                                <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text animate-pulse" x-text="texts.claim"></button>
                                 <span x-show="!task.done && !task.claimable && task.id !== 'smartlink15' && task.id !== 'zalogroup'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
-                                <button x-show="!task.done && !task.claimable && (task.id === 'smartlink15' || task.id === 'zalogroup')" @click="completeTask(idx)" class="bg-blue-600 px-2 py-1 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
+                                <button x-show="!task.done && !task.claimable && (task.id === 'smartlink15' || task.id === 'zalogroup')" @click="completeTask(idx)" class="bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
                             </div>
                         </div>
                     </template>
@@ -579,7 +610,7 @@
                 chestTitle: 'MỞ RƯƠNG MAY MẮN', chestDesc: 'Mở rương để nhận phần thưởng ngẫu nhiên!',
                 history: 'Lịch sử mở rương', noHistory: 'Chưa có lượt nào',
                 tasksTitle: '📋 Nhiệm vụ', dailyTasks: 'Nhiệm vụ hằng ngày', claimed: '✅ Đã nhận',
-                claim: 'Nhận', monitoring: 'Đang theo dõi...', doNow: 'Làm ngay', completeAll: 'Hoàn thành tất cả',
+                claim: 'Nhận', monitoring: 'Đang theo dõi...', doNow: 'Làm ngay', completeAll: 'Hoàn thành tất cả', onceOnly: 'MỘT LẦN',
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
@@ -628,7 +659,7 @@
                 chestTitle: 'LUCKY CHEST', chestDesc: 'Open chest to get random rewards!',
                 history: 'Chest history', noHistory: 'No history yet',
                 tasksTitle: '📋 Tasks', dailyTasks: 'Daily tasks', claimed: '✅ Claimed',
-                claim: 'Claim', monitoring: 'Monitoring...', doNow: 'Do now', completeAll: 'Complete all',
+                claim: 'Claim', monitoring: 'Monitoring...', doNow: 'Do now', completeAll: 'Complete all', onceOnly: 'ONE-TIME',
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
@@ -694,7 +725,7 @@
                     { id: 'deliver10', name: '🚚 Giao hàng 10 lần', icon: '🚚', reward: 400, rewardOrders: 40, rewardSpins: 0, done: false, claimable: false },
                     { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false },
+                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, once: true },
                     { id: 'smartlink15', name: '🔗 SmartLink 15 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
                 ],
@@ -884,6 +915,7 @@
                     
                     if (!this.rankList || this.rankList.length === 0) this.initRankList();
                     this.resetDailyIfNeeded();
+                    this.checkTaskProgress('invite');
                     this.checkWeeklyRewards();
                     this.produceLoop();
                     this.scheduleCoinBox();
@@ -1391,17 +1423,63 @@
                         if (adTask && !adTask.done && this.adsToday >= 3) {
                             adTask.claimable = true;
                         }
+                    } else if (action === 'invite') {
+                        let inviteTask = this.dailyTasks.find(t => t.id === 'invite1');
+                        if (inviteTask && !inviteTask.done && this.validInvites >= 1) {
+                            inviteTask.claimable = true;
+                        }
                     }
                     this.dailyTasks = [...this.dailyTasks]; // Force Alpine to re-render array
                     this.saveState();
                 },
+                // Trả về % tiến độ (0-100) để vẽ thanh "con đường giao hàng" + vị trí icon xe tải cho từng nhiệm vụ.
+                // Chỉ phục vụ hiển thị UI, không ảnh hưởng logic tính điều kiện/thưởng thực tế (vẫn do
+                // checkTaskProgress + claimTaskReward/completeTask đảm nhiệm như cũ).
+                taskProgressPercent(task) {
+                    if (task.done || task.claimable) return 100;
+                    let cur = 0, max = 1;
+                    switch (task.id) {
+                        case 'deliver5': cur = this.deliveryCount || 0; max = 5; break;
+                        case 'deliver10': cur = this.deliveryCount || 0; max = 10; break;
+                        case 'watch3ads': cur = this.adsToday || 0; max = 3; break;
+                        case 'smartlink15': cur = this.smartlinkCount || 0; max = 15; break;
+                        case 'invite1': cur = this.validInvites || 0; max = 1; break;
+                        default: return 0;
+                    }
+                    return Math.max(0, Math.min(100, Math.round((cur / max) * 100)));
+                },
+                // Trả về text dạng "3/5" cho các nhiệm vụ có mốc số lượng rõ ràng, dùng chung với thanh tiến độ ở trên.
+                taskProgressText(task) {
+                    switch (task.id) {
+                        case 'deliver5': return Math.min(this.deliveryCount || 0, 5) + '/5';
+                        case 'deliver10': return Math.min(this.deliveryCount || 0, 10) + '/10';
+                        case 'watch3ads': return Math.min(this.adsToday || 0, 3) + '/3';
+                        case 'smartlink15': return Math.min(this.smartlinkCount || 0, 15) + '/15';
+                        case 'invite1': return Math.min(this.validInvites || 0, 1) + '/1';
+                        default: return '';
+                    }
+                },
                 // Gọi mỗi khi user xem xong 1 QC (bất kỳ loại nào). Dùng để: (1) lưu tổng số QC đã xem
                 // trọn đời (không reset theo ngày) làm điều kiện "mời bạn thành công", và (2) báo server
                 // kiểm tra lại xem lượt mời giới thiệu đã đủ điều kiện (đủ nhóm + đủ 3 QC) hay chưa.
+                // LƯU Ý: KHÔNG giới hạn theo lifetimeAdsWatched <= 3 nữa. Lý do: nếu người được mời xem
+                // đủ 3 QC TRƯỚC KHI tham gia đủ nhóm Telegram, điều kiện "<=3" sẽ không còn đúng ở những
+                // lần xem QC sau đó -> dù họ vào đủ nhóm muộn hơn thì hệ thống KHÔNG BAO GIỜ gọi lại để xác
+                // nhận nữa (trừ khi trùng lúc bấm /start hoặc nút Xác Nhận trong bot). Giờ chỉ cần còn
+                // referrerId và CHƯA được tính hợp lệ (referrerCounted=false) thì mỗi lần xem QC đều gọi lại,
+                // server (tryFinalizeReferral) sẽ tự kiểm tra lại đầy đủ điều kiện từ DB. Khi server xác nhận
+                // thành công thì đánh dấu referrerCounted=true ngay để dừng gọi API này về sau.
                 onAdWatched() {
                     this.lifetimeAdsWatched = (this.lifetimeAdsWatched || 0) + 1;
-                    if (this.lifetimeAdsWatched <= 3 && this.user?.referrerId) {
-                        fetch(`${API_URL}/api/check-referral/${this.user.id}`, { method: 'POST' }).catch(() => {});
+                    if (this.user?.referrerId && !this.user?.referrerCounted) {
+                        fetch(`${API_URL}/api/check-referral/${this.user.id}`, { method: 'POST' })
+                            .then(r => r.json())
+                            .then(result => {
+                                if (result && result.ok) {
+                                    this.user.referrerCounted = true;
+                                }
+                            })
+                            .catch(() => {});
                     }
                 },
                 // Nhiệm vụ "Xem QC" lặp lại tối đa 30 lần/ngày, mỗi lần +100 Coin và +50 Đơn Hàng.
