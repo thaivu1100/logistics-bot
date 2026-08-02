@@ -15,8 +15,15 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
         [x-cloak] { display: none !important; }
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; }
+        html { -webkit-text-size-adjust: 100%; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; padding-bottom: env(safe-area-inset-bottom, 0px); padding-top: env(safe-area-inset-top, 0px); }
+        /* Đảm bảo icon (FontAwesome + emoji) luôn hiển thị đúng kích thước, không vỡ layout hay tràn ra ngoài trên bất kỳ thiết bị nào */
+        i[class*="fa-"], .icon-safe { display: inline-block; line-height: 1; flex-shrink: 0; }
+        img, svg { max-width: 100%; display: block; }
+        * { -webkit-tap-highlight-color: transparent; }
         .glass { background: linear-gradient(160deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.75) 100%); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.25); transition: box-shadow 0.2s ease, transform 0.2s ease; }
+        .task-card, .glass { transition: transform 0.25s cubic-bezier(.2,.8,.2,1), box-shadow 0.25s ease, border-color 0.25s ease; }
+        .task-card:active { transform: scale(0.985); }
         .gold-glow { box-shadow: 0 0 34px rgba(251, 191, 36, 0.45), inset 0 1px 0 rgba(255,255,255,0.25); border: 1px solid rgba(251, 191, 36, 0.35); }
         .neon-blue { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 4px 16px rgba(37, 99, 235, 0.35); }
         .text-neon { text-shadow: 0 0 10px rgba(251, 191, 36, 0.8); color: #fbbf24; }
@@ -39,6 +46,12 @@
         @keyframes shake { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-10deg); } 75% { transform: rotate(10deg); } }
         .chest-open { animation: chestOpen 0.5s ease-out; }
         @keyframes chestOpen { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+        .maintenance-truck-icon { animation: maintenanceBob 1.6s ease-in-out infinite; }
+        @keyframes maintenanceBob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-10px) rotate(3deg); } }
+        .maintenance-dots span { display: inline-block; animation: maintenanceHop 1.2s ease-in-out infinite; }
+        .maintenance-dots span:nth-child(2) { animation-delay: 0.15s; }
+        .maintenance-dots span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes maintenanceHop { 0%, 100% { transform: translateY(0); opacity: 0.5; } 50% { transform: translateY(-8px); opacity: 1; } }
         
         /* Animation giao hàng */
         .delivery-animation { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.95); z-index: 5000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -148,6 +161,17 @@
         <h2 class="text-lg font-black text-red-400 uppercase mb-2" x-text="texts.bannedTitle"></h2>
         <p class="text-sm text-slate-300" x-text="texts.bannedDesc"></p>
         <a href="https://t.me/noameazonus" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
+    </div>
+
+    <!-- MÀN HÌNH BẢO TRÌ (khi Admin dùng /khoabot) - ưu tiên cao nhất, che toàn bộ Mini App -->
+    <div x-show="maintenanceLocked" x-cloak class="fixed inset-0 z-[10000] bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
+        <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #f59e0b, transparent 60%);"></div>
+        <div class="relative text-7xl mb-5 maintenance-truck-icon">🚧</div>
+        <h2 class="relative text-xl font-black text-amber-400 uppercase mb-2 tracking-wide">Bot Đang Bị Khoá Để Bảo Trì</h2>
+        <p class="relative text-sm text-slate-300 max-w-xs">Vui Lòng Thử Lại Sau!! Hệ thống đang được nâng cấp, mọi dữ liệu của bạn vẫn được giữ nguyên an toàn.</p>
+        <div class="relative mt-6 flex gap-2 text-2xl maintenance-dots">
+            <span>🚚</span><span>📦</span><span>🏠</span>
+        </div>
     </div>
 
     <!-- MODAL HỎI X2 ĐƠN HÀNG -->
@@ -728,6 +752,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, bonusAdsToday: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 2, withdrawHistory: [], language: 'vi', giftCode: '', bannedScreen: false,
+                maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
                 bannerText: '📦 Đang tải hoạt động mới nhất...',
@@ -744,6 +769,7 @@
                     { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
+                chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, showX2Prompt: false, pendingX2Amount: 0, usedSmartlinks: [],
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
@@ -839,6 +865,13 @@
                     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
+                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
+                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
+                    // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
+                    await this.checkMaintenanceLock();
+                    setInterval(() => this.checkMaintenanceLock(), 15000);
+                    if (this.maintenanceLocked) return;
+
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
                     const savedDeviceId = localStorage.getItem('shipper_uid') || null;
@@ -890,7 +923,13 @@
                             this.productionInterval = data.productionInterval || 30 * 60 * 1000;
                             this.productionAmount = data.productionAmount || 100;
                             this.speedUpUsed = data.speedUpUsed || false; // FIX: giữ trạng thái đã dùng Tăng Tốc x2 qua các lần load lại app
-                            this.spinFree = data.spins || 1; // 'spins' in DB is 'spinFree' in frontend
+                            // FIX LỖI "TẮT BOT/MINI APP BẬT LẠI LÀ CÓ THÊM 1 LƯỢT MỞ RƯƠNG FREE": trước đây dùng
+                            // "data.spins || 1" - toán tử || coi 0 là giá trị "rỗng" nên khi user ĐÃ DÙNG HẾT
+                            // lượt free trong ngày (spins = 0 trong DB) thì mỗi lần tải lại Mini App (kể cả khi
+                            // bot/app chỉ đơn giản bị tắt-bật lại) biểu thức lại trả về 1 thay vì 0, khiến user
+                            // luôn có sẵn 1 lượt mở rương free dù đã dùng hết. Dùng "??" để CHỈ fallback về 1 khi
+                            // giá trị thực sự là null/undefined (user hoàn toàn mới), còn 0 vẫn được giữ nguyên là 0.
+                            this.spinFree = data.spins ?? 1; // 'spins' in DB is 'spinFree' in frontend
                             this.spinAdCount = data.spinAdCount || 0;
                             this.spinAdProgress = data.spinAdProgress || 0;
                             this.spinHistory = data.spinHistory || [];
@@ -923,6 +962,8 @@
                             }
                             this.allTasksClaimed = data.allTasksClaimed || false;
                             this.deliveryCount = data.deliveryCount || 0;
+                            this.chestOpensTotal = data.chestOpensTotal || 0;
+                            this.chestOpensToday = data.chestOpensToday || 0;
                             this.smartlinkCount = data.smartlinkCount || 0;
                             this.lastSmartlinkTime = data.lastSmartlinkTime || 0;
                             this.usedSmartlinks = data.usedSmartlinks || [];
@@ -1026,6 +1067,18 @@
                     setInterval(() => this.saveState(), 30000);
                 },
                 
+                // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
+                // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
+                // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
+                async checkMaintenanceLock() {
+                    try {
+                        const res = await fetch(`${API_URL}/api/lock-status`);
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        this.maintenanceLocked = !!data.locked;
+                    } catch (e) { /* Không đổi trạng thái nếu lỗi mạng */ }
+                },
+
                 // Lấy hoạt động THẬT gần đây (rút tiền được duyệt, jackpot, mời bạn thành công, nhập code...)
                 // để chạy lên banner toàn server, thay cho dữ liệu ảo hardcode trước đây.
                 async fetchActivityFeed() {
@@ -1141,6 +1194,7 @@
                         this.dailyTasks.forEach(t => { if (!t.once) { t.done = false; t.claimable = false; } });
                         this.allTasksClaimed = false; 
                         this.deliveryCount = 0; 
+                        this.chestOpensToday = 0;
                         this.smartlinkCount = 0;
                         this.lastSmartlinkTime = 0; 
                         this.usedSmartlinks = [];
@@ -1371,6 +1425,9 @@
                     }
                     this.isShaking = true;
                     this.spinFree--;
+                    // Đếm lượt mở rương để Admin xem được qua lệnh /checkID (tổng số lượt + số lượt hôm nay)
+                    this.chestOpensTotal = (this.chestOpensTotal || 0) + 1;
+                    this.chestOpensToday = (this.chestOpensToday || 0) + 1;
                     setTimeout(() => {
                         this.isShaking = false;
                         this.isOpened = true;
@@ -1599,18 +1656,33 @@
                 // cùng gọi (vd cả focus lẫn bộ đếm dự phòng cùng lúc) thì chỉ tính 1 lần duy nhất.
                 handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink15');
-                    if (!task || task.done || this.smartlinkStartTime <= 0) return;
+                    if (!task || this.smartlinkStartTime <= 0) return;
+                    // FIX LỖI "ĐÃ ĐỦ 15 LẦN SMARTLINK VẪN CHO LÀM TIẾP VÀ NHẬN THÊM 500 COIN": chốt chặn CỨNG
+                    // ngay tại đây - nếu vì bất kỳ lý do gì (dữ liệu cũ chưa đồng bộ, task.done bị lệch...) mà
+                    // smartlinkCount đã >= 15 nhưng task.done vẫn chưa được đánh dấu true, dừng lại NGAY LẬP TỨC,
+                    // ép cờ done/claimable về đúng trạng thái đã hoàn thành và KHÔNG cộng thêm bất kỳ phần
+                    // thưởng nào nữa, thay vì chỉ dựa duy nhất vào việc kiểm tra "task.done" như code cũ.
+                    if ((this.smartlinkCount || 0) >= 15) {
+                        task.done = true;
+                        task.claimable = false;
+                        this.smartlinkStartTime = 0;
+                        this.dailyTasks = [...this.dailyTasks];
+                        this.saveState();
+                        return;
+                    }
+                    if (task.done) { this.smartlinkStartTime = 0; return; }
                     const timeSpent = Date.now() - this.smartlinkStartTime;
                     this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
                     if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
-                        this.smartlinkCount = (this.smartlinkCount || 0) + 1;
+                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 15); // Không bao giờ vượt quá 15
                         this.smartlinksToday = (this.smartlinksToday || 0) + 1;
                         this.saveState();
                         if (this.smartlinkCount >= 15) {
                             task.done = true;
-                            task.claimable = true;
+                            task.claimable = false; // Thưởng được cộng NGAY tại đây, không cần "claim" thêm lần nữa (tránh 1 nguồn thưởng thứ 2)
                             this.coins += 500;
                             this.spinFree += 2;
+                            this.dailyTasks = [...this.dailyTasks];
                             this.saveState();
                             this.showNotification('✅ Hoàn thành 15 SmartLink! Nhận 500 💰 + 2 🎡');
                         } else {
@@ -1624,6 +1696,18 @@
                     const task = this.dailyTasks[idx];
                     if (!task || task.done) return;
                     if (task.id === 'smartlink15') {
+                        // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 15 lần (phòng trường hợp
+                        // task.done chưa kịp cập nhật) hoặc đang có 1 vòng SmartLink khác chưa xử lý xong (chống
+                        // bấm nhiều lần liên tiếp mở nhiều tab cùng lúc rồi cộng dồn thưởng sai).
+                        if ((this.smartlinkCount || 0) >= 15) {
+                            task.done = true; task.claimable = false;
+                            this.dailyTasks = [...this.dailyTasks]; this.saveState();
+                            return;
+                        }
+                        if (this.smartlinkStartTime > 0) {
+                            this.showNotification('⏳ Vui lòng hoàn tất lượt SmartLink hiện tại trước khi mở thêm!');
+                            return;
+                        }
                         const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
                         const randomLink = availableLinks.length > 0 ? availableLinks[Math.floor(Math.random() * availableLinks.length)] : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)];
                         // FIX LỖI SMARTLINK LẶP LẠI: trước đây link được chọn ra nhưng KHÔNG BAO GIỜ được
@@ -1825,6 +1909,7 @@
                     return this._saveQueue;
                 },
                 async _doSaveState() {
+                    if (this.maintenanceLocked) return; // Bot đang bảo trì -> không gửi request, tránh lỗi 503 dồn dập
                     const data = {
                         // QUAN TRỌNG: các field phải nằm PHẲNG (top-level) để khớp với tên cột trong bảng
                         // Supabase "users". Trước đây các field này bị lồng trong object "user" khiến
@@ -1861,6 +1946,8 @@
                         dailyTasks: this.dailyTasks,
                         allTasksClaimed: this.allTasksClaimed,
                         deliveryCount: this.deliveryCount,
+                        chestOpensTotal: this.chestOpensTotal,
+                        chestOpensToday: this.chestOpensToday,
                         smartlinkCount: this.smartlinkCount,
                         lastSmartlinkTime: this.lastSmartlinkTime,
                         usedSmartlinks: this.usedSmartlinks,
@@ -1908,6 +1995,8 @@
                             this.invitedCount = w.invitedCount ?? this.invitedCount;
                             this.validInvites = w.validInvites ?? this.validInvites;
                             this.deliveryCount = w.deliveryCount ?? this.deliveryCount;
+                            this.chestOpensTotal = w.chestOpensTotal ?? this.chestOpensTotal;
+                            this.chestOpensToday = w.chestOpensToday ?? this.chestOpensToday;
                             if (w.referralMilestones) this.referralMilestones = w.referralMilestones;
                             if (w.lastResetDate) this.lastResetDate = w.lastResetDate;
                             this.walletSyncedAt = w.walletUpdatedAt || this.walletSyncedAt;
