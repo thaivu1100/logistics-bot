@@ -23,6 +23,59 @@ const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onren
 const bot = new Telegraf(BOT_TOKEN);
 const isAdmin = (ctx) => ctx.from.id === ADMIN_ID;
 
+// ==================== KHOÁ BOT / MINI APP (BẢO TRÌ) ====================
+// Trạng thái khoá được lưu ở bảng "app_settings" (key/value) để KHÔNG bị mất khi Render restart/deploy lại
+// server (khác với biến in-memory thông thường sẽ tự reset về false mỗi lần khởi động lại).
+// CẦN TẠO BẢNG NÀY 1 LẦN TRÊN SUPABASE (SQL Editor):
+//   create table if not exists app_settings (key text primary key, value jsonb);
+let BOT_LOCKED = false;
+const MAINTENANCE_MESSAGE = "🔒 Bot Đang Bị Khoá Để Bảo Trì. Vui Lòng Thử Lại Sau!!";
+
+async function loadBotLockState() {
+    try {
+        const { data } = await supabase.from('app_settings').select('value').eq('key', 'bot_locked').single();
+        BOT_LOCKED = data?.value === true;
+    } catch (e) {
+        BOT_LOCKED = false; // Bảng chưa tồn tại hoặc chưa có dòng nào -> mặc định KHÔNG khoá
+    }
+}
+loadBotLockState();
+
+async function setBotLocked(locked) {
+    BOT_LOCKED = locked;
+    try {
+        await supabase.from('app_settings').upsert({ key: 'bot_locked', value: locked });
+    } catch (e) {
+        console.error('Lỗi lưu trạng thái khoá bot (đã áp dụng tạm thời trong bộ nhớ):', e.message);
+    }
+}
+
+// Tăng 1 field số nguyên trên bảng "users" 1 cách AN TOÀN (atomic) bằng compare-and-swap có thử lại.
+// FIX LỖI "SỐ BẠN ĐÃ MỜI THẤP HƠN SỐ BẠN HỢP LỆ": trước đây invitedCount được tăng bằng cách ĐỌC rồi GHI
+// (đọc invitedCount hiện tại, +1, rồi update) — nếu 2 người được mời cùng bấm /start gần như đồng thời cho
+// CÙNG 1 người mời, cả 2 lệnh gọi có thể cùng đọc được giá trị invitedCount CŨ trước khi lệnh kia kịp ghi
+// xong, khiến 1 trong 2 lượt mời bị "mất" (invitedCount chỉ tăng 1 thay vì 2) trong khi validInvites (số
+// bạn hợp lệ) vẫn được tính đúng cho cả 2 người ở bước xác nhận sau này -> dẫn đến invitedCount < validInvites
+// (vô lý vì phải mời được thì mới có thể trở thành hợp lệ). Cách fix: dùng UPDATE có điều kiện
+// WHERE field = giá_trị_vừa_đọc, nếu 0 dòng bị ảnh hưởng (do có lượt ghi khác xen vào) thì đọc lại và thử
+// lại, đảm bảo không lượt tăng nào bị mất dù có nhiều request chạy đồng thời.
+async function atomicIncrement(userId, field, amount = 1, maxRetries = 6) {
+    for (let i = 0; i < maxRetries; i++) {
+        const { data: cur, error: readErr } = await supabase.from('users').select(field).eq('id', userId).single();
+        if (readErr || !cur) return null;
+        const oldVal = cur[field] || 0;
+        const newVal = oldVal + amount;
+        const { data: updated, error: updErr } = await supabase.from('users')
+            .update({ [field]: newVal })
+            .eq('id', userId).eq(field, oldVal)
+            .select(field);
+        if (!updErr && updated && updated.length > 0) return newVal;
+        // Có request khác vừa ghi đè giữa lúc đọc và ghi -> thử lại với giá trị mới nhất
+    }
+    console.error(`atomicIncrement: hết số lần thử cho ${userId}.${field}`);
+    return null;
+}
+
 // FIX LỖI "BOT KHÔNG PHẢN HỒI GÌ CẢ": trước đây bot KHÔNG có bot.catch() toàn cục, nên bất kỳ lỗi nào
 // xảy ra bên trong /start hoặc các lệnh admin (vd: Supabase timeout, Telegram API rate-limit khi kiểm
 // tra thành viên nhóm, dữ liệu JSON hỏng...) đều khiến Telegraf âm thầm nuốt lỗi, chỉ log ra console mà
@@ -140,7 +193,7 @@ async function tryFinalizeReferral(userId) {
     }
 
     const { data: refUser, error: refError } = await supabase.from('users')
-        .select('validInvites, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
+        .select('validInvites, invitedCount, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
     if (refError || !refUser) {
         // Đã claim (referrerCounted=true) nhưng không cộng thưởng được -> hoàn tác claim để không mất
         // vĩnh viễn lượt hợp lệ này, cho phép hệ thống tự thử lại ở lần gọi tiếp theo.
@@ -148,12 +201,24 @@ async function tryFinalizeReferral(userId) {
         return { ok: false, reason: 'referrer_not_found' };
     }
 
-    const newValid = (refUser.validInvites || 0) + 1;
     const INSTANT_REF_COINS = 1000;
     const INSTANT_REF_ORDERS = 2000;
 
+    // FIX LỖI "SỐ BẠN HỢP LỆ CAO HƠN SỐ BẠN ĐÃ MỜI": tăng validInvites bằng atomicIncrement (thay vì
+    // đọc-rồi-ghi) để không bị mất lượt tăng khi nhiều referral của CÙNG 1 người mời hoàn tất gần như
+    // đồng thời. Đồng thời chốt chặn an toàn: validInvites không bao giờ được vượt quá invitedCount
+    // (về logic không thể có nhiều bạn "hợp lệ" hơn số bạn thực tế đã mời).
+    const newValid = await atomicIncrement(userRecord.referrerId, 'validInvites', 1);
+    if (newValid === null) {
+        await supabase.from('users').update({ referrerCounted: false }).eq('id', userId);
+        return { ok: false, reason: 'update_failed' };
+    }
+    if (newValid > (refUser.invitedCount || 0)) {
+        // Dữ liệu invitedCount cũ (trước khi vá lỗi) có thể vẫn còn thấp hơn thực tế -> tự sửa lại cho khớp
+        await supabase.from('users').update({ invitedCount: newValid }).eq('id', userRecord.referrerId);
+    }
+
     await touchWallet(userRecord.referrerId, {
-        validInvites: newValid,
         coins: (refUser.coins || 0) + INSTANT_REF_COINS,
         orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
     });
@@ -175,6 +240,32 @@ async function tryFinalizeReferral(userId) {
 }
 
 // ==================== BOT LOGIC ====================
+
+// Middleware chặn TOÀN BỘ tương tác của user thường khi bot đang bị khoá bảo trì (admin vẫn dùng được
+// bình thường để có thể tự /mokhoabot mở lại). Đặt TRƯỚC mọi lệnh/handler khác để chặn sớm nhất.
+bot.use(async (ctx, next) => {
+    if (BOT_LOCKED && !isAdmin(ctx)) {
+        if (ctx.callbackQuery) {
+            await ctx.answerCbQuery(MAINTENANCE_MESSAGE, { show_alert: true }).catch(() => {});
+        }
+        return ctx.reply(MAINTENANCE_MESSAGE).catch(() => {});
+    }
+    return next();
+});
+
+// /khoabot - Khoá Bot & Mini App để bảo trì (chỉ Admin)
+bot.command('khoabot', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await setBotLocked(true);
+    ctx.reply("🔒 Đã khoá Bot & Mini App để bảo trì.\nNgười dùng sẽ nhận thông báo: \"" + MAINTENANCE_MESSAGE + "\"\nDùng /mokhoabot để mở khoá lại.");
+});
+
+// /mokhoabot - Mở khoá Bot & Mini App (chỉ Admin)
+bot.command('mokhoabot', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    await setBotLocked(false);
+    ctx.reply("🔓 Đã mở khoá Bot & Mini App. Người dùng có thể sử dụng bình thường trở lại.");
+});
 
 // /start - Kiểm tra tham gia nhóm BẮT BUỘC TRƯỚC khi cho vào miniapp
 bot.start(async (ctx) => {
@@ -212,6 +303,8 @@ bot.start(async (ctx) => {
                 referrerCounted: false, // Thêm trường này để kiểm soát việc đã đếm hợp lệ cho người mời hay chưa
                 lifetimeAdsWatched: 0, // Tổng số QC đã xem trọn đời (không reset theo ngày) - điều kiện xét mời bạn hợp lệ
                 bonusAdsToday: 0, // Số lần đã xem QC nhiệm vụ "Xem QC" hôm nay (tối đa 30)
+                chestOpensTotal: 0, // Tổng số lượt đã mở rương (trọn đời) - dùng cho /checkID
+                chestOpensToday: 0, // Số lượt đã mở rương hôm nay - dùng cho /checkID, reset mỗi ngày
                 walletUpdatedAt: new Date().toISOString() // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
             };
             const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUser).select().single();
@@ -222,11 +315,11 @@ bot.start(async (ctx) => {
             userRecord = insertedUser;
             
             // Tăng invitedCount cho người mời (chưa tính hợp lệ)
+            // Dùng atomicIncrement thay vì đọc-rồi-ghi để không bị "mất lượt mời" khi nhiều người cùng
+            // vào bằng chung 1 link giới thiệu gần như đồng thời (xem giải thích chi tiết ở atomicIncrement).
             if (referrerId && referrerId !== userId) { // Đảm bảo người mời không phải chính mình
-                const { data: ref, error: refError } = await supabase.from('users').select('invitedCount').eq('id', referrerId).single();
-                if (ref && !refError) {
-                    const newCount = (ref.invitedCount || 0) + 1;
-                    await supabase.from('users').update({ invitedCount: newCount }).eq('id', referrerId);
+                const newCount = await atomicIncrement(referrerId, 'invitedCount', 1);
+                if (newCount !== null) {
                     // THÔNG BÁO RIÊNG CHO NGƯỜI MỜI (tên bạn + tiến độ)
                     const milestones = [5, 10, 20, 30, 50, 75, 100];
                     const nextMilestone = milestones.find(m => m > newCount) || 'Hoàn thành';
@@ -455,6 +548,7 @@ bot.command('resetdaily', async (ctx) => {
         smartlinkCount: 0,
         spinAdCount: 0,
         spinFree: 1,
+        chestOpensToday: 0,
         lastResetDate: new Date(new Date().setDate(new Date().getDate() - 1)).toDateString() // Đặt ngày reset về hôm qua để kích hoạt reset khi mini app load
     });
     ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
@@ -478,6 +572,8 @@ function fullResetFields() {
         spinAdCount: 0,
         spinAdProgress: 0,
         bonusAdsToday: 0,
+        chestOpensTotal: 0,
+        chestOpensToday: 0,
         lifetimeAdsWatched: 0,
         invitedCount: 0,
         validInvites: 0,
@@ -649,6 +745,9 @@ bot.command('checkID', async (ctx) => {
         `📦 Đơn hàng: ${data.orders}\n` +
         `🪙 Coin: ${data.coins}\n` +
         `🚛 Level xe: ${data.truckLevel}\n` +
+        `🎁 Lượt mở rương còn lại: ${data.spins || 0}\n` +
+        `🎁 Tổng số lượt đã mở rương: ${(data.chestOpensTotal || 0).toLocaleString()}\n` +
+        `🎁 Số lượt mở rương hôm nay: ${(data.chestOpensToday || 0).toLocaleString()}\n` +
         `🌐 IP: ${data.ip || 'Chưa có'}\n` +
         `💰 Tổng tiền đã rút: ${totalWithdrawn.toLocaleString()} VNĐ\n` +
         `👥 Đã mời: ${data.invitedCount} (Hợp lệ: ${data.validInvites})` +
@@ -855,6 +954,20 @@ process.on('uncaughtException', (err) => {
 });
 
 // ==================== API CHO FRONTEND ====================
+
+// API để Mini App kiểm tra trạng thái khoá bảo trì (KHÔNG bị chặn bởi middleware bên dưới)
+app.get('/api/lock-status', (req, res) => {
+    res.json({ locked: BOT_LOCKED, message: MAINTENANCE_MESSAGE });
+});
+
+// Chặn toàn bộ API của Mini App khi bot đang bị khoá bảo trì (trừ chính API kiểm tra khoá ở trên và
+// các API dành cho Admin, để Admin vẫn thao tác được qua web /admin trong lúc bảo trì).
+app.use('/api', (req, res, next) => {
+    if (BOT_LOCKED && req.path !== '/lock-status' && !req.path.startsWith('/admin')) {
+        return res.status(503).json({ locked: true, error: MAINTENANCE_MESSAGE, message: MAINTENANCE_MESSAGE });
+    }
+    next();
+});
 
 // API kiểm tra tham gia nhóm từ frontend
 app.get('/api/verify/:id', async (req, res) => {
