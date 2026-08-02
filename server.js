@@ -187,6 +187,24 @@ async function touchWallet(userId, extraFields = {}) {
     return !error;
 }
 
+// Che 1 phần tên để đăng công khai lên banner toàn server mà không lộ danh tính đầy đủ (vd top 3 BXH tuần)
+function maskName(name) {
+    if (!name || typeof name !== 'string') return 'Người dùng';
+    const clean = name.trim();
+    if (clean.length <= 2) return clean + '***';
+    return clean.slice(0, 2) + '***';
+}
+
+// Ghi 1 sự kiện công khai (top 3 BXH tuần...) lên banner chạy chữ toàn server. Không chặn luồng chính nếu lỗi
+// (vd bảng activity_log chưa tồn tại trên DB thật do chưa chạy migration cũ).
+async function logActivity(message) {
+    try {
+        await supabase.from('activity_log').insert({ message });
+    } catch (e) {
+        console.error('Lỗi ghi activity_log:', e.message);
+    }
+}
+
 // Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
 // 1) Người được mời đã tham gia đủ nhóm Telegram bắt buộc
 // 2) Người được mời đã xem tối thiểu 3 quảng cáo (lifetimeAdsWatched >= 3)
@@ -251,6 +269,9 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         await supabase.from('users').update({ referrerCounted: false }).eq('id', userId);
         return { ok: false, reason: 'update_failed' };
     }
+    // Đếm riêng cho BXH TUẦN (được reset về 0 mỗi tuần bởi weeklyLeaderboardReset(), khác với validInvites
+    // là tổng trọn đời dùng cho mốc thưởng mời bạn, không bao giờ reset).
+    await atomicIncrement(userRecord.referrerId, 'weeklyValidInvites', 1);
     if (newValid > (refUser.invitedCount || 0)) {
         // Dữ liệu invitedCount cũ (trước khi vá lỗi) có thể vẫn còn thấp hơn thực tế -> tự sửa lại cho khớp
         await supabase.from('users').update({ invitedCount: newValid }).eq('id', userRecord.referrerId);
@@ -1208,7 +1229,68 @@ bot.command('broadcast', async (ctx) => {
     ctx.reply(`✅ Đã gửi thành công đến ${successCount}/${users.length} người dùng.`);
 });
 
-// Khởi động bot ở chế độ long-polling. QUAN TRỌNG: bot.launch() trả về 1 Promise - nếu không bắt lỗi
+// ==================== RESET BXH TUẦN + TRAO THƯỞNG TOP 1-3 ====================
+// Trước đây việc "reset BXH mỗi tuần" chỉ được xử lý ở CLIENT (index.html), nghĩa là: (1) chỉ chạy khi có
+// user mở app đúng lúc sang tuần mới, (2) không hề trao thưởng thật cho top 1-3 (chỉ xóa số liệu hiển thị
+// tạm trên máy người đó). Chuyển toàn bộ sang SERVER để chạy đúng giờ, đáng tin cậy, và trao thưởng thật.
+
+// Xác định "mã tuần" hiện tại (tuần bắt đầu từ Thứ 2, giống hệt cách tính ở frontend) để biết đã sang tuần mới hay chưa
+function getWeekIdentifier(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d.toISOString().slice(0, 10);
+}
+
+// Phần thưởng mặc định cho Top 1-3 BXH mời bạn hàng tuần (có thể chỉnh lại số này theo ý muốn)
+const WEEKLY_TOP_REWARDS = [
+    { rank: 1, coins: 5000, orders: 15000, label: '🥇 Hạng 1' },
+    { rank: 2, coins: 3000, orders: 10000, label: '🥈 Hạng 2' },
+    { rank: 3, coins: 1500, orders: 5000, label: '🥉 Hạng 3' }
+];
+
+async function weeklyLeaderboardReset() {
+    try {
+        const currentWeek = getWeekIdentifier(new Date());
+        const { data: state } = await supabase.from('weekly_state').select('*').eq('id', 1).single();
+        if (state && state.lastWeekKey === currentWeek) return; // Tuần này đã xử lý rồi, không làm lại
+
+        // Lấy Top 3 theo weeklyValidInvites (số bạn mời hợp lệ TRONG TUẦN, chỉ những ai >0 mới được thưởng)
+        const { data: topUsers, error: topError } = await supabase.from('users')
+            .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
+            .order('weeklyValidInvites', { ascending: false }).limit(3);
+        if (topError) { console.error('Lỗi lấy top BXH tuần:', topError); return; }
+
+        for (let i = 0; i < (topUsers || []).length; i++) {
+            const u = topUsers[i];
+            const prize = WEEKLY_TOP_REWARDS[i];
+            if (!prize) break;
+            const { data: cur } = await supabase.from('users').select('coins, orders').eq('id', u.id).single();
+            await touchWallet(u.id, {
+                coins: (cur?.coins || 0) + prize.coins,
+                orders: (cur?.orders || 0) + prize.orders
+            });
+            await safeSendMessage(u.id,
+                `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.coins.toLocaleString()} Coin + ${prize.orders.toLocaleString()} Đơn Hàng*\n\nBXH đã được reset cho tuần mới, chúc bạn tiếp tục giữ vững phong độ!`,
+                { parse_mode: 'Markdown' }
+            );
+            logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này, nhận ${prize.coins.toLocaleString()} Coin + ${prize.orders.toLocaleString()} Đơn Hàng`);
+        }
+
+        // Reset weeklyValidInvites về 0 cho TẤT CẢ user để bắt đầu tuần thi đua mới công bằng
+        await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
+        await supabase.from('weekly_state').upsert({ id: 1, lastWeekKey: currentWeek });
+        console.log(`✅ Đã reset BXH tuần + trao thưởng top 3 (tuần: ${currentWeek})`);
+    } catch (e) {
+        console.error('Lỗi weeklyLeaderboardReset:', e);
+    }
+}
+weeklyLeaderboardReset(); // Kiểm tra ngay lúc server khởi động (phòng trường hợp server tắt đúng lúc qua tuần mới)
+setInterval(weeklyLeaderboardReset, 60 * 60 * 1000); // Kiểm tra lại mỗi giờ để không bỏ lỡ mốc sang tuần
+
+
 // (ví dụ lỗi 409 Conflict do phiên bản deploy cũ vẫn còn đang polling khi Render tạo instance mới),
 // Promise sẽ bị reject mà không ai xử lý -> Node coi là "unhandledRejection" và THOÁT TIẾN TRÌNH với mã lỗi 1
 // (đây chính là nguyên nhân phổ biến khiến deploy trên Render báo "Exited with status 1" dù code không có lỗi cú pháp).
@@ -1526,12 +1608,14 @@ app.get('/api/withdrawals/:userId', async (req, res) => {
 
 // API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
 app.get('/api/leaderboard', async (req, res) => {
-    const { data, error } = await supabase.from('users').select('id, name, validInvites').order('validInvites', { ascending: false }).limit(10);
+    // Xếp hạng theo weeklyValidInvites (số bạn mời hợp lệ TRONG TUẦN NÀY, được reset về 0 mỗi tuần bởi
+    // weeklyLeaderboardReset) để đúng bản chất "Bảng Xếp Hạng Tuần" - không dùng validInvites trọn đời.
+    const { data, error } = await supabase.from('users').select('id, name, validInvites, weeklyValidInvites').order('weeklyValidInvites', { ascending: false }).limit(10);
     if (error) {
         console.error("Lỗi lấy bảng xếp hạng:", error);
         return res.status(500).json({ error: "Lỗi lấy bảng xếp hạng." });
     }
-    res.json({ leaderboard: data || [] });
+    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, validInvites: u.weeklyValidInvites || 0 })) });
 });
 
 // API redeem code
@@ -1641,13 +1725,26 @@ app.post('/api/redeem-code', async (req, res) => {
 // biết đúng userId của mình (Mini App tự truyền userId của Telegram đang đăng nhập).
 app.get('/api/redeem-history/:userId', async (req, res) => {
     try {
+        // FIX LỖI "NHẬP CODE XONG LỊCH SỬ LẠI KHÔNG CÓ": trước đây SELECT đích danh các cột
+        // rewardCoin/rewardOrders/rewardSpins/createdAt - nếu DB thật CHƯA chạy SQL migration thêm các cột
+        // này, câu SELECT báo lỗi "column does not exist" ngay lập tức -> luôn trả về mảng RỖNG dù bản ghi
+        // nhập code vẫn tồn tại trong bảng. Đổi sang select('*') (không bao giờ lỗi do thiếu cột) rồi tự
+        // điền giá trị mặc định cho các cột có thể chưa tồn tại.
         const { data, error } = await supabase.from('giftcode_redemptions')
-            .select('code, rewardCoin, rewardOrders, rewardSpins, createdAt')
+            .select('*')
             .eq('userId', req.params.userId)
-            .order('createdAt', { ascending: false })
             .limit(50);
         if (error) throw error;
-        res.json({ history: data || [] });
+        const history = (data || [])
+            .map(r => ({
+                code: r.code,
+                rewardCoin: r.rewardCoin || 0,
+                rewardOrders: r.rewardOrders || 0,
+                rewardSpins: r.rewardSpins || 0,
+                createdAt: r.createdAt || r.redeemedAt || null
+            }))
+            .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        res.json({ history });
     } catch (e) {
         console.error('Lỗi lấy redeem-history:', e.message);
         res.json({ history: [] });
