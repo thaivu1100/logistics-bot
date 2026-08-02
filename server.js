@@ -176,24 +176,6 @@ async function checkDuplicateIP(userId, ip) {
     return data || [];
 }
 
-// Che 1 phần tên user để đăng lên banner công khai mà không lộ danh tính đầy đủ (vd: "Nguyễn Văn A" -> "Ng***")
-function maskName(name) {
-    if (!name || typeof name !== 'string') return 'Người dùng';
-    const clean = name.trim();
-    if (clean.length <= 2) return clean + '***';
-    return clean.slice(0, 2) + '***';
-}
-
-// Ghi lại 1 sự kiện THẬT (rút tiền được duyệt, trúng jackpot, mời bạn thành công...) để hiển thị lên
-// banner chạy chữ toàn server, thay vì dữ liệu bịa/hardcode như trước. Không chặn luồng chính nếu lỗi.
-async function logActivity(message) {
-    try {
-        await supabase.from('activity_log').insert({ message });
-    } catch (e) {
-        console.error('Lỗi ghi activity_log:', e.message);
-    }
-}
-
 
 // Frontend sẽ so sánh mốc này với mốc nó biết để tránh việc tự lưu game đè mất thay đổi của admin.
 async function touchWallet(userId, extraFields = {}) {
@@ -289,8 +271,6 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         `✅ *Xác nhận hợp lệ!* ${userRecord.name} đã tham gia đủ nhóm và xem đủ QC.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
         { parse_mode: 'Markdown' }
     );
-    const { data: referrerInfo } = await supabase.from('users').select('name').eq('id', userRecord.referrerId).single();
-    logActivity(`👥 ${maskName(referrerInfo?.name)} vừa mời bạn thành công, nhận ${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng`);
 
     return { ok: true, validInvites: newValid };
 }
@@ -638,6 +618,72 @@ bot.command('adddonhang', async (ctx) => {
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     await touchWallet(targetId, { orders: (data.orders || 0) + amount });
     ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`);
+});
+
+// /trudonhang - Trừ đơn hàng của 1 user (không cho âm)
+bot.command('trudonhang', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /trudonhang <userId> <số_lượng>");
+    const targetId = parts[1];
+    const amount = parseInt(parts[2]);
+    const { data, error } = await supabase.from('users').select('orders').eq('id', targetId).single();
+    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
+    const newOrders = Math.max(0, (data.orders || 0) - amount);
+    await touchWallet(targetId, { orders: newOrders });
+    ctx.reply(`✅ Đã trừ ${amount} đơn hàng của ${targetId}. Số dư mới: ${newOrders}`);
+});
+
+// /truspin - Trừ lượt mở rương của 1 user (không cho âm)
+bot.command('truspin', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /truspin <userId> <số_lượng>");
+    const targetId = parts[1];
+    const amount = parseInt(parts[2]);
+    const { data, error } = await supabase.from('users').select('spins').eq('id', targetId).single();
+    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
+    const newSpins = Math.max(0, (data.spins || 0) - amount);
+    await touchWallet(targetId, { spins: newSpins });
+    ctx.reply(`✅ Đã trừ ${amount} lượt mở rương của ${targetId}. Số dư mới: ${newSpins}`);
+});
+
+// /addref <userId> <số_ref> - Cộng thêm N lượt mời BẠN HỢP LỆ cho user (dùng khi cần bù thủ công, vd bạn
+// bè lỡ không tự xác nhận được, hoặc tri ân sự kiện...). Cộng validInvites VÀ invitedCount (đảm bảo
+// invitedCount luôn >= validInvites, đúng bất biến của hệ thống mời bạn), đồng thời cộng thẳng vào ví TOÀN
+// BỘ phần thưởng "hợp lệ tức thì" mà user sẽ nhận được TỰ ĐỘNG cho mỗi lượt mời hợp lệ thật (1.000 Coin +
+// 2.000 Đơn Hàng / bạn) nhân với N. Các mốc thưởng lớn hơn (5/10/20/30/50/75/100 bạn) vẫn do chính user tự
+// bấm "Nhận" trong Mini App như bình thường khi validInvites chạm mốc, không tự phát ở đây để không phá vỡ
+// luồng nhận mốc thưởng đã có sẵn.
+bot.command('addref', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /addref <userId> <số_ref>");
+    const targetId = parts[1];
+    const amount = parseInt(parts[2]);
+    if (!amount || amount <= 0) return ctx.reply("❌ Số ref phải là số nguyên dương.");
+
+    const { data, error } = await supabase.from('users')
+        .select('validInvites, invitedCount, coins, orders').eq('id', targetId).single();
+    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
+
+    const INSTANT_REF_COINS = 1000;
+    const INSTANT_REF_ORDERS = 2000;
+    const newValid = (data.validInvites || 0) + amount;
+    const newInvited = Math.max(data.invitedCount || 0, newValid);
+    const bonusCoins = INSTANT_REF_COINS * amount;
+    const bonusOrders = INSTANT_REF_ORDERS * amount;
+
+    const ok = await touchWallet(targetId, {
+        validInvites: newValid,
+        invitedCount: newInvited,
+        coins: (data.coins || 0) + bonusCoins,
+        orders: (data.orders || 0) + bonusOrders
+    });
+    if (!ok) return ctx.reply("❌ Lỗi khi cập nhật dữ liệu user.");
+
+    ctx.reply(`✅ Đã cộng ${amount} lượt mời hợp lệ cho ${targetId}.\n📊 Tổng hợp lệ mới: ${newValid}\n🎁 Đã cộng thưởng: +${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng`);
+    safeSendMessage(targetId, `🎉 Admin vừa cộng thêm *${amount}* lượt mời bạn hợp lệ cho bạn!\n🎁 Nhận thêm: *+${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ hiện tại: *${newValid}*`, { parse_mode: 'Markdown' });
 });
 
 // /setlevel
@@ -1047,9 +1093,6 @@ bot.command('duyet', async (ctx) => {
     
     await safeSendMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!\n💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ\nTiền sẽ sớm được chuyển vào tài khoản.`, { parse_mode: 'Markdown' });
     ctx.reply(`✅ Đã duyệt ${withdrawals.length} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
-
-    const { data: approvedUser } = await supabase.from('users').select('name').eq('id', targetId).single();
-    logActivity(`🚛 ${maskName(approvedUser?.name)} vừa rút thành công ${totalApprovedAmount.toLocaleString()} VNĐ`);
 });
 
 // /huy + ID + lý do
@@ -1422,6 +1465,20 @@ app.post('/api/withdraw', async (req, res) => {
         const { count } = await supabase.from('withdrawals').select('*', { count: 'exact', head: true });
         const txCode = (count || 0) + 1;
 
+        // Trừ đơn hàng bằng UPDATE có điều kiện (WHERE orders = giá_trị_vừa_đọc): nếu có 1 yêu cầu rút khác
+        // vừa kịp trừ trước trong lúc request này đang xử lý, orders thực tế trên DB sẽ khác giá trị đã đọc
+        // -> 0 dòng bị ảnh hưởng -> từ chối ngay, KHÔNG tạo đơn rút, tránh trừ vượt quá số dư thực có.
+        const newOrdersWalletUpdatedAt = new Date().toISOString();
+        const { data: updatedRows, error: updErr } = await supabase.from('users')
+            .update({ orders: newOrders, walletUpdatedAt: newOrdersWalletUpdatedAt })
+            .eq('id', userId)
+            .eq('orders', userData.orders)
+            .select('orders, walletUpdatedAt');
+        if (updErr) throw updErr;
+        if (!updatedRows || updatedRows.length === 0) {
+            return res.status(409).json({ error: "Số dư của bạn vừa thay đổi, vui lòng thử lại." });
+        }
+
         const { error: withdrawInsertError } = await supabase.from('withdrawals').insert({
             userId,
             amount: amountVnd,
@@ -1436,9 +1493,6 @@ app.post('/api/withdraw', async (req, res) => {
         });
         if (withdrawInsertError) throw withdrawInsertError;
 
-        const walletOk = await touchWallet(userId, { orders: newOrders });
-        if (!walletOk) throw new Error("Không thể cập nhật số đơn hàng sau khi rút.");
-
         // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT và Chủ TK (chỉ hiện 2 ký tự đầu, còn lại che bằng ****)
         const maskText = (txt) => {
             const clean = (txt || '').toString().trim();
@@ -1452,7 +1506,8 @@ app.post('/api/withdraw', async (req, res) => {
             { parse_mode: 'Markdown' }
         );
 
-        res.json({ success: true, txCode });
+        // Trả về ĐÚNG giá trị orders + walletUpdatedAt vừa lưu để client SET trực tiếp (không tự trừ cục bộ nữa)
+        res.json({ success: true, txCode, orders: updatedRows[0].orders, walletUpdatedAt: updatedRows[0].walletUpdatedAt });
     } catch (error) {
         console.error("Lỗi trong quá trình rút tiền:", error);
         res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
@@ -1599,30 +1654,6 @@ app.get('/api/redeem-history/:userId', async (req, res) => {
     }
 });
 
-// User vừa trúng Jackpot 100.000 Đơn Hàng khi mở rương -> ghi vào banner thật toàn server
-app.post('/api/log-jackpot/:id', async (req, res) => {
-    try {
-        const { data: u } = await supabase.from('users').select('name, isBanned').eq('id', req.params.id).single();
-        if (!u || u.isBanned) return res.json({ ok: false });
-        logActivity(`💎 ${maskName(u.name)} vừa trúng JACKPOT 100.000 Đơn Hàng!`);
-        res.json({ ok: true });
-    } catch (e) {
-        res.status(500).json({ ok: false });
-    }
-});
-
-// Lấy danh sách hoạt động THẬT gần đây để hiển thị lên banner chạy chữ toàn server (thay vì dữ liệu ảo)
-app.get('/api/activity-feed', async (req, res) => {
-    try {
-        const { data, error } = await supabase.from('activity_log')
-            .select('message, createdAt').order('createdAt', { ascending: false }).limit(20);
-        if (error) throw error;
-        res.json({ messages: (data || []).map(d => d.message) });
-    } catch (e) {
-        console.error('Lỗi lấy activity-feed:', e.message);
-        res.json({ messages: [] });
-    }
-});
 
 // Admin: cập nhật trạng thái rút tiền (miniapp sẽ tự đồng bộ trạng thái mới qua polling /api/withdrawals/:userId)
 app.post('/api/admin/update-withdrawal', async (req, res) => {
