@@ -91,6 +91,21 @@
         nav button.text-blue-500 i { filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.8)); }
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-thumb { background: rgba(251, 191, 36, 0.4); border-radius: 4px; }
+
+        /* ==== Nâng cấp Layout / Icon / Animation (giữ chủ đề Kho Hàng - Giao Hàng) ==== */
+        @keyframes valuePop { 0% { transform: scale(1); } 45% { transform: scale(1.35); color: #4ade80; } 100% { transform: scale(1); } }
+        .value-pop { animation: valuePop 0.45s ease-out; display: inline-block; }
+
+        @keyframes warehousePulse { 0%, 100% { box-shadow: 0 4px 16px rgba(37, 99, 235, 0.35); } 50% { box-shadow: 0 4px 24px rgba(37, 99, 235, 0.7); } }
+        .neon-blue { animation: warehousePulse 2.8s ease-in-out infinite; }
+
+        .nav-pill { position: absolute; inset: -6px -10px; border-radius: 14px; background: linear-gradient(135deg, rgba(59,130,246,0.22), rgba(37,99,235,0.08)); z-index: -1; animation: fadeInUp 0.25s ease-out; }
+        nav button { position: relative; }
+
+        @keyframes truckDrive { 0% { transform: translateX(0); } 50% { transform: translateX(2px) rotate(-1deg); } 100% { transform: translateX(0); } }
+        .truck-idle { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
+
+        .stagger-item { opacity: 0; animation: fadeInUp 0.4s ease-out forwards; }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -176,8 +191,8 @@
                 </div>
             </div>
             <div class="space-y-1">
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="font-black mr-1 text-blue-400" x-text="formatNumber(orders)"></span> 📦</div>
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" x-text="formatNumber(coins)"></span></div>
+                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="font-black mr-1 text-blue-400" :class="ordersPopped ? 'value-pop' : ''" x-text="formatNumber(orders)"></span> 📦</div>
+                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></span></div>
             </div>
         </header>
 
@@ -216,7 +231,7 @@
                 </div>
                 <div class="space-y-2">
                     <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="w-full py-3 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-base uppercase italic shadow-[0_6px_0_#b45309] active:translate-y-1 active:shadow-none transition-all disabled:opacity-40 disabled:translate-y-1 disabled:shadow-none flex items-center justify-center gap-2 btn-text">
-                        <span>🚚</span>
+                        <span :class="!isShipping && currentProducts > 0 ? 'truck-idle' : ''">🚚</span>
                         <span x-text="texts.deliver"></span>
                         <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
                     </button>
@@ -269,12 +284,16 @@
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.dailyTasks"></h3>
                     <template x-for="(task, idx) in dailyTasks" :key="idx">
-                        <div class="flex items-center justify-between p-2 bg-slate-800/40 rounded-xl border border-white/5">
+                        <div class="flex items-center justify-between p-2 bg-slate-800/40 rounded-xl border border-white/5 stagger-item" :style="'animation-delay:' + (idx * 60) + 'ms'">
                             <div class="flex items-center space-x-2">
                                 <span class="text-lg" x-text="task.icon"></span>
                                 <div class="text-left">
                                     <p class="text-xs font-black" x-text="task.name"></p>
-                                    <p class="text-[7px] font-bold text-yellow-400" x-text="'+ ' + task.reward + ' 💰'"></p>
+                                    <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap">
+                                        <span x-text="'+' + task.reward + ' 💰'"></span>
+                                        <span x-show="task.rewardOrders" x-text="'+' + task.rewardOrders + ' 📦'"></span>
+                                        <span x-show="task.rewardSpins" x-text="'+' + task.rewardSpins + ' 🎁'"></span>
+                                    </p>
                                     <div x-show="task.id === 'smartlink15' && !task.done" class="text-[7px] text-blue-300">
                                         <span x-text="'Tiến độ: ' + smartlinkCount + '/15'"></span>
                                     </div>
@@ -526,6 +545,7 @@
             <div class="flex h-full items-center justify-around nav-scroll overflow-x-auto space-x-1 px-1 scroll-smooth">
                 <template x-for="m in menuItems" :key="m.id">
                     <button @click="tab = m.id" :class="tab === m.id ? 'text-blue-500 scale-110 -translate-y-1 font-black opacity-100 duration-300' : 'text-slate-500 opacity-50 grayscale'" class="flex flex-col items-center flex-shrink-0 transition-all px-1 cursor-pointer">
+                        <div x-show="tab === m.id" class="nav-pill"></div>
                         <i :class="m.icon" class="text-base"></i>
                         <span class="text-[6px] font-extrabold uppercase mt-0.5 tracking-widest italic" x-text="texts['nav_' + m.id]"></span>
                     </button>
@@ -661,12 +681,12 @@
                 spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
-                lifetimeAdsWatched: 0, bonusAdsToday: 0, walletSyncedAt: null,
+                lifetimeAdsWatched: 0, bonusAdsToday: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 2, withdrawHistory: [], language: 'vi', giftCode: '', bannedScreen: false,
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
-                bannerText: '📦 Chúc mừng Admin nhận hũ 100k đơn hàng • 🚛 Shipper LH-45 vừa rút 50.000 VNĐ...',
-                banners: ['💰 Th****** nhận 500 Coin', '⚡ Ho****** nhận thưởng đặc biệt', '💎 Mi****** trúng 100.000 Đơn Hàng', '🚛 A****** vừa nâng cấp lên xe Container 40ft'],
+                bannerText: '📦 Đang tải hoạt động mới nhất...',
+                banners: [], // FIX: không còn dữ liệu ảo hardcode, sẽ nạp dữ liệu THẬT từ /api/activity-feed
                 bannerIndex: 0, lastResetDate: '', lastWeekReset: '',
                 dailyTasks: [
                     { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
@@ -791,6 +811,7 @@
                             this.maxProducts = data.maxProducts || 100;
                             this.productionInterval = data.productionInterval || 30 * 60 * 1000;
                             this.productionAmount = data.productionAmount || 100;
+                            this.speedUpUsed = data.speedUpUsed || false; // FIX: giữ trạng thái đã dùng Tăng Tốc x2 qua các lần load lại app
                             this.spinFree = data.spins || 1; // 'spins' in DB is 'spinFree' in frontend
                             this.spinAdCount = data.spinAdCount || 0;
                             this.spinAdProgress = data.spinAdProgress || 0;
@@ -898,12 +919,38 @@
                     this.fetchWithdrawHistory();
                     setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
 
-                    setInterval(() => { this.bannerIndex = (this.bannerIndex + 1) % this.banners.length; this.bannerText = this.banners[this.bannerIndex]; }, 7000);
+                    this.fetchActivityFeed();
+                    setInterval(() => this.fetchActivityFeed(), 60000); // Làm mới dữ liệu banner thật mỗi 60s
+
+                    // Hiệu ứng số "nhảy" mỗi khi coin / đơn hàng tăng lên (chỉ khi tăng, không chạy khi giảm do rút tiền/trừ tiền)
+                    let prevCoins = this.coins, prevOrders = this.orders;
+                    this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
+                    this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
+                    setInterval(() => {
+                        if (this.banners.length === 0) return;
+                        this.bannerIndex = (this.bannerIndex + 1) % this.banners.length;
+                        this.bannerText = this.banners[this.bannerIndex];
+                    }, 7000);
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
                 },
                 
+                // Lấy hoạt động THẬT gần đây (rút tiền được duyệt, jackpot, mời bạn thành công, nhập code...)
+                // để chạy lên banner toàn server, thay cho dữ liệu ảo hardcode trước đây.
+                async fetchActivityFeed() {
+                    try {
+                        const res = await fetch(`${API_URL}/api/activity-feed`);
+                        const data = await res.json();
+                        if (data.messages && data.messages.length > 0) {
+                            this.banners = data.messages;
+                            this.bannerIndex = 0;
+                            this.bannerText = this.banners[0];
+                        } else {
+                            this.bannerText = '📦 Kho Hàng đang hoạt động, hãy giao hàng và mời bạn để nhận thưởng!';
+                        }
+                    } catch (e) { console.error('Lỗi lấy activity feed:', e); }
+                },
                 async checkGroupMembership(silent = false) {
                     if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
                     try {
@@ -1275,6 +1322,7 @@
                     setTimeout(() => {
                         if (chosen.type === 'order' && chosen.value === 100000) {
                             this.showNotification('💎 CHÚC MỪNG! JACKPOT 100.000 Đơn Hàng!');
+                            fetch(`${API_URL}/api/log-jackpot/${this.user.id}`, { method: 'POST' }).catch(() => {});
                         } else if (chosen.type !== 'none') {
                             this.showNotification('🎁 ' + rewardText);
                         } else {
@@ -1621,6 +1669,7 @@
                         lastProducedAt: this.lastProducedAt,
                         maxProducts: this.maxProducts,
                         productionInterval: this.productionInterval,
+                        speedUpUsed: this.speedUpUsed,
                         productionAmount: this.productionAmount,
                         coinBoxVisible: this.coinBoxVisible,
                         spinAdCount: this.spinAdCount,
