@@ -448,7 +448,7 @@ function fullResetFields() {
         adsToday: 0,
         smartlinksToday: 0,
         smartlinkCount: 0,
-        usedSmartlinks: JSON.stringify([]),
+        usedSmartlinks: [],
         spinAdCount: 0,
         spinAdProgress: 0,
         bonusAdsToday: 0,
@@ -469,13 +469,46 @@ function fullResetFields() {
     };
 }
 
+// Xóa lịch sử nhập giftcode để (các) user có thể NHẬP LẠI những code đã từng nhập trước khi bị admin
+// reset (theo yêu cầu). Đồng thời hoàn trả lại đúng số lượt đã dùng (usedCount) cho từng code tương ứng,
+// tránh việc quỹ lượt nhập của code bị hao hụt oan khi cho phép nhập lại.
+// userId = null -> áp dụng cho TẤT CẢ user (dùng cho /resetall). userId cụ thể -> chỉ 1 user (dùng cho /reset).
+async function resetGiftcodeRedemptions(userId = null) {
+    let query = supabase.from('giftcode_redemptions').select('code, userId');
+    if (userId) query = query.eq('userId', userId);
+    const { data: redemptions, error } = await query;
+    if (error) {
+        console.error('Lỗi lấy giftcode_redemptions để reset:', error);
+        return;
+    }
+    if (!redemptions || redemptions.length === 0) return;
+
+    // Gộp số lượt cần hoàn trả theo từng code
+    const refundByCode = {};
+    redemptions.forEach(r => { refundByCode[r.code] = (refundByCode[r.code] || 0) + 1; });
+
+    for (const [code, refundCount] of Object.entries(refundByCode)) {
+        const { data: gcRow } = await supabase.from('giftcodes').select('usedCount').eq('code', code).single();
+        if (gcRow) {
+            await supabase.from('giftcodes').update({ usedCount: Math.max(0, (gcRow.usedCount || 0) - refundCount) }).eq('code', code);
+        }
+    }
+
+    let delQuery = supabase.from('giftcode_redemptions').delete();
+    delQuery = userId ? delQuery.eq('userId', userId) : delQuery.not('userId', 'is', null);
+    const { error: delError } = await delQuery;
+    if (delError) console.error('Lỗi xóa giftcode_redemptions:', delError);
+}
+
+
 // /reset <userId> - Reset TOÀN BỘ dữ liệu của 1 user về 0
 bot.command('reset', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /reset <userId>");
     const ok = await touchWallet(targetId, fullResetFields());
-    if (ok) ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${targetId} về 0.`);
+    await resetGiftcodeRedemptions(targetId); // Cho phép user nhập lại các code đã nhập trước khi reset
+    if (ok) ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${targetId} về 0 (kể cả lịch sử nhập code).`);
     else ctx.reply(`❌ Lỗi khi reset dữ liệu user ${targetId}.`);
 });
 
@@ -490,7 +523,8 @@ bot.command('resetall', async (ctx) => {
         console.error("Lỗi /resetall:", error);
         return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
     }
-    ctx.reply(`✅ Đã reset toàn bộ dữ liệu của TẤT CẢ user về 0.`);
+    await resetGiftcodeRedemptions(null); // Cho phép TẤT CẢ user nhập lại các code đã nhập trước khi reset
+    ctx.reply(`✅ Đã reset toàn bộ dữ liệu của TẤT CẢ user về 0 (kể cả lịch sử nhập code).`);
 });
 
 // /deleteuser
@@ -868,7 +902,12 @@ app.get('/api/user/:id', async (req, res) => {
 // biết gần nhất. Nếu mốc đó CŨ HƠN mốc hiện tại trong DB (tức admin vừa sửa ví sau khi client đồng bộ lần
 // cuối) thì server sẽ BỎ QUA phần ví client gửi lên, giữ nguyên giá trị admin đã đặt, và trả lại giá trị
 // mới nhất để client tự cập nhật lại local state.
-const WALLET_FIELDS = ['coins', 'orders', 'spins', 'truckLevel', 'isBanned'];
+// Toàn bộ field có thể bị ADMIN thay đổi trực tiếp qua lệnh bot (congcoin, trucoin, addspin, adddonhang,
+// setlevel, ban/unban, resetdaily, reset, resetall...) được đối chiếu qua walletUpdatedAt để KHÔNG cho
+// phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ, có thể cũ) ghi đè mất thay đổi của admin.
+// Lấy trực tiếp từ fullResetFields() để danh sách này LUÔN khớp với những gì các lệnh reset thực sự đổi,
+// tránh trường hợp thêm field mới vào fullResetFields() mà quên thêm vào đây.
+const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned'])];
 app.post('/api/user/:id', async (req, res) => {
     try {
         const userId = req.params.id;
@@ -881,7 +920,7 @@ app.post('/api/user/:id', async (req, res) => {
         }
 
         const { data: current, error: currentError } = await supabase.from('users')
-            .select('walletUpdatedAt, isBanned, coins, orders, spins, truckLevel').eq('id', userId).single();
+            .select(['walletUpdatedAt', ...WALLET_FIELDS].join(', ')).eq('id', userId).single();
         if (currentError || !current) {
             console.error(`Lỗi lấy user hiện tại ${userId}:`, currentError);
             return res.status(404).json({ success: false, error: "User not found" });
@@ -910,9 +949,12 @@ app.post('/api/user/:id', async (req, res) => {
         }
 
         if (walletOverridden) {
-            // Trả về giá trị ví mới nhất từ DB để client tự đồng bộ lại, tránh mất thay đổi của admin
+            // Trả về giá trị mới nhất từ DB cho TOÀN BỘ field được bảo vệ để client tự đồng bộ lại, tránh mất thay đổi của admin
             const { data: fresh } = await supabase.from('users')
-                .select('coins, orders, spins, truckLevel, isBanned, walletUpdatedAt').eq('id', userId).single();
+                .select([...WALLET_FIELDS, 'walletUpdatedAt'].join(', ')).eq('id', userId).single();
+            if (fresh && fresh.referralMilestones && typeof fresh.referralMilestones === 'string') {
+                fresh.referralMilestones = JSON.parse(fresh.referralMilestones);
+            }
             return res.json({ success: true, walletOverridden: true, wallet: fresh });
         }
 
