@@ -139,18 +139,35 @@
         @keyframes taskShine { 0% { left: -60%; } 100% { left: 140%; } }
         .tasks-header-truck { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
 
-        /* ==== Nâng cấp diện mạo TỔNG THỂ cho mọi mục (Trang chủ, Rương, BXH, Mời bạn, Rút tiền, Cài đặt...) ====
+        /* ==== Nâng cấp diện mạo TỔNG THỂ cho mọi mục (Trang chủ, Rương, Nhiệm vụ, BXH, Mời bạn, Rút tiền, Nhập Code, Cài đặt...) ====
            Chỉ dùng selector CHUNG (thẻ / class đã có sẵn khắp nơi trong toàn bộ giao diện) nên tự động áp
-           dụng cho TẤT CẢ các mục mà KHÔNG cần sửa từng đoạn HTML riêng lẻ -> không đụng tới bất kỳ class
-           icon Font Awesome nào, đảm bảo icon vẫn hiển thị đúng như cũ trên mọi thiết bị. */
-        i[class*="fa-"] { line-height: 1; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+           dụng cho TẤT CẢ các mục mà KHÔNG cần sửa từng đoạn HTML riêng lẻ. Icon 100% dùng emoji sẵn có của
+           hệ điều hành (không tải Font Awesome/CDN icon ngoài) nên KHÔNG BAO GIỜ vỡ/mất icon dù mạng yếu hay
+           thiết bị nào, giữ nguyên chủ đề giao hàng (🚚📦🏠) xuyên suốt toàn app. */
         .glass:hover { transform: translateY(-3px); box-shadow: 0 14px 32px rgba(0,0,0,0.34); border-color: rgba(255,255,255,0.16); }
         @media (hover: none) { .glass:hover { transform: none; box-shadow: 0 8px 24px rgba(0,0,0,0.25); } } /* Không áp dụng hiệu ứng hover cho màn hình cảm ứng, tránh kẹt trạng thái "nổi" sau khi chạm */
         input, select, textarea { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
         input:focus, select:focus, textarea:focus { outline: none; border-color: rgba(59,130,246,0.6); box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
         main { scroll-behavior: smooth; }
-        nav button.text-blue-500 i { transform: scale(1.08); transition: transform 0.2s ease; }
+        nav button.text-blue-500 { transform: translateY(-1px); transition: transform 0.25s cubic-bezier(.34,1.56,.64,1), color 0.2s ease; }
+        nav button.text-blue-500 span.text-base { display: inline-block; animation: navIconPop 0.35s cubic-bezier(.34,1.56,.64,1); }
+        @keyframes navIconPop { 0% { transform: scale(0.7) translateY(3px); } 60% { transform: scale(1.18) translateY(-2px); } 100% { transform: scale(1) translateY(0); } }
         img, svg { max-width: 100%; }
+
+        /* Toàn bộ nút bấm trong app: phản hồi nhẹ khi chạm/nhấn, cảm giác "vật lý" hơn thay vì đổi trạng thái khô khan */
+        button { transition: transform 0.12s ease, box-shadow 0.2s ease, opacity 0.2s ease; }
+        button:active { transform: scale(0.95); }
+        @media (hover: hover) { button:hover:not(:disabled) { filter: brightness(1.06); } }
+
+        /* Chuyển giữa các mục (Trang chủ / Rương / Nhiệm vụ / BXH / Mời bạn / Rút tiền / Nhập Code / Cài đặt)
+           mượt hơn hẳn so với hiệu ứng mặc định của Alpine (chỉ opacity khô khan) */
+        .tab-enter { animation: tabSlideIn 0.32s cubic-bezier(.22,1,.36,1); }
+        @keyframes tabSlideIn { 0% { opacity: 0; transform: translateY(10px) scale(0.99); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+
+        /* Ánh sáng lướt nhẹ cho các nút hành động chính (CTA) mang màu vàng/xanh nổi bật của chủ đề giao hàng */
+        .cta-shine { position: relative; overflow: hidden; }
+        .cta-shine::after { content: ''; position: absolute; top: 0; left: -75%; width: 50%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,255,255,0.35), transparent); animation: ctaShineMove 2.6s ease-in-out infinite; }
+        @keyframes ctaShineMove { 0% { left: -75%; } 60%, 100% { left: 130%; } }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -252,14 +269,9 @@
             </div>
         </header>
 
-        <div class="bg-slate-900/50 py-1 flex items-center overflow-hidden">
-            <div class="text-[8px] font-bold uppercase text-yellow-500/80 italic tracking-widest whitespace-nowrap animate-marquee" x-text="bannerText" style="animation: marquee 15s linear infinite;"></div>
-        </div>
-        <style>@keyframes marquee { 0% { transform: translateX(100%); } 100% { transform: translateX(-100%); } } .animate-marquee { display: inline-block; padding-left: 100%; }</style>
-
         <main class="p-2 space-y-3">
             <!-- TRANG CHỦ -->
-            <div x-show="tab === 'home'" x-transition class="space-y-3 relative">
+            <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
                 <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
                 <div class="p-4 rounded-[25px] neon-blue shadow-2xl relative overflow-hidden group card-padding">
                     <h3 class="text-[9px] font-black uppercase opacity-60 tracking-[4px]" x-text="texts.warehouse"></h3>
@@ -308,7 +320,7 @@
             </div>
 
             <!-- MỞ RƯƠNG -->
-            <div x-show="tab === 'chest'" x-transition class="space-y-3 text-center">
+            <div x-show="tab === 'chest'" x-transition class="tab-enter space-y-3 text-center">
                 <h2 class="text-xl font-extrabold italic text-neon uppercase" x-text="texts.chestTitle"></h2>
                 <div class="glass p-3 rounded-[25px] relative card-padding">
                     <div class="chest-container" @click="openChest()" :class="{ 'shaking': isShaking, 'chest-open': isOpened }">
@@ -335,7 +347,7 @@
             </div>
 
             <!-- NHIỆM VỤ -->
-            <div x-show="tab === 'tasks'" x-transition class="space-y-3">
+            <div x-show="tab === 'tasks'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.tasksTitle"></h2>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
@@ -379,7 +391,7 @@
                     </template>
                     <div class="mt-2 p-2 bg-yellow-500/10 rounded-xl border border-yellow-500/30 text-center">
                         <p class="text-xs font-black text-yellow-400"> <span x-text="texts.completeAll"></span>: <span x-text="allTasksDone ? 'Sẵn sàng nhận!' : '500 💰 1 Lượt Mở Rương'"></span></p>
-                        <button x-show="allTasksDone" @click="claimAllTasksReward()" class="mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase" x-text="texts.claim"></button>
+                        <button x-show="allTasksDone" @click="claimAllTasksReward()" class="cta-shine mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase" x-text="texts.claim"></button>
                     </div>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
@@ -393,7 +405,7 @@
             </div>
 
             <!-- BXH -->
-            <div x-show="tab === 'leaderboard'" x-transition class="space-y-3">
+            <div x-show="tab === 'leaderboard'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.leaderboardTitle"></h2>
                 <div class="glass p-3 rounded-[25px] text-center card-padding">
                     <p class="text-xs font-bold text-yellow-400 mb-2" x-text="texts.timeRemaining"></p>
@@ -438,7 +450,7 @@
             </div>
 
             <!-- MỜI BẠN BÈ (có hiển thị tiến độ điều kiện) -->
-            <div x-show="tab === 'friends'" x-transition class="space-y-3">
+            <div x-show="tab === 'friends'" x-transition class="tab-enter space-y-3">
                 <div class="gold-glow p-4 rounded-[25px] bg-[#fbbf24] text-slate-950 shadow-2xl relative overflow-hidden group card-padding">
                     <h3 class="text-[10px] font-black uppercase opacity-40" x-text="texts.refCode"></h3>
                     <h2 class="text-xl font-black italic mt-1 uppercase leading-tight" x-text="texts.inviteFriends"></h2>
@@ -504,7 +516,7 @@
             </div>
 
             <!-- RÚT TIỀN -->
-            <div x-show="tab === 'withdraw'" x-transition class="space-y-3">
+            <div x-show="tab === 'withdraw'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.withdraw"></h2>
                 <div class="glass p-2 rounded-xl text-center card-padding">
                     <p class="text-[10px] font-bold text-yellow-400" x-text="texts.exchangeRateLine"></p>
@@ -549,7 +561,7 @@
 
                     <button @click="requestWithdraw()"
                         :disabled="withdrawRemain <= 0 || !withdrawOrdersAmount || withdrawOrdersAmount < 20000 || orders < withdrawOrdersAmount || !withdrawAccountNumber || (withdrawMethod === 'bank' && (!withdrawBankName || !withdrawAccountName))"
-                        class="w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text">
+                        class="cta-shine w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text">
                         <span x-text="texts.withdraw + ' (' + formatNumber(withdrawOrdersAmount || 0) + ' 📦)'"></span>
                     </button>
                 </div>
@@ -579,7 +591,7 @@
             </div>
 
             <!-- CÀI ĐẶT (KHÔNG còn kiểm tra tham gia nhóm) -->
-            <div x-show="tab === 'settings'" x-transition class="space-y-3">
+            <div x-show="tab === 'settings'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2" x-text="texts.settings"></h2>
                 <div class="glass p-3 rounded-[25px] space-y-2 text-sm card-padding">
                     <div class="flex justify-between"><span>🆔 ID</span><span class="font-bold" x-text="user.id"></span></div>
@@ -606,7 +618,7 @@
             <!-- MỤC NHẬP CODE - TÁCH RIÊNG thành 1 tab độc lập, có ô nhập code + lịch sử nhập code (mã, phần
                  thưởng, thời gian) ngay bên dưới. Toàn bộ nội dung này chỉ RIÊNG người đang đăng nhập thấy
                  được - không phát thông báo lên banner toàn server nữa. -->
-            <div x-show="tab === 'giftcode'" x-transition class="space-y-3">
+            <div x-show="tab === 'giftcode'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2" x-text="texts.giftcodePageTitle"></h2>
 
                 <div class="glass p-4 rounded-[25px] border-2 border-red-500/20 card-padding gift-card-glow">
@@ -794,9 +806,7 @@
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
-                bannerText: '📦 Đang tải hoạt động mới nhất...',
-                banners: [], // FIX: không còn dữ liệu ảo hardcode, sẽ nạp dữ liệu THẬT từ /api/activity-feed
-                bannerIndex: 0, lastResetDate: '', lastWeekReset: '',
+                lastResetDate: '', lastWeekReset: '',
                 dailyTasks: [
                     { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'deliver5', name: '🚚 Giao hàng 5 lần', icon: '🚚', reward: 200, rewardOrders: 20, rewardSpins: 0, done: false, claimable: false },
@@ -1090,18 +1100,10 @@
                     this.fetchRedeemHistory();
                     setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
 
-                    this.fetchActivityFeed();
-                    setInterval(() => this.fetchActivityFeed(), 60000); // Làm mới dữ liệu banner thật mỗi 60s
-
                     // Hiệu ứng số "nhảy" mỗi khi coin / đơn hàng tăng lên (chỉ khi tăng, không chạy khi giảm do rút tiền/trừ tiền)
                     let prevCoins = this.coins, prevOrders = this.orders;
                     this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
-                    setInterval(() => {
-                        if (this.banners.length === 0) return;
-                        this.bannerIndex = (this.bannerIndex + 1) % this.banners.length;
-                        this.bannerText = this.banners[this.bannerIndex];
-                    }, 7000);
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
@@ -1119,21 +1121,6 @@
                     } catch (e) { /* Không đổi trạng thái nếu lỗi mạng */ }
                 },
 
-                // Lấy hoạt động THẬT gần đây (rút tiền được duyệt, jackpot, mời bạn thành công, nhập code...)
-                // để chạy lên banner toàn server, thay cho dữ liệu ảo hardcode trước đây.
-                async fetchActivityFeed() {
-                    try {
-                        const res = await fetch(`${API_URL}/api/activity-feed`);
-                        const data = await res.json();
-                        if (data.messages && data.messages.length > 0) {
-                            this.banners = data.messages;
-                            this.bannerIndex = 0;
-                            this.bannerText = this.banners[0];
-                        } else {
-                            this.bannerText = '📦 Kho Hàng đang hoạt động, hãy giao hàng và mời bạn để nhận thưởng!';
-                        }
-                    } catch (e) { console.error('Lỗi lấy activity feed:', e); }
-                },
                 async checkGroupMembership(silent = false) {
                     if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
                     try {
@@ -1514,7 +1501,6 @@
                     setTimeout(() => {
                         if (chosen.type === 'order' && chosen.value === 100000) {
                             this.showNotification('💎 CHÚC MỪNG! JACKPOT 100.000 Đơn Hàng!');
-                            fetch(`${API_URL}/api/log-jackpot/${this.user.id}`, { method: 'POST' }).catch(() => {});
                         } else if (chosen.type !== 'none') {
                             this.showNotification('🎁 ' + rewardText);
                         } else {
@@ -1837,7 +1823,9 @@
                         const result = await res.json();
                         if (result.success) {
                             const vndAmount = this.withdrawVndAmount;
-                            this.orders -= this.withdrawOrdersAmount;
+                            // Lấy đúng giá trị server vừa lưu, KHÔNG tự trừ cục bộ nữa (nguồn gây lệch/âm đơn hàng trước đây)
+                            if (typeof result.orders === 'number') this.orders = result.orders;
+                            if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                             this.withdrawRemain--;
                             this.withdrawOrdersAmount = null;
                             this.withdrawBankName = '';
