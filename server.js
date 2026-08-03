@@ -205,15 +205,29 @@ async function logActivity(message) {
     }
 }
 
+// Ghi 1 dòng lịch sử biến động coin/đơn hàng của user (dùng cho lệnh /saoke). type: 'coin' | 'orders'.
+// amount có thể âm (bị trừ) hoặc dương (được cộng). Chỉ ghi được cho các thao tác SERVER BIẾT được lý do
+// cụ thể (lệnh admin, nhập code, mời bạn, rút tiền, thưởng BXH tuần, /thuhoi...) - các khoản coin/đơn hàng
+// người dùng tự kiếm trong game (giao hàng, nhiệm vụ, mở rương...) được tính hoàn toàn ở CLIENT và chỉ
+// đồng bộ TỔNG số cuối cùng lên server mỗi ~30s, nên server KHÔNG biết chính xác lý do riêng của khoản đó.
+async function logTransaction(userId, type, amount, reason) {
+    try {
+        await supabase.from('transactions').insert({ userId, type, amount, reason });
+    } catch (e) {
+        console.error('Lỗi ghi transactions:', e.message);
+    }
+}
+
 // Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
 // 1) Người được mời đã tham gia đủ nhóm Telegram bắt buộc
-// 2) Người được mời đã xem tối thiểu 3 quảng cáo (lifetimeAdsWatched >= 3)
-// 3) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
+// 2) Người được mời đã xem tối thiểu 5 quảng cáo (lifetimeAdsWatched >= 5)
+// 3) Người được mời đã bấm tối thiểu 2 SmartLink (lifetimeSmartlinks >= 2)
+// 4) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
 // Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
 // không tin tưởng dữ liệu client gửi lên.
 async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     const { data: userRecord, error: userError } = await supabase.from('users')
-        .select('id, name, referrerId, referrerCounted, lifetimeAdsWatched, isBanned')
+        .select('id, name, referrerId, referrerCounted, lifetimeAdsWatched, lifetimeSmartlinks, isBanned')
         .eq('id', userId).single();
     if (userError || !userRecord) return { ok: false, reason: 'user_not_found' };
     if (!userRecord.referrerId || userRecord.referrerId === userId) return { ok: false, reason: 'no_referrer' };
@@ -223,7 +237,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     const isMember = precomputedIsMember !== null ? precomputedIsMember : await checkUserMembership(userId);
     if (!isMember) return { ok: false, reason: 'not_member' };
 
-    if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
+    if ((userRecord.lifetimeAdsWatched || 0) < 5) return { ok: false, reason: 'not_enough_ads' };
+    if ((userRecord.lifetimeSmartlinks || 0) < 2) return { ok: false, reason: 'not_enough_smartlinks' };
 
     // FIX LỖI "MỜI 1 BẠN NHƯNG BÁO 2 HỢP LỆ" (race condition): hàm này có thể bị gọi gần như đồng thời từ
     // nhiều nơi (bot /start, nút "Xác Nhận" callback_query, và API /api/check-referral gọi mỗi lần user
@@ -281,6 +296,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         coins: (refUser.coins || 0) + INSTANT_REF_COINS,
         orders: (refUser.orders || 0) + INSTANT_REF_ORDERS
     });
+    logTransaction(userRecord.referrerId, 'coin', INSTANT_REF_COINS, `Mời bạn thành công: ${userRecord.name}`);
+    logTransaction(userRecord.referrerId, 'orders', INSTANT_REF_ORDERS, `Mời bạn thành công: ${userRecord.name}`);
 
     const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
     const nextMilestone = milestonesData.find(m => m.friends > newValid);
@@ -598,6 +615,7 @@ bot.command('congcoin', async (ctx) => {
     const { data, error } = await supabase.from('users').select('coins').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     await touchWallet(targetId, { coins: (data.coins || 0) + amount });
+    logTransaction(targetId, 'coin', amount, `Admin ${ctx.from.id} cộng coin (/congcoin)`);
     ctx.reply(`✅ Đã cộng ${amount} coin cho ${targetId}. Số dư mới: ${(data.coins || 0) + amount}`);
 });
 
@@ -612,6 +630,7 @@ bot.command('trucoin', async (ctx) => {
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     const newCoins = Math.max(0, (data.coins || 0) - amount);
     await touchWallet(targetId, { coins: newCoins });
+    logTransaction(targetId, 'coin', -amount, `Admin ${ctx.from.id} trừ coin (/trucoin)`);
     ctx.reply(`✅ Đã trừ ${amount} coin của ${targetId}. Số dư mới: ${newCoins}`);
 });
 
@@ -638,6 +657,7 @@ bot.command('adddonhang', async (ctx) => {
     const { data, error } = await supabase.from('users').select('orders').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     await touchWallet(targetId, { orders: (data.orders || 0) + amount });
+    logTransaction(targetId, 'orders', amount, `Admin ${ctx.from.id} cộng đơn hàng (/adddonhang)`);
     ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`);
 });
 
@@ -652,6 +672,7 @@ bot.command('trudonhang', async (ctx) => {
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
     const newOrders = Math.max(0, (data.orders || 0) - amount);
     await touchWallet(targetId, { orders: newOrders });
+    logTransaction(targetId, 'orders', -amount, `Admin ${ctx.from.id} trừ đơn hàng (/trudonhang)`);
     ctx.reply(`✅ Đã trừ ${amount} đơn hàng của ${targetId}. Số dư mới: ${newOrders}`);
 });
 
@@ -1005,6 +1026,8 @@ bot.command('thuhoi', async (ctx) => {
         const ok = await touchWallet(r.userId, { coins: newCoins, orders: newOrders, spins: newSpins });
         if (ok) {
             successCount++;
+            if (r.rewardCoin) logTransaction(r.userId, 'coin', -(r.rewardCoin || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
+            if (r.rewardOrders) logTransaction(r.userId, 'orders', -(r.rewardOrders || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
             safeSendMessage(r.userId,
                 `⚠️ Mã code \`${code}\` bạn đã nhập trước đây vừa bị *Admin thu hồi*.\n🪙 -${r.rewardCoin || 0} Coin | 📦 -${r.rewardOrders || 0} Đơn hàng | 🎡 -${r.rewardSpins || 0} Lượt mở rương\n(Số dư không thể âm nên nếu bạn đã tiêu hết, phần đã tiêu không thể trừ thêm).`,
                 { parse_mode: 'Markdown' }
@@ -1019,6 +1042,64 @@ bot.command('thuhoi', async (ctx) => {
     await supabase.from('giftcodes').update({ usedCount: 0 }).eq('code', code);
 
     ctx.reply(`✅ Đã thu hồi mã \`${code}\`.\n👥 Thành công: ${successCount} user\n❌ Lỗi: ${failCount} user\n📋 Đã xoá lịch sử nhập, mã có thể được nhập lại từ đầu.`, { parse_mode: 'Markdown' });
+});
+
+// /saoke <userId> <coin|donhang> - Xem lịch sử biến động coin/đơn hàng của 1 user, từ những việc nào.
+// LƯU Ý: chỉ hiển thị các khoản mà SERVER biết rõ lý do (lệnh admin, nhập code, mời bạn, rút tiền, thưởng
+// BXH tuần, /thuhoi...). Các khoản user tự kiếm trong game (giao hàng, nhiệm vụ, mở rương, xem QC...) được
+// tính hoàn toàn ở CLIENT, server chỉ nhận tổng số cuối cùng mỗi ~30s nên KHÔNG có lý do chi tiết để hiển thị.
+bot.command('saoke', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 3 || !['coin', 'donhang'].includes(parts[2])) {
+        return ctx.reply("❌ Sử dụng: /saoke <userId> <coin|donhang>");
+    }
+    const targetId = parts[1];
+    const type = parts[2] === 'donhang' ? 'orders' : 'coin';
+    const typeLabel = type === 'orders' ? 'Đơn Hàng' : 'Coin';
+
+    const { data: user } = await supabase.from('users').select('name, coins, orders').eq('id', targetId).single();
+    if (!user) return ctx.reply("❌ Không tìm thấy user.");
+
+    const { data: rows, error } = await supabase.from('transactions')
+        .select('amount, reason, createdAt').eq('userId', targetId).eq('type', type)
+        .order('createdAt', { ascending: false }).limit(100);
+    if (error) {
+        console.error('Lỗi lấy transactions cho /saoke:', error.message);
+        return ctx.reply("❌ Lỗi lấy sao kê (có thể DB chưa chạy migration bảng transactions).");
+    }
+    if (!rows || rows.length === 0) {
+        return ctx.reply(`📭 Không có lịch sử biến động ${typeLabel} nào được ghi nhận cho user ${targetId} (${user.name || 'N/A'}).\n\nLưu ý: chỉ các khoản admin/hệ thống biết rõ lý do (lệnh admin, nhập code, mời bạn, rút tiền, thưởng tuần...) mới được ghi lại - các khoản tự kiếm trong game (giao hàng, nhiệm vụ, mở rương) không có chi tiết riêng.`);
+    }
+
+    const currentBalance = type === 'orders' ? (user.orders || 0) : (user.coins || 0);
+    const header = `📊 *Sao kê ${typeLabel} của ${user.name || 'N/A'} (${targetId})*\n💰 Số dư hiện tại: *${currentBalance.toLocaleString()}*\n📋 ${rows.length} biến động gần nhất (mới nhất trước):\n\n`;
+
+    const entries = rows.map(r => {
+        const sign = r.amount >= 0 ? '➕' : '➖';
+        const time = r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'N/A';
+        return `${sign} ${Math.abs(r.amount).toLocaleString()} - ${r.reason || 'Không rõ'}\n🕒 ${time}\n---\n`;
+    });
+
+    // Chia thành nhiều tin nhắn nhỏ (dùng lại cách xử lý đã sửa ở /donrutall) để không bao giờ bị cắt cụt dữ liệu
+    const chunks = [];
+    let current = header;
+    for (const entry of entries) {
+        if ((current + entry).length > 3500) {
+            chunks.push(current);
+            current = entry;
+        } else {
+            current += entry;
+        }
+    }
+    if (current.trim()) chunks.push(current);
+
+    for (let i = 0; i < chunks.length; i++) {
+        const pageInfo = chunks.length > 1 ? `\n📄 (Trang ${i + 1}/${chunks.length})` : '';
+        await ctx.reply(chunks[i] + pageInfo, { parse_mode: 'Markdown' }).catch(async () => {
+            await ctx.reply(chunks[i] + pageInfo).catch(() => {});
+        });
+    }
 });
 
 // /checkID
@@ -1199,11 +1280,33 @@ bot.command('donrutall', async (ctx) => {
         }
     }
     
-    // Telegram message limit is 4096 characters for Markdown
-    if (msg.length > 4000) {
-        msg = msg.substring(0, 4000) + "\n... (tin nhắn quá dài, hãy kiểm tra trên web admin hoặc lấy thêm chi tiết từng đơn)";
+    // FIX LỖI: trước đây khi tin nhắn > 4000 ký tự thì CẮT BỎ toàn bộ phần còn lại (mất dữ liệu các đơn
+    // rút phía sau), chỉ báo "quá dài, kiểm tra web admin" - trong khi không có web admin thật để xem chi
+    // tiết, nghĩa là các đơn đó không thể xem được nữa. Giờ chia thành NHIỀU tin nhắn nhỏ (mỗi tin ≤ 3500
+    // ký tự, luôn cắt đúng ranh giới giữa 2 đơn rút nhờ dấu "---\n", không cắt giữa 1 đơn) và gửi lần lượt,
+    // đảm bảo không mất bất kỳ đơn rút nào dù có bao nhiêu đơn đang chờ.
+    const header = `📋 *Danh sách ${data.length} đơn rút CHỜ DUYỆT:*\n`;
+    const entries = msg.replace(header, '').split('---\n').filter(e => e.trim());
+    const chunks = [];
+    let current = header;
+    for (const entry of entries) {
+        const withEntry = entry + '---\n';
+        if ((current + withEntry).length > 3500) {
+            chunks.push(current);
+            current = withEntry;
+        } else {
+            current += withEntry;
+        }
     }
-    ctx.reply(msg, { parse_mode: 'Markdown' });
+    if (current.trim()) chunks.push(current);
+
+    for (let i = 0; i < chunks.length; i++) {
+        const pageInfo = chunks.length > 1 ? `\n📄 (Trang ${i + 1}/${chunks.length})` : '';
+        await ctx.reply(chunks[i] + pageInfo, { parse_mode: 'Markdown' }).catch(async (e) => {
+            console.error('Lỗi gửi trang donrutall, gửi lại không dùng Markdown:', e.message);
+            await ctx.reply(chunks[i] + pageInfo).catch(() => {}); // Fallback nếu Markdown bị lỗi ký tự đặc biệt
+        });
+    }
 });
 
 // /broadcast
@@ -1248,9 +1351,9 @@ function getWeekIdentifier(date) {
 
 // Phần thưởng mặc định cho Top 1-3 BXH mời bạn hàng tuần (có thể chỉnh lại số này theo ý muốn)
 const WEEKLY_TOP_REWARDS = [
-    { rank: 1, coins: 5000, orders: 15000, label: '🥇 Hạng 1' },
-    { rank: 2, coins: 3000, orders: 10000, label: '🥈 Hạng 2' },
-    { rank: 3, coins: 1500, orders: 5000, label: '🥉 Hạng 3' }
+    { rank: 1, orders: 100000, spins: 10, label: '🥇 Hạng 1' },
+    { rank: 2, orders: 50000, spins: 5, label: '🥈 Hạng 2' },
+    { rank: 3, orders: 25000, spins: 3, label: '🥉 Hạng 3' }
 ];
 
 async function weeklyLeaderboardReset() {
@@ -1269,16 +1372,17 @@ async function weeklyLeaderboardReset() {
             const u = topUsers[i];
             const prize = WEEKLY_TOP_REWARDS[i];
             if (!prize) break;
-            const { data: cur } = await supabase.from('users').select('coins, orders').eq('id', u.id).single();
+            const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
             await touchWallet(u.id, {
-                coins: (cur?.coins || 0) + prize.coins,
-                orders: (cur?.orders || 0) + prize.orders
+                orders: (cur?.orders || 0) + prize.orders,
+                spins: (cur?.spins || 0) + prize.spins
             });
+            logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
             await safeSendMessage(u.id,
-                `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.coins.toLocaleString()} Coin + ${prize.orders.toLocaleString()} Đơn Hàng*\n\nBXH đã được reset cho tuần mới, chúc bạn tiếp tục giữ vững phong độ!`,
+                `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới, chúc bạn tiếp tục giữ vững phong độ!`,
                 { parse_mode: 'Markdown' }
             );
-            logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này, nhận ${prize.coins.toLocaleString()} Coin + ${prize.orders.toLocaleString()} Đơn Hàng`);
+            logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này, nhận ${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương`);
         }
 
         // Reset weeklyValidInvites về 0 cho TẤT CẢ user để bắt đầu tuần thi đua mới công bằng
@@ -1488,15 +1592,21 @@ app.post('/api/check-referral/:id', async (req, res) => {
         // đồng bộ gần nhất - dùng chung cơ chế walletUpdatedAt/clientWalletSyncedAt như API lưu user)
         // TRƯỚC khi chạy kiểm tra, đảm bảo điều kiện luôn được xét trên dữ liệu mới nhất.
         const clientAdsWatched = parseInt(req.body?.lifetimeAdsWatched);
+        const clientSmartlinks = parseInt(req.body?.lifetimeSmartlinks);
         const clientWalletSyncedAt = req.body?.clientWalletSyncedAt;
-        if (!isNaN(clientAdsWatched) && clientAdsWatched > 0) {
+        if ((!isNaN(clientAdsWatched) && clientAdsWatched > 0) || (!isNaN(clientSmartlinks) && clientSmartlinks > 0)) {
             const { data: cur } = await supabase.from('users')
-                .select('lifetimeAdsWatched, walletUpdatedAt').eq('id', userId).single();
+                .select('lifetimeAdsWatched, lifetimeSmartlinks, walletUpdatedAt').eq('id', userId).single();
             if (cur) {
                 const dbWalletTime = cur.walletUpdatedAt ? new Date(cur.walletUpdatedAt).getTime() : 0;
                 const clientTime = clientWalletSyncedAt ? new Date(clientWalletSyncedAt).getTime() : 0;
-                if (dbWalletTime <= clientTime && clientAdsWatched > (cur.lifetimeAdsWatched || 0)) {
-                    await supabase.from('users').update({ lifetimeAdsWatched: clientAdsWatched }).eq('id', userId);
+                if (dbWalletTime <= clientTime) {
+                    const syncUpdate = {};
+                    if (!isNaN(clientAdsWatched) && clientAdsWatched > (cur.lifetimeAdsWatched || 0)) syncUpdate.lifetimeAdsWatched = clientAdsWatched;
+                    if (!isNaN(clientSmartlinks) && clientSmartlinks > (cur.lifetimeSmartlinks || 0)) syncUpdate.lifetimeSmartlinks = clientSmartlinks;
+                    if (Object.keys(syncUpdate).length > 0) {
+                        await supabase.from('users').update(syncUpdate).eq('id', userId);
+                    }
                 }
             }
         }
@@ -1519,14 +1629,14 @@ app.post('/api/withdraw', async (req, res) => {
     if (!userId || !method || !accountNumber || !ordersAmount) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ thông tin rút tiền." });
     }
-    if (ordersAmount < 20000) { // Mức rút tối thiểu: 20.000 Đơn Hàng (2.000 VNĐ)
-        return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 20.000 Đơn Hàng (2.000 VNĐ)." });
+    if (ordersAmount < 50000) { // Mức rút tối thiểu: 50.000 Đơn Hàng (5.000 VNĐ)
+        return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 50.000 Đơn Hàng (5.000 VNĐ)." });
     }
     if (method === 'bank' && (!bankName || !accountName)) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ tên ngân hàng và tên chủ tài khoản." });
     }
 
-    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned, name').eq('id', userId).single();
+    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned, name, adsToday, smartlinksToday').eq('id', userId).single();
     if (userFetchError || !userData) {
         console.error("Lỗi lấy user khi rút tiền:", userFetchError);
         return res.status(404).json({ error: "User not found or database error." });
@@ -1534,11 +1644,15 @@ app.post('/api/withdraw', async (req, res) => {
     if (userData.isBanned) {
         return res.status(403).json({ error: "Tài khoản đã bị khóa." });
     }
+    // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận
+    if ((userData.adsToday || 0) < 10 || (userData.smartlinksToday || 0) < 5) {
+        return res.status(400).json({ error: `Chưa đủ điều kiện: cần xem ≥10 QC hôm nay (hiện ${userData.adsToday || 0}/10) và bấm ≥5 SmartLink hôm nay (hiện ${userData.smartlinksToday || 0}/5).` });
+    }
     if (userData.orders < ordersAmount) {
         return res.status(400).json({ error: "Không đủ đơn hàng để rút số lượng này." });
     }
 
-    // Tỉ lệ quy đổi: 20.000 Đơn Hàng = 2.000 VNĐ => 1 Đơn Hàng = 0,1 VNĐ
+    // Tỉ lệ quy đổi: 1 Đơn Hàng = 0,1 VNĐ (mức rút tối thiểu: 50.000 Đơn Hàng = 5.000 VNĐ)
     const amountVnd = Math.floor(ordersAmount * 0.1);
     const newOrders = userData.orders - ordersAmount;
     const methodLabel = method === 'bank' ? (bankName || 'Ngân hàng') : (method === 'momo' ? 'Momo' : 'ZaloPay');
@@ -1576,6 +1690,7 @@ app.post('/api/withdraw', async (req, res) => {
             txCode
         });
         if (withdrawInsertError) throw withdrawInsertError;
+        logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
         // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT và Chủ TK (chỉ hiện 2 ký tự đầu, còn lại che bằng ****)
         const maskText = (txt) => {
@@ -1714,9 +1829,12 @@ app.post('/api/redeem-code', async (req, res) => {
     if (!walletOk) {
         return res.status(500).json({ error: "Lỗi khi cộng thưởng cho người dùng." });
     }
+    if (rewardCoin) logTransaction(userId, 'coin', rewardCoin, `Nhập code "${code}"`);
+    if (rewardOrders) logTransaction(userId, 'orders', rewardOrders, `Nhập code "${code}"`);
 
     // KHÔNG còn ghi vào activity_log / banner toàn server nữa: việc nhập code + phần thưởng nhận được giờ
     // là RIÊNG TƯ, chỉ chính user đó thấy được qua "Lịch sử nhập code" (GET /api/redeem-history/:userId).
+    // (logTransaction ở trên là để admin xem qua /saoke, khác với banner công khai)
 
     res.json({ 
         success: true, 
