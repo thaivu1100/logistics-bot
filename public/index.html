@@ -47,6 +47,12 @@
         .chest-open { animation: chestOpen 0.5s ease-out; }
         @keyframes chestOpen { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
         .maintenance-truck-icon { animation: maintenanceBob 1.6s ease-in-out infinite; }
+        .loading-box-bounce { animation: maintenanceBob 1.4s ease-in-out infinite; }
+        .loading-dots span { display: inline-block; animation: maintenanceHop 1.2s ease-in-out infinite; }
+        .loading-dots span:nth-child(2) { animation-delay: 0.15s; }
+        .loading-dots span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes loadingBarMove { 0% { transform: translateX(-100%); } 50% { transform: translateX(0%); } 100% { transform: translateX(100%); } }
+        .loading-bar-anim { width: 60%; animation: loadingBarMove 1.3s ease-in-out infinite; }
         @keyframes maintenanceBob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-10px) rotate(3deg); } }
         .maintenance-dots span { display: inline-block; animation: maintenanceHop 1.2s ease-in-out infinite; }
         .maintenance-dots span:nth-child(2) { animation-delay: 0.15s; }
@@ -171,6 +177,20 @@
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
+
+    <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user) -->
+    <div x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-[10001] bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
+        <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
+        <div class="relative w-16 h-16 neon-blue rounded-2xl flex items-center justify-center text-3xl mb-5 loading-box-bounce">📦</div>
+        <div class="relative flex gap-2 text-2xl mb-4 loading-dots">
+            <span>🚚</span><span>📦</span><span>🏭</span>
+        </div>
+        <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1">Kho Hàng Kiếm Tiền</h2>
+        <p class="relative text-xs text-slate-400" x-text="texts.loadingText || 'Đang tải dữ liệu...'"></p>
+        <div class="relative w-40 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden">
+            <div class="h-full bg-blue-500 loading-bar-anim"></div>
+        </div>
+    </div>
 
     <div x-show="notification.show" x-transition class="banner-notification" x-text="notification.text" @click="notification.show = false"></div>
 
@@ -723,7 +743,8 @@
                 inviteeMustTitle: 'Người được mời phải:', currentProgress: '📊 Tiến độ hiện tại:',
                 totalInvited: 'Tổng đã mời:', validLabel: 'Hợp lệ:', claimBtn: 'NHẬN', claimedBtn: '✅ ĐÃ NHẬN',
                 exchangeRateLine: '💱 Tỉ lệ quy đổi: 50.000 Đơn Hàng = 5.000 VNĐ (1 Đơn Hàng = 0,1 VNĐ)', minWithdrawLine: 'Rút tối thiểu: 5.000 VNĐ (50.000 Đơn Hàng)',
-                bankLabel: '🏦 Ngân hàng', momoLabel: '💗 Momo', zalopayLabel: '💙 ZaloPay',
+                bankLabel: '🏛️ Ngân hàng', momoLabel: '💎 MoMo', zalopayLabel: '🔹 ZaloPay',
+                loadingText: '📦 Đang tải dữ liệu kho hàng...',
                 bankNamePlaceholder: 'Tên ngân hàng (VD: Vietcombank)', accountNamePlaceholder: 'Tên chủ tài khoản', accountNumberPlaceholder: 'Số tài khoản',
                 momoPhonePlaceholder: 'Số điện thoại Momo', zalopayPhonePlaceholder: 'Số điện thoại ZaloPay', ordersAmountPlaceholder: 'Số đơn hàng muốn rút (tối thiểu 50.000)',
                 convertedAmountLabel: '💰 Số tiền quy đổi:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
@@ -774,7 +795,8 @@
                 inviteeMustTitle: 'The invited friend must:', currentProgress: '📊 Current progress:',
                 totalInvited: 'Total invited:', validLabel: 'Valid:', claimBtn: 'CLAIM', claimedBtn: '✅ CLAIMED',
                 exchangeRateLine: '💱 Exchange rate: 50,000 Orders = 5,000 VND (1 Order = 0.1 VND)', minWithdrawLine: 'Minimum withdrawal: 5,000 VND (50,000 Orders)',
-                bankLabel: '🏦 Bank', momoLabel: '💗 Momo', zalopayLabel: '💙 ZaloPay',
+                bankLabel: '🏛️ Bank', momoLabel: '💎 MoMo', zalopayLabel: '🔹 ZaloPay',
+                loadingText: '📦 Loading warehouse data...',
                 bankNamePlaceholder: 'Bank name (e.g. Vietcombank)', accountNamePlaceholder: 'Account holder name', accountNumberPlaceholder: 'Account number',
                 momoPhonePlaceholder: 'Momo phone number', zalopayPhonePlaceholder: 'ZaloPay phone number', ordersAmountPlaceholder: 'Orders to withdraw (min. 20,000)',
                 convertedAmountLabel: '💰 Converted amount:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
@@ -804,6 +826,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
+                isAppLoading: true, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -925,7 +948,7 @@
                     // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
                     await this.checkMaintenanceLock();
                     setInterval(() => this.checkMaintenanceLock(), 15000);
-                    if (this.maintenanceLocked) return;
+                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
 
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
@@ -998,6 +1021,7 @@
                             this.walletSyncedAt = data.walletUpdatedAt || null;
                             if (data.isBanned) {
                                 this.bannedScreen = true;
+                                this.isAppLoading = false;
                                 return;
                             }
                             this.withdrawRemain = data.withdrawRemain ?? 1;
@@ -1051,6 +1075,11 @@
                         console.error("Lỗi kết nối DB hoặc tải dữ liệu user:", e); 
                         this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
                     }
+                    // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
+                    // màn loading nào - giờ tắt overlay loading ngay khi đã tải xong (hoặc lỗi) dữ liệu
+                    // chính của user, các bước còn lại (lưu IP, xếp hạng...) chạy ngầm phía sau không cần
+                    // người dùng phải chờ thêm.
+                    this.isAppLoading = false;
                     
                     // Check group membership for banner (only on mini-app load)
                     const memberStatus = await this.checkGroupMembership(true); // Pass true to only check, not show notification
