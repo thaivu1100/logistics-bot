@@ -318,7 +318,7 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
 // Middleware chặn TOÀN BỘ tương tác của user thường khi bot đang bị khoá bảo trì (admin vẫn dùng được
 // bình thường để có thể tự /mokhoabot mở lại). Đặt TRƯỚC mọi lệnh/handler khác để chặn sớm nhất.
 bot.use(async (ctx, next) => {
-    if (BOT_LOCKED && !isAdmin(ctx)) {
+    if (BOT_LOCKED && !isMainAdmin(ctx)) {
         if (ctx.callbackQuery) {
             await ctx.answerCbQuery(MAINTENANCE_MESSAGE, { show_alert: true }).catch(() => {});
         }
@@ -1422,13 +1422,22 @@ process.on('uncaughtException', (err) => {
 
 // API để Mini App kiểm tra trạng thái khoá bảo trì (KHÔNG bị chặn bởi middleware bên dưới)
 app.get('/api/lock-status', (req, res) => {
-    res.json({ locked: BOT_LOCKED, message: MAINTENANCE_MESSAGE });
+    // Admin CHÍNH (ID 6327666718) luôn bypass khóa bảo trì để có thể tự kiểm tra/test Mini App
+    const isMainAdminRequest = String(req.query.userId) === String(ADMIN_ID);
+    res.json({ locked: BOT_LOCKED && !isMainAdminRequest, message: MAINTENANCE_MESSAGE });
 });
 
-// Chặn toàn bộ API của Mini App khi bot đang bị khoá bảo trì (trừ chính API kiểm tra khoá ở trên và
-// các API dành cho Admin, để Admin vẫn thao tác được qua web /admin trong lúc bảo trì).
+// Lấy userId của người gọi API, thử nhiều nguồn khác nhau (query, body, hoặc đoạn cuối path dạng /api/xxx/:id)
+function extractRequestUserId(req) {
+    return req.query?.userId || req.body?.userId || req.body?.id || req.path.split('/').filter(Boolean).pop();
+}
+
+// Chặn toàn bộ API của Mini App khi bot đang bị khoá bảo trì (trừ chính API kiểm tra khoá ở trên, các API
+// dành cho Admin, và mọi request đến từ chính Admin CHÍNH - ID 6327666718 - để Admin luôn thao tác được
+// bình thường qua Mini App/web /admin trong lúc bảo trì).
 app.use('/api', (req, res, next) => {
     if (BOT_LOCKED && req.path !== '/lock-status' && !req.path.startsWith('/admin')) {
+        if (String(extractRequestUserId(req)) === String(ADMIN_ID)) return next();
         return res.status(503).json({ locked: true, error: MAINTENANCE_MESSAGE, message: MAINTENANCE_MESSAGE });
     }
     next();
