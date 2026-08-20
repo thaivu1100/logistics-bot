@@ -199,7 +199,7 @@
         <div class="text-6xl mb-4">❌</div>
         <h2 class="text-lg font-black text-red-400 uppercase mb-2" x-text="texts.bannedTitle"></h2>
         <p class="text-sm text-slate-300" x-text="texts.bannedDesc"></p>
-        <a href="https://t.me/noameazonus" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
+        <a href="https://t.me/dttb12" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
     </div>
 
     <!-- MÀN HÌNH BẢO TRÌ (khi Admin dùng /khoabot) - ưu tiên cao nhất, che toàn bộ Mini App -->
@@ -629,7 +629,7 @@
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-1 card-padding">
                     <p class="font-bold text-xs opacity-60">☎️ <span x-text="texts.contactAdmin"></span></p>
-                    <a href="https://t.me/noameazonus" target="_blank" class="block text-blue-400 text-sm">@noameazonus</a>
+                    <a href="https://t.me/dttb12" target="_blank" class="block text-blue-400 text-sm">@dttb12</a>
                     <a href="https://t.me/khohangkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.channel"></a>
                     <a href="https://t.me/khohangchatkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.group"></a>
                 </div>
@@ -945,9 +945,11 @@
                 async initApp() {
                     // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
                     // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
-                    // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
-                    await this.checkMaintenanceLock();
-                    setInterval(() => this.checkMaintenanceLock(), 15000);
+                    // NGOẠI LỆ: Admin CHÍNH (ID 6327666718) vẫn dùng được Mini App bình thường ngay cả khi
+                    // đang khoá bảo trì, để có thể tự kiểm tra/test trong lúc bảo trì.
+                    const tgUserForLockCheck = window.Telegram?.WebApp?.initDataUnsafe?.user;
+                    await this.checkMaintenanceLock(tgUserForLockCheck?.id);
+                    setInterval(() => this.checkMaintenanceLock(tgUserForLockCheck?.id), 15000);
                     if (this.maintenanceLocked) { this.isAppLoading = false; return; }
 
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
@@ -1156,9 +1158,9 @@
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
                 // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
                 // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
-                async checkMaintenanceLock() {
+                async checkMaintenanceLock(userId) {
                     try {
-                        const res = await fetch(`${API_URL}/api/lock-status`);
+                        const res = await fetch(`${API_URL}/api/lock-status${userId ? '?userId=' + userId : ''}`);
                         if (!res.ok) return;
                         const data = await res.json();
                         this.maintenanceLocked = !!data.locked;
@@ -1280,6 +1282,30 @@
                     }
                 },
                 // Xem QC Tăng Tốc x2: giảm 1 nửa thời gian chờ còn lại của mẻ hàng đang sản xuất
+                // Hàm xem QC nhận thưởng DÙNG CHUNG cho mọi nơi trong app (giao hàng, x2 đơn hàng, hộp quà,
+                // tăng tốc sản xuất, nhiệm vụ xem QC, mở rương, nâng cấp xe...). YÊU CẦU: phải ở lại xem QC
+                // tối thiểu 4 GIÂY mới được tính thưởng - nếu Promise của SDK quảng cáo trả về sớm hơn 4s
+                // (vd bị chặn quảng cáo, lỗi mạng, hoặc SDK trả về ngay lập tức) thì KHÔNG cộng thưởng, báo
+                // lỗi và bắt xem lại từ đầu.
+                watchRewardedAd(onSuccess, demoMessage) {
+                    const MIN_WATCH_MS = 4000;
+                    const startedAt = Date.now();
+                    const tryGrant = () => {
+                        if (Date.now() - startedAt < MIN_WATCH_MS) {
+                            this.showNotification('⚠️ Bạn cần xem QC tối thiểu 4 giây mới được tính thưởng! Vui lòng xem lại.');
+                            return;
+                        }
+                        onSuccess();
+                    };
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(tryGrant).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                        this.showNotification(demoMessage || '(Demo) Đang xem quảng cáo...');
+                        setTimeout(tryGrant, 4200); // Demo cũng mô phỏng đủ 4s để test đúng luồng thật
+                    }
+                },
                 speedUpProduction() {
                     if (this.currentProducts >= this.maxProducts) {
                         this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
@@ -1303,14 +1329,7 @@
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
                         this.saveState();
                     };
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(applyBoost).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                        this.showNotification('(Demo) Đang xem quảng cáo tăng tốc...');
-                        setTimeout(applyBoost, 1000);
-                    }
+                    this.watchRewardedAd(applyBoost, '(Demo) Đang xem quảng cáo tăng tốc...');
                 },
                 produceLoop() {
                     setInterval(() => {
@@ -1328,26 +1347,12 @@
                 },
                 deliverWithAd() {
                     if (this.isShipping || this.currentProducts <= 0) return;
-                    // Trigger ad and then animation
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(() => {
-                            this.adsToday++; // Count ad view
-                            this.checkTaskProgress('watchAd'); // Check progress for watchAd task
-                            this.onAdWatched();
-                            this.startDeliveryAnimation();
-                        }).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                         // Fallback for testing without actual ad
-                        this.showNotification('(Demo) Đang xem quảng cáo...');
-                        setTimeout(() => {
-                            this.adsToday++;
-                            this.checkTaskProgress('watchAd');
-                            this.onAdWatched();
-                            this.startDeliveryAnimation();
-                        }, 1000);
-                    }
+                    this.watchRewardedAd(() => {
+                        this.adsToday++; // Count ad view
+                        this.checkTaskProgress('watchAd'); // Check progress for watchAd task
+                        this.onAdWatched();
+                        this.startDeliveryAnimation();
+                    });
                 },
                 startDeliveryAnimation() {
                     this.showDeliveryAnimation = true;
@@ -1379,33 +1384,23 @@
                 },
                 confirmX2Ad() {
                     this.showX2Prompt = false;
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(() => {
-                            this.orders += this.pendingX2Amount;
-                            this.adsToday++; // Count this as another ad view
-                            this.checkTaskProgress('watchAd');
-                            this.onAdWatched();
-                            this.saveState();
-                            this.showNotification('📺 Xem AD thành công! Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
-                            this.pendingX2Amount = 0;
-                        }).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                            this.pendingX2Amount = 0;
-                        });
-                    } else {
-                        // Demo fallback
+                    this.watchRewardedAd(() => {
                         this.orders += this.pendingX2Amount;
-                        this.showNotification('📺 (Demo) Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
-                        this.adsToday++;
+                        this.adsToday++; // Count this as another ad view
                         this.checkTaskProgress('watchAd');
                         this.onAdWatched();
                         this.saveState();
+                        this.showNotification('📺 Xem AD thành công! Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
                         this.pendingX2Amount = 0;
-                    }
+                    });
                 },
                 skipX2Ad() { this.showX2Prompt = false; this.pendingX2Amount = 0; },
                 upgradeTruck() {
                     if (this.truckLevel >= 10 || this.coins < this.upgradeCost) return;
+                    // Bắt buộc xem QC trước khi nâng cấp (giống lúc ấn giao hàng), rồi mới thực sự trừ coin + nâng cấp
+                    this.watchRewardedAd(() => this.applyTruckUpgrade());
+                },
+                applyTruckUpgrade() {
                     this.coins -= this.upgradeCost;
                     this.truckLevel++;
                     const config = [
@@ -1426,6 +1421,9 @@
                         this.productionAmount = config[idx].amount;
                         this.maxProducts = config[idx].max;
                     }
+                    this.adsToday++;
+                    this.checkTaskProgress('watchAd');
+                    this.onAdWatched();
                     this.saveState();
                     this.showNotification('⬆️ Nâng cấp thành công! Xe: ' + this.truckName);
                 },
@@ -1449,31 +1447,13 @@
                 },
                 openCoinBoxWithAd() {
                     this.showCoinBoxModal = false;
-                    // FIX: trước đây dùng show_10406527('pop') - zone Popunder có tỉ lệ lấp đầy quảng cáo
-                    // thấp/không ổn định, khiến 1 số user hay bị báo "QC Đã Hết Hoặc Lỗi". Đổi sang dùng
-                    // chung zone Rewarded Video (show_11457064) đã chạy ổn định ở mọi nơi khác trong app.
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(() => {
-                            this.completeOpenCoinBox();
-                            this.adsToday++;
-                            this.checkTaskProgress('watchAd');
-                            this.onAdWatched();
-                            this.saveState();
-                        }).catch(e => {
-                            console.error('QC error:', e);
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                        // Demo fallback
-                        this.showNotification('(Demo) Đang xem quảng cáo cho hộp quà...');
-                        setTimeout(() => {
-                             this.completeOpenCoinBox();
-                             this.adsToday++;
-                             this.checkTaskProgress('watchAd');
-                             this.onAdWatched();
-                             this.saveState();
-                        }, 1000);
-                    }
+                    this.watchRewardedAd(() => {
+                        this.completeOpenCoinBox();
+                        this.adsToday++;
+                        this.checkTaskProgress('watchAd');
+                        this.onAdWatched();
+                        this.saveState();
+                    }, '(Demo) Đang xem quảng cáo cho hộp quà...');
                 },
                 completeOpenCoinBox() {
                     if (!this.coinBoxVisible) return;
@@ -1576,15 +1556,7 @@
                         this.showNotification('📺 +1 Lượt Mở Rương!');
                         this.saveState();
                     };
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(grantSpin).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                         // Demo fallback
-                        this.showNotification('(Demo) Đang xem quảng cáo...');
-                        setTimeout(grantSpin, 1000);
-                    }
+                    this.watchRewardedAd(grantSpin);
                 },
                 buyChestWithOrders() {
                     if (this.orders < 500) {
@@ -1710,14 +1682,7 @@
                         this.showNotification('📺 +100 Coin & +100 Đơn Hàng (' + this.bonusAdsToday + '/30)');
                         this.saveState();
                     };
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(grantReward).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                        this.showNotification('(Demo) Đang xem quảng cáo...');
-                        setTimeout(grantReward, 1000);
-                    }
+                    this.watchRewardedAd(grantReward);
                 },
                 // Removed checkAndClaimTask as it was redundant with claimTaskReward and completeTask
                 claimTaskReward(idx) {
@@ -1745,12 +1710,8 @@
                 handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink15');
                     if (!task || this.smartlinkStartTime <= 0) return;
-                    // FIX LỖI "ĐÃ ĐỦ 15 LẦN SMARTLINK VẪN CHO LÀM TIẾP VÀ NHẬN THÊM 500 COIN": chốt chặn CỨNG
-                    // ngay tại đây - nếu vì bất kỳ lý do gì (dữ liệu cũ chưa đồng bộ, task.done bị lệch...) mà
-                    // smartlinkCount đã >= 15 nhưng task.done vẫn chưa được đánh dấu true, dừng lại NGAY LẬP TỨC,
-                    // ép cờ done/claimable về đúng trạng thái đã hoàn thành và KHÔNG cộng thêm bất kỳ phần
-                    // thưởng nào nữa, thay vì chỉ dựa duy nhất vào việc kiểm tra "task.done" như code cũ.
-                    if ((this.smartlinkCount || 0) >= 15) {
+                    // Chốt chặn CỨNG: nếu đã đủ 30 lần trong ngày, dừng ngay, không cộng thêm bất kỳ thưởng nào.
+                    if ((this.smartlinkCount || 0) >= 30) {
                         task.done = true;
                         task.claimable = false;
                         this.smartlinkStartTime = 0;
@@ -1761,32 +1722,33 @@
                     if (task.done) { this.smartlinkStartTime = 0; return; }
                     const timeSpent = Date.now() - this.smartlinkStartTime;
                     this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
-                    if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
-                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 15); // Không bao giờ vượt quá 15
+                    if (timeSpent >= 5000) { // 5 giây
+                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 30); // Không bao giờ vượt quá 30
                         this.smartlinksToday = (this.smartlinksToday || 0) + 1;
                         this.lifetimeSmartlinks = (this.lifetimeSmartlinks || 0) + 1; // Đếm trọn đời, không reset theo ngày - dùng cho điều kiện mời bạn thành công
                         this.onSmartlinkWatched();
+                        // MỖI LẦN hoàn thành 1 SmartLink đều được thưởng NGAY: +25 Coin + 50 Đơn Hàng
+                        this.coins += 25;
+                        this.orders += 50;
                         this.saveState();
-                        if (this.smartlinkCount >= 15) {
+                        if (this.smartlinkCount >= 30) {
                             task.done = true;
-                            task.claimable = false; // Thưởng được cộng NGAY tại đây, không cần "claim" thêm lần nữa (tránh 1 nguồn thưởng thứ 2)
-                            this.coins += 500;
-                            this.spinFree += 2;
+                            task.claimable = false;
                             this.dailyTasks = [...this.dailyTasks];
                             this.saveState();
-                            this.showNotification('✅ Hoàn thành 15 SmartLink! Nhận 500 💰 + 2 🎡');
+                            this.showNotification('✅ Hoàn thành 30/30 SmartLink hôm nay! +25 💰 +50 📦 (lần cuối)');
                         } else {
-                            this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/15 SmartLink!`);
+                            this.showNotification(`✅ +25 💰 +50 📦 (${this.smartlinkCount}/30 SmartLink hôm nay)`);
                         }
                     } else {
-                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 10 giây để được tính!');
+                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 5 giây để được tính!');
                     }
                 },
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
                     if (!task || task.done) return;
                     if (task.id === 'smartlink15') {
-                        // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 15 lần (phòng trường hợp
+                        // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 30 lần (phòng trường hợp
                         // task.done chưa kịp cập nhật) hoặc đang có 1 vòng SmartLink khác chưa xử lý xong (chống
                         // bấm nhiều lần liên tiếp mở nhiều tab cùng lúc rồi cộng dồn thưởng sai).
                         if ((this.smartlinkCount || 0) >= 15) {
