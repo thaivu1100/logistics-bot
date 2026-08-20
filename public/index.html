@@ -22,11 +22,20 @@
       });
     </script>
     <!-- Đã bỏ zone quảng cáo Popunder (10406527) kém ổn định, toàn app giờ dùng chung 1 zone Rewarded Video -->
+
+    <!-- QC Popunder (chống chặn QC) -->
+    <script src="https://thatlobster.com/9f/b2/a0/9fb2a0b68b28febf048ccc93007c969c.js"></script>
+    <!-- Thanh xã hội QC (chống chặn QC) -->
+    <script src="https://thatlobster.com/c5/d4/82/c5d482f841680852f6e0215c17ad234b.js"></script>
+    <!-- Native Banner (async) -->
+    <script async="async" data-cfasync="false" src="https://thatlobster.com/405ba88e2f0cd4bcbbe4ed9cd2efe2ed/invoke.js"></script>
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
     <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
     <style>
         [x-cloak] { display: none !important; }
+        #banner-ad-top { max-width: 100vw; overflow: hidden; }
+        @media (max-width: 320px) { #banner-ad-top { margin: 5px -5px; } }
         html { -webkit-text-size-adjust: 100%; }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; padding-bottom: env(safe-area-inset-bottom, 0px); padding-top: env(safe-area-inset-top, 0px); }
         /* Đảm bảo icon (FontAwesome + emoji) luôn hiển thị đúng kích thước, không vỡ layout hay tràn ra ngoài trên bất kỳ thiết bị nào */
@@ -301,6 +310,22 @@
             </div>
         </header>
 
+        <!-- Banner 320x50 -->
+        <div id="banner-ad-top" style="text-align: center; padding: 10px 0; background: rgba(0,0,0,0.1); margin: 10px 0; max-width: 100vw; overflow: hidden;">
+            <script>
+                atOptions = {
+                    'key': '8ee7fbebb850f04e4e48dda69ae38579',
+                    'format': 'iframe',
+                    'height': 50,
+                    'width': 320,
+                    'params': {}
+                };
+            </script>
+            <script src="https://thatlobster.com/8ee7fbebb850f04e4e48dda69ae38579/invoke.js"></script>
+        </div>
+        <!-- Native Banner container -->
+        <div id="container-405ba88e2f0cd4bcbbe4ed9cd2efe2ed"></div>
+
         <main class="p-2 space-y-3">
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
@@ -335,7 +360,7 @@
                         <span x-text="texts.deliver"></span>
                         <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
                     </button>
-                    <button @click="upgradeTruck()" :disabled="truckLevel >= 10 || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= 10 || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
+                    <button @click="upgradeTruck()" :disabled="truckLevel >= 999 || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= 999 || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
                         <div class="flex items-center gap-2">
                             <span>🛠️</span>
                             <span x-text="texts.upgrade"></span>
@@ -916,17 +941,33 @@
                     { friends: 100, reward: '20,000 Đơn Hàng + 10 Lượt Mở Rương', coins: 0, orders: 20000, spins: 10, claimed: false }
                 ],
                 
+                // Công thức cấp độ xe (1-999) - PHẢI giống hệt calculateLevelStats() ở server.js, không được
+                // sửa bất kỳ con số nào trong các công thức này.
+                calculateLevelStats(level) {
+                    level = Math.max(1, Math.min(999, parseInt(level) || 1));
+                    const productionMinutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
+                    const productsPerDelivery = 100 + (level - 1) * 3;
+                    const maxWarehouse = 100 + (level - 1) * 5;
+                    const upgradeCost = level < 999 ? 400 + (level - 1) * 200 : 200000;
+                    return {
+                        level,
+                        productionMs: Math.round(productionMinutes * 60 * 1000),
+                        productsPerDelivery,
+                        maxWarehouse,
+                        upgradeCost
+                    };
+                },
                 get truckName() {
                     const names = ['', '🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh', '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
-                    return names[this.truckLevel] || '🚛 Xe';
+                    if (this.truckLevel <= 10) return names[this.truckLevel] || '🚛 Xe';
+                    return '🏆 Siêu xe Logistics Lv.' + this.truckLevel; // Cấp 11-999: giữ hình ảnh cao nhất, chỉ tăng số liệu
                 },
                 get truckIcon() {
                     const icons = ['', '🛵', '🛺', '🚐', '🚚', '🚛', '🚛', '🚛', '🚛', '🚛', '🏆'];
-                    return icons[this.truckLevel] || '🚛';
+                    return this.truckLevel <= 10 ? (icons[this.truckLevel] || '🚛') : '🏆';
                 },
                 get upgradeCost() {
-                    const costs = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000, 15000, 20000];
-                    return this.truckLevel < 10 ? costs[this.truckLevel] : 0;
+                    return this.truckLevel < 999 ? this.calculateLevelStats(this.truckLevel).upgradeCost : 0;
                 },
                 get withdrawProgress() {
                     const orderProgress = Math.min(this.orders / 50000, 1) * 0.7;
@@ -1000,38 +1041,44 @@
                     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
-                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
-                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
-                    // NGOẠI LỆ: Admin CHÍNH (ID 6327666718) vẫn dùng được Mini App bình thường ngay cả khi
-                    // đang khoá bảo trì, để có thể tự kiểm tra/test trong lúc bảo trì.
-                    const tgUserForLockCheck = window.Telegram?.WebApp?.initDataUnsafe?.user;
-                    await this.checkMaintenanceLock(tgUserForLockCheck?.id);
-                    setInterval(() => this.checkMaintenanceLock(tgUserForLockCheck?.id), 15000);
-                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
-
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
                     const savedDeviceId = localStorage.getItem('shipper_uid') || null;
 
+                    // FIX LỖI "ADMIN VÀO MINIAPP CHỈ HIỆN MÀN HÌNH ĐEN": trước đây bước kiểm tra khóa bảo trì
+                    // đọc window.Telegram.WebApp.initDataUnsafe.user NGAY LẬP TỨC (đồng bộ), trong khi phần
+                    // load user chính bên dưới lại dùng waitForTelegramUser() để CHỜ tối đa 1.5s cho Telegram
+                    // kịp bơm dữ liệu user vào trang (đúng như comment ở hàm waitForTelegramUser đã giải
+                    // thích). Vì bước kiểm tra khóa bảo trì chạy TRƯỚC và không chờ, nếu Telegram chưa kịp bơm
+                    // dữ liệu, ID admin đọc được là "undefined" -> server không nhận diện được là Admin chính
+                    // -> Admin bị tính như user thường -> nếu bot đang /khoabot thì chính Admin cũng bị khóa,
+                    // initApp() return sớm ngay tại đây -> không có gì được khởi tạo -> màn hình đen. Sửa
+                    // bằng cách dùng CHUNG cơ chế chờ waitForTelegramUser() trước khi kiểm tra khóa bảo trì.
+                    let earlyTgUser = null;
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
-                        const tgUser = await this.waitForTelegramUser();
-                        if (tgUser) {
-                            this.user.id = tgUser.id.toString();
-                            this.user.name = tgUser.first_name || 'Shipper';
-                            if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
-                            localStorage.setItem('shipper_uid', this.user.id);
-                        } else {
-                            // Không lấy được thông tin user từ Telegram lúc này -> DÙNG LẠI id đã lưu trên máy
-                            // (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ liệu" khi tải lại.
-                            this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
-                            this.user.name = 'Shipper Demo';
-                            localStorage.setItem('shipper_uid', this.user.id);
-                        }
+                        earlyTgUser = await this.waitForTelegramUser();
+                    }
+                    const lockCheckUserId = earlyTgUser?.id || savedDeviceId || null;
+
+                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
+                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
+                    // NGOẠI LỆ: Admin CHÍNH (ID 6327666718) vẫn dùng được Mini App bình thường ngay cả khi
+                    // đang khoá bảo trì, để có thể tự kiểm tra/test trong lúc bảo trì.
+                    await this.checkMaintenanceLock(lockCheckUserId);
+                    setInterval(() => this.checkMaintenanceLock(lockCheckUserId), 15000);
+                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
+
+                    if (earlyTgUser) {
+                        this.user.id = earlyTgUser.id.toString();
+                        this.user.name = earlyTgUser.first_name || 'Shipper';
+                        if (earlyTgUser.last_name) this.user.name += ' ' + earlyTgUser.last_name;
+                        localStorage.setItem('shipper_uid', this.user.id);
                     } else {
-                        // Không chạy trong Telegram (vd mở thẳng bằng trình duyệt) -> vẫn ưu tiên dùng lại id cũ
-                        // trên máy này để tải lại trang không bị mất dữ liệu.
+                        // Không lấy được thông tin user từ Telegram (hoặc không chạy trong Telegram) -> DÙNG LẠI
+                        // id đã lưu trên máy (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ
+                        // liệu" khi tải lại.
                         this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
                         this.user.name = 'Shipper Demo';
                         localStorage.setItem('shipper_uid', this.user.id);
@@ -1518,31 +1565,17 @@
                 },
                 skipX2Ad() { this.showX2Prompt = false; this.pendingX2Amount = 0; },
                 upgradeTruck() {
-                    if (this.truckLevel >= 10 || this.coins < this.upgradeCost) return;
+                    if (this.truckLevel >= 999 || this.coins < this.upgradeCost) return;
                     // Bắt buộc xem QC trước khi nâng cấp (giống lúc ấn giao hàng), rồi mới thực sự trừ coin + nâng cấp
                     this.watchRewardedAd(() => this.applyTruckUpgrade());
                 },
                 applyTruckUpgrade() {
                     this.coins -= this.upgradeCost;
                     this.truckLevel++;
-                    const config = [
-                        { interval: 30*60*1000, amount: 100, max: 100 },
-                        { interval: 28*60*1000, amount: 120, max: 120 },
-                        { interval: 26*60*1000, amount: 145, max: 145 },
-                        { interval: 24*60*1000, amount: 175, max: 175 },
-                        { interval: 22*60*1000, amount: 210, max: 210 },
-                        { interval: 20*60*1000, amount: 250, max: 250 },
-                        { interval: 18*60*1000, amount: 300, max: 300 },
-                        { interval: 16*60*1000, amount: 360, max: 360 },
-                        { interval: 14*60*1000, amount: 430, max: 430 },
-                        { interval: 12*60*1000, amount: 500, max: 500 }
-                    ];
-                    const idx = this.truckLevel - 1; // truckLevel 1 maps to config[0]
-                    if (idx < config.length) {
-                        this.productionInterval = config[idx].interval;
-                        this.productionAmount = config[idx].amount;
-                        this.maxProducts = config[idx].max;
-                    }
+                    const stats = this.calculateLevelStats(this.truckLevel);
+                    this.productionInterval = stats.productionMs;
+                    this.productionAmount = stats.productsPerDelivery;
+                    this.maxProducts = stats.maxWarehouse;
                     this.adsToday++;
                     this.checkTaskProgress('watchAd');
                     this.onAdWatched();
