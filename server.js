@@ -52,6 +52,39 @@ const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onren
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// ==================== HỆ THỐNG CẤP ĐỘ VÀ CÔNG THỨC (LEVEL 1-999) ====================
+/**
+ * Tính toán tất cả thống kê xe theo cấp độ (công thức LOCKED)
+ * Level 1-999 tuân theo công thức chính xác:
+ * - Thời gian: max(2, 30 / (1 + (level-1)*0.02)) phút
+ * - Sản phẩm/lần: 100 + (level-1)*3
+ * - Kho max: 100 + (level-1)*5
+ * - Chi phí nâng cấp: min(400 + (level-1)*200, 200000) coin
+ * - Lần giao/ngày: floor(1440 / thời gian)
+ * - Đơn hàng/ngày: lần_giao * sản_phẩm
+ */
+function calculateLevelStats(level) {
+    level = Math.max(1, Math.min(999, parseInt(level) || 1));
+    
+    const productionMinutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
+    const productsPerDelivery = 100 + (level - 1) * 3;
+    const maxWarehouse = 100 + (level - 1) * 5;
+    const upgradeCost = level < 999 ? 400 + (level - 1) * 200 : 200000;
+    const deliveriesPerDay = Math.floor(1440 / productionMinutes);
+    const ordersPerDay = deliveriesPerDay * productsPerDelivery;
+    
+    return {
+        level,
+        productionTime: Math.round(productionMinutes * 100) / 100,
+        productionMs: Math.round(productionMinutes * 60 * 1000),
+        productsPerDelivery,
+        maxWarehouse,
+        upgradeCost,
+        deliveriesPerDay,
+        ordersPerDay
+    };
+}
+
 // ==================== HỆ THỐNG ADMIN PHỤ (SUB-ADMIN) ====================
 // ADMIN_ID (hardcode) luôn là "Admin chính" - có toàn quyền, không ai xoá được.
 // Admin chính có thể phong thêm "admin phụ" bằng /addadmin <ID>, admin phụ dùng được TẤT CẢ lệnh admin
@@ -1498,7 +1531,7 @@ app.post('/api/save-ip/:id', async (req, res) => {
     res.json({ success: true });
 });
 
-// API lấy user
+// API lấy user (kèm level stats)
 app.get('/api/user/:id', async (req, res) => {
     const { data, error } = await supabase.from('users').select('*').eq('id', req.params.id).single();
     if (error || !data) {
@@ -1512,7 +1545,11 @@ app.get('/api/user/:id', async (req, res) => {
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
         data.referralMilestones = JSON.parse(data.referralMilestones);
     }
-    res.json(data);
+    
+    // Thêm level stats vào response
+    const levelStats = calculateLevelStats(data.truckLevel || 1);
+    
+    res.json({ ...data, levelStats });
 });
 
 // API cập nhật user. QUAN TRỌNG: các field "ví" (coins/orders/spins/truckLevel/isBanned) được đối chiếu
@@ -1575,15 +1612,80 @@ app.post('/api/user/:id', async (req, res) => {
             if (fresh && fresh.referralMilestones && typeof fresh.referralMilestones === 'string') {
                 fresh.referralMilestones = JSON.parse(fresh.referralMilestones);
             }
-            return res.json({ success: true, walletOverridden: true, wallet: fresh });
+            const levelStats = calculateLevelStats(fresh.truckLevel || 1);
+            return res.json({ success: true, walletOverridden: true, wallet: fresh, levelStats });
         }
 
-        res.json({ success: true, walletOverridden: false, walletUpdatedAt: updateData.walletUpdatedAt });
+        // Lấy dữ liệu cập nhật mới nhất để trả về level stats
+        const { data: updated } = await supabase.from('users').select('truckLevel').eq('id', userId).single();
+        const levelStats = calculateLevelStats(updated?.truckLevel || 1);
+        
+        res.json({ success: true, walletOverridden: false, walletUpdatedAt: updateData.walletUpdatedAt, levelStats });
     } catch (e) {
         console.error("Lỗi API cập nhật user:", e);
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
+// ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
+
+// API kiểm tra xem delivery này có cần CAPTCHA không (random 1-3 lần đầu tiên)
+app.post('/api/delivery/check-captcha', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+        if (!user) return res.status(404).json({ error: 'User không tồn tại' });
+        
+        // Tracking delivery count - random CAPTCHA on 1-3 deliveries
+        const deliveryCount = (user.deliveryCount || 0) + 1;
+        const requiresCaptcha = deliveryCount >= 1 && deliveryCount <= 3 && Math.random() < 0.4;
+        
+        await supabase.from('users').update({ deliveryCount }).eq('id', userId);
+        
+        res.json({
+            requiresCaptcha,
+            deliveryCount,
+            captchaCode: requiresCaptcha ? Math.random().toString(36).substring(2, 8).toUpperCase() : null
+        });
+    } catch (e) {
+        console.error('Lỗi check CAPTCHA delivery:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// API xác thực CAPTCHA trước khi cho phép rút tiền
+app.post('/api/withdraw/captcha-verify', async (req, res) => {
+    try {
+        const { userId, captchaInput, captchaCode } = req.body;
+        const verified = captchaInput.toUpperCase() === captchaCode;
+        
+        if (verified) {
+            await supabase.from('users').update({ lastCaptchaAt: new Date().toISOString() }).eq('id', userId);
+        }
+        
+        res.json({ verified });
+    } catch (e) {
+        console.error('Lỗi xác thực CAPTCHA:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// API theo dõi xem QC (dùng cho in-app ads & banner tracking)
+app.post('/api/ad/impression', async (req, res) => {
+    try {
+        const { userId, adType, zone } = req.body;
+        if (!userId || !adType) return res.status(400).json({ error: 'Missing userId or adType' });
+        
+        // Log ad impression (optional - có thể store vào table analytics nếu cần)
+        console.log(`[AD] ${adType} zone ${zone} - user ${userId}`);
+        
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ==================== END CAPTCHA & AD TRACKING ====================
 
 // API kiểm tra và xác nhận mời bạn hợp lệ (gọi từ frontend mỗi khi user xem QC)
 app.post('/api/check-referral/:id', async (req, res) => {
