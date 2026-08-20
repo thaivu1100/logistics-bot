@@ -9,6 +9,18 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
+    <script>
+      window.__inAppAdCfg = { type: 'inApp', inAppSettings: { Frequency: 2, capping: 0.1, interval: 30, timeout: 5, EveryPage: false } };
+      window.addEventListener('load', function () {
+        try {
+          if (typeof show_11457064 === 'function') {
+            setTimeout(function () {
+              show_11457064({ type: 'inApp', inAppSettings: { Frequency: 2, capping: 0.1, interval: 30, timeout: 5, EveryPage: false } });
+            }, 5000);
+          }
+        } catch (e) {}
+      });
+    </script>
     <!-- Đã bỏ zone quảng cáo Popunder (10406527) kém ổn định, toàn app giờ dùng chung 1 zone Rewarded Video -->
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
@@ -337,6 +349,28 @@
                     <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
                     <span class="text-sm font-black" x-text="user.joinDate"></span>
                 </div>
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-black uppercase opacity-60">🧠 Quiz Hàng Ngày</h3>
+                        <span class="text-[10px] font-black text-yellow-400" x-text="quizPaidToday + '/4'">0/4</span>
+                    </div>
+                    <p class="text-[9px] text-slate-400">Mỗi ngày: 4 câu hỏi qua QC + 1 câu hỏi miễn phí. Đúng +200 💰 + 1 lượt mở rương.</p>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <button @click="openQuiz('free')" :disabled="quizFreeUsedToday" class="py-2 rounded-xl bg-emerald-600/30 border border-emerald-500 text-emerald-300 text-[9px] font-black uppercase disabled:opacity-40">💡 Miễn phí</button>
+                        <button @click="openQuiz('paid')" :disabled="quizPaidToday >= 4" class="py-2 rounded-xl bg-blue-600/30 border border-blue-500 text-blue-300 text-[9px] font-black uppercase disabled:opacity-40">📺 QC</button>
+                    </div>
+                    <div x-show="showQuizModal && activeQuiz" class="fixed inset-0 z-[5000] bg-slate-950/95 flex items-center justify-center p-4">
+                        <div class="w-full max-w-sm rounded-[28px] border border-yellow-500/30 bg-slate-900 p-4 shadow-2xl">
+                            <div class="text-center text-xs font-black uppercase text-yellow-400 mb-2">Câu hỏi <span x-text="activeQuiz.mode === 'free' ? 'miễn phí' : 'qua QC'"></span></div>
+                            <h4 class="text-sm font-black leading-relaxed mb-3" x-text="activeQuiz.q"></h4>
+                            <div class="space-y-2">
+                                <template x-for="(opt, i) in activeQuiz.a" :key="i">
+                                    <button @click="submitQuizAnswer(opt)" class="w-full text-left px-3 py-2 rounded-xl bg-slate-800 border border-white/5 text-xs font-bold text-slate-200 hover:bg-slate-700"><span x-text="opt"></span></button>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- MỞ RƯƠNG -->
@@ -546,8 +580,8 @@
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 50.000'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 5'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 2'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 20'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 20'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
                     </div>
@@ -701,7 +735,30 @@
             "https://omg10.com/4/10406589", "https://omg10.com/4/10406570", "https://omg10.com/4/10406586",
             "https://omg10.com/4/10406538", "https://omg10.com/4/10406567", "https://omg10.com/4/10406588",
             "https://omg10.com/4/10406587", "https://omg10.com/4/10406592", "https://omg10.com/4/10406575",
-            "https://omg10.com/4/10406598", "https://omg10.com/4/10406577"
+            "https://omg10.com/4/10406598", "https://omg10.com/4/10406577",
+            "https://thatlobster.com/qeet7sp1ej?key=566f8d33076af8dda956a6226b69f3d5",
+            "https://thatlobster.com/qgj4qst7?key=13be5f4a8dd4a81b4cfc72d2a5cc2dea",
+            "https://thatlobster.com/sx11e8be7u?key=37d984173af681961a887443ecfd00fd",
+            "https://thatlobster.com/i049yxkw?key=f3579f5a7c31dce620279b187ed90a5c",
+            "https://thatlobster.com/htg7mu20?key=a01ff4e5e531578eeaac0648d4e2a3dd",
+            "https://thatlobster.com/rrab6x55?key=09cab93a5aaf2552b32f3814602d94b9",
+            "https://thatlobster.com/ut1vih9z?key=0029ffe34d48f1ce0d1504a2d59317f0",
+            "https://thatlobster.com/z7dr3r6q7?key=913493fe04b64f79220e0fb7b9d57e32",
+            "https://thatlobster.com/e3kfv622w?key=8ccef0990e58824a2d622375d11735fb",
+            "https://thatlobster.com/bqx020sv?key=00a314f6dc6f691f4b765f3d2ec06e85",
+            "https://thatlobster.com/iyqdc9ns?key=d251fa968f87328436a6c083cf6baf1a",
+            "https://thatlobster.com/qs1i0h9z0?key=e6ec51ee1270180b3b18d7e4f5c13ff0",
+            "https://thatlobster.com/tsmufkh4?key=aee6b9d937891432d40e28c9e0ca0cc6",
+            "https://thatlobster.com/j68qriqj?key=40bef72361d42e7ccdb12b8e7ea786f1",
+            "https://thatlobster.com/q0zpx1rxcw?key=d8fcdb5212100bff572648eb29d41527"
+        ];
+
+        const QUIZ_QUESTIONS = [
+            { q: 'Hành tinh nào gần Mặt Trời nhất?', a: ['A. Sao Kim', 'B. Sao Thủy', 'C. Trái Đất', 'D. Sao Hỏa'], correct: 'B. Sao Thủy' },
+            { q: 'Ai là người đầu tiên đặt chân lên Mặt Trăng?', a: ['A. Buzz Aldrin', 'B. Neil Armstrong', 'C. Yuri Gagarin', 'D. John Glenn'], correct: 'B. Neil Armstrong' },
+            { q: 'Năm 1945, Việt Nam tuyên bố độc lập vào ngày nào?', a: ['A. 2/9', 'B. 30/4', 'C. 19/5', 'D. 1/1'], correct: 'A. 2/9' },
+            { q: 'Cái gì bạn không cầm được dù có nắm chặt?', a: ['A. Cát', 'B. Nước', 'C. Gió', 'D. Tất cả đều đúng'], correct: 'B. Nước' },
+            { q: 'Nguyên tố hóa học nào có ký hiệu là “O”?', a: ['A. Oxy', 'B. Ozon', 'C. Oganesson', 'D. Osmium'], correct: 'A. Oxy' }
         ];
         
         const translations = {
@@ -838,7 +895,7 @@
                     { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, once: true },
-                    { id: 'smartlink15', name: '🔗 SmartLink 15 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'smartlink15', name: '🔗 SmartLink 30 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
@@ -1082,6 +1139,7 @@
                     // chính của user, các bước còn lại (lưu IP, xếp hạng...) chạy ngầm phía sau không cần
                     // người dùng phải chờ thêm.
                     this.isAppLoading = false;
+                    this.checkAdBlockStatus();
                     
                     // Check group membership for banner (only on mini-app load)
                     const memberStatus = await this.checkGroupMembership(true); // Pass true to only check, not show notification
@@ -1188,6 +1246,62 @@
                     }
                 },
                 
+                checkAdBlockStatus() {
+                    const blocked = typeof window.show_11457064 !== 'function';
+                    this.adblockDetected = blocked;
+                    if (blocked) {
+                        this.showNotification('⚠️ Trình chặn QC đang bật. Vui lòng tắt trình chặn quảng cáo để tiếp tục nhận thưởng!');
+                    }
+                    return blocked;
+                },
+                ensureCaptcha(label) {
+                    const value = Math.floor(Math.random() * 9) + 1;
+                    const answer = 7 + value;
+                    const input = window.prompt('CAPTCHA ' + label + ': 7 + ' + value + ' = ?');
+                    if (input === null) return false;
+                    return Number(input) === answer;
+                },
+                openQuiz(mode) {
+                    if (mode === 'free') {
+                        if (this.quizFreeUsedToday) {
+                            this.showNotification('⚠️ Hôm nay bạn đã dùng câu hỏi miễn phí rồi.');
+                            return;
+                        }
+                        this.activeQuiz = { ...QUIZ_QUESTIONS[Math.floor(Math.random() * QUIZ_QUESTIONS.length)], mode: 'free' };
+                        this.showQuizModal = true;
+                        return;
+                    }
+                    if (this.quizPaidToday >= 4) {
+                        this.showNotification('⚠️ Mỗi ngày chỉ trả lời tối đa 4 câu hỏi qua QC.');
+                        return;
+                    }
+                    this.watchRewardedAd(() => {
+                        this.adsToday = (this.adsToday || 0) + 1;
+                        this.onAdWatched();
+                        this.activeQuiz = { ...QUIZ_QUESTIONS[Math.floor(Math.random() * QUIZ_QUESTIONS.length)], mode: 'paid' };
+                        this.showQuizModal = true;
+                        this.showNotification('📺 Đã mở câu hỏi thưởng qua QC.');
+                    });
+                },
+                submitQuizAnswer(choice) {
+                    if (!this.activeQuiz) return;
+                    const correct = choice === this.activeQuiz.correct;
+                    if (this.activeQuiz.mode === 'paid') {
+                        this.quizPaidToday += 1;
+                    } else {
+                        this.quizFreeUsedToday = true;
+                    }
+                    if (correct) {
+                        this.coins += 200;
+                        this.spinFree += 1;
+                        this.showNotification('✅ Đúng! +200 💰 và +1 Lượt Mở Rương.');
+                    } else {
+                        this.showNotification('❌ Sai rồi! Không nhận thưởng cho câu này.');
+                    }
+                    this.showQuizModal = false;
+                    this.activeQuiz = null;
+                    this.saveState();
+                },
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
@@ -1267,7 +1381,9 @@
                         this.adsToday = 0; 
                         this.smartlinksToday = 0; 
                         this.bonusAdsToday = 0;
-                        this.withdrawRemain = 1;
+                        this.withdrawRemain = 20;
+                        this.quizFreeUsedToday = false;
+                        this.quizPaidToday = 0;
                         this.dailyTasks.forEach(t => { if (!t.once) { t.done = false; t.claimable = false; } });
                         this.allTasksClaimed = false; 
                         this.deliveryCount = 0; 
@@ -1375,6 +1491,12 @@
                     this.lastProducedAt = Date.now(); // Reset production timer
                     this.speedUpUsed = false; // Mẻ hàng mới sau khi giao -> cho phép Tăng Tốc X2 lại 1 lần
                     this.deliveryCount = (this.deliveryCount || 0) + 1;
+                    if (this.deliveryCount >= 2 && this.deliveryCount <= 4 && Math.random() < 0.5) {
+                        if (!this.ensureCaptcha('giao hàng')) {
+                            this.showNotification('❌ CAPTCHA sai, vui lòng thử lại giao hàng.');
+                            return;
+                        }
+                    }
                     this.checkTaskProgress('deliver');
                     this.saveState();
                     
@@ -1607,7 +1729,7 @@
                         case 'deliver5': cur = this.deliveryCount || 0; max = 5; break;
                         case 'deliver10': cur = this.deliveryCount || 0; max = 10; break;
                         case 'watch3ads': cur = this.adsToday || 0; max = 3; break;
-                        case 'smartlink15': cur = this.smartlinkCount || 0; max = 15; break;
+                        case 'smartlink15': cur = this.smartlinkCount || 0; max = 30; break;
                         case 'invite1': cur = this.validInvites || 0; max = 1; break;
                         default: return 0;
                     }
@@ -1619,7 +1741,7 @@
                         case 'deliver5': return Math.min(this.deliveryCount || 0, 5) + '/5';
                         case 'deliver10': return Math.min(this.deliveryCount || 0, 10) + '/10';
                         case 'watch3ads': return Math.min(this.adsToday || 0, 3) + '/3';
-                        case 'smartlink15': return Math.min(this.smartlinkCount || 0, 15) + '/15';
+                        case 'smartlink15': return Math.min(this.smartlinkCount || 0, 30) + '/30';
                         case 'invite1': return Math.min(this.validInvites || 0, 1) + '/1';
                         default: return '';
                     }
@@ -1751,7 +1873,7 @@
                         // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 30 lần (phòng trường hợp
                         // task.done chưa kịp cập nhật) hoặc đang có 1 vòng SmartLink khác chưa xử lý xong (chống
                         // bấm nhiều lần liên tiếp mở nhiều tab cùng lúc rồi cộng dồn thưởng sai).
-                        if ((this.smartlinkCount || 0) >= 15) {
+                        if ((this.smartlinkCount || 0) >= 30) {
                             task.done = true; task.claimable = false;
                             this.dailyTasks = [...this.dailyTasks]; this.saveState();
                             return;
@@ -1813,6 +1935,10 @@
                 async requestWithdraw() {
                     if (this.withdrawRemain <= 0) {
                         this.showNotification('❌ Bạn đã hết lượt rút tiền trong ngày!');
+                        return;
+                    }
+                    if (!this.ensureCaptcha('rút tiền')) {
+                        this.showNotification('❌ CAPTCHA sai, vui lòng kiểm tra lại trước khi rút tiền.');
                         return;
                     }
                     if (!this.withdrawEligible) {
