@@ -234,6 +234,87 @@
         </div>
     </div>
 
+    <!-- CONTAINER CHÍNH CỦA APP -->
+    <main class="main-container overflow-y-auto pb-32">
+        <!-- TRANG CHỦ (HOME) - PHẦN BỊ THIẾU -->
+        <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3">
+            <!-- Header thông tin người dùng -->
+            <div class="glass p-4 rounded-[25px] card-padding">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <p class="text-[10px] font-bold opacity-60" x-text="texts.nameLabel"></p>
+                        <p class="text-lg font-black" x-text="user.name"></p>
+                    </div>
+                    <div class="text-3xl">👤</div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-[9px]">
+                    <div><span class="opacity-60" x-text="texts.idLabel"></span><br><span class="font-black" x-text="user.id"></span></div>
+                    <div><span class="opacity-60" x-text="texts.joinDateIcon"></span><br><span class="font-black" x-text="user.joinDate || 'N/A'"></span></div>
+                </div>
+            </div>
+
+            <!-- Tài sản người dùng -->
+            <div class="glass p-3 rounded-[25px] card-padding">
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="text-center p-2 bg-yellow-600/20 rounded-xl">
+                        <p class="text-2xl font-black text-yellow-400" x-text="formatNumber(coins)"></p>
+                        <p class="text-[8px] font-black opacity-60">💰 COIN</p>
+                    </div>
+                    <div class="text-center p-2 bg-blue-600/20 rounded-xl">
+                        <p class="text-2xl font-black text-blue-400" x-text="formatNumber(orders)"></p>
+                        <p class="text-[8px] font-black opacity-60">📦 ĐƠN</p>
+                    </div>
+                    <div class="text-center p-2 bg-green-600/20 rounded-xl">
+                        <p class="text-2xl font-black text-green-400" x-text="spinFree"></p>
+                        <p class="text-[8px] font-black opacity-60">🎁 LƯỢT</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Xe vận chuyển -->
+            <div class="glass p-3 rounded-[25px] card-padding">
+                <p class="text-[10px] font-black uppercase opacity-60 mb-2" x-text="texts.truckLevelIcon + ' Xe Vận Chuyển'"></p>
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-black">LEVEL <span x-text="truckLevel"></span>/999</span>
+                    <span class="text-[9px] text-yellow-400" x-text="coins >= upgradeCost ? '💰 Đủ Coin' : '❌ Chưa đủ Coin'"></span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-[9px] mb-2">
+                    <div><span class="opacity-60">Thời gian/lần:</span><br><span class="font-black text-blue-400" x-text="productionTime + ' phút'"></span></div>
+                    <div><span class="opacity-60">Sản phẩm/lần:</span><br><span class="font-black text-blue-400" x-text="productionAmount"></span></div>
+                    <div><span class="opacity-60">Kho tối đa:</span><br><span class="font-black text-blue-400" x-text="maxProducts"></span></div>
+                    <div><span class="opacity-60">Chi phí nâng cấp:</span><br><span class="font-black text-yellow-400" x-text="formatNumber(upgradeCost) + ' 💰'"></span></div>
+                </div>
+                <button @click="upgradeTruck()" :disabled="coins < upgradeCost || truckLevel >= 999" class="w-full py-2 bg-yellow-600/30 border border-yellow-500 rounded-[25px] font-black text-[9px] uppercase text-yellow-400 hover:bg-yellow-600/50 transition disabled:opacity-40 btn-text" x-text="texts.upgrade"></button>
+            </div>
+
+            <!-- Sản xuất và giao hàng -->
+            <div class="glass p-3 rounded-[25px] card-padding">
+                <p class="text-[10px] font-black uppercase opacity-60 mb-2">📦 Sản Xuất & Giao Hàng</p>
+                <div class="mb-3">
+                    <div class="flex justify-between text-[9px] mb-1">
+                        <span x-text="'Kho: ' + currentProducts + ' / ' + maxProducts"></span>
+                        <span class="text-blue-400" x-text="timeTillNextProduction"></span>
+                    </div>
+                    <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
+                        <div class="h-full bg-blue-600 progress-bar" :style="'width: ' + productionProgress + '%'"></div>
+                    </div>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="speedUpProduction()" :disabled="currentProducts >= maxProducts || speedUpUsed || isShipping" class="flex-1 py-2 bg-red-600/30 border border-red-500 rounded-[25px] font-black text-[9px] uppercase text-red-400 hover:bg-red-600/50 transition disabled:opacity-40 btn-text" x-text="'⚡ TĂNG TỐC'"></button>
+                    <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="flex-1 py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[9px] uppercase text-green-400 hover:bg-green-600/50 transition disabled:opacity-40 btn-text" x-text="'🚚 GIAO HÀNG'"></button>
+                </div>
+            </div>
+
+            <!-- Hộp quà công cộng -->
+            <div x-show="coinBoxVisible" class="glass p-3 rounded-[25px] card-padding">
+                <p class="text-[10px] font-black uppercase opacity-60 mb-2">🎁 Hộp Quà May Mắn</p>
+                <div class="text-center mb-3">
+                    <div class="text-5xl mb-2 cursor-pointer float-box" @click="openCoinBoxWithAd()">🎁</div>
+                </div>
+                <button @click="openCoinBoxWithAd()" class="w-full py-2 bg-pink-600/30 border border-pink-500 rounded-[25px] font-black text-[9px] uppercase text-pink-400 hover:bg-pink-600/50 transition btn-text" x-text="'📺 NHẬN QUÀ'"></button>
+            </div>
+        </div>
+
     <!-- MODAL HỎI X2 ĐƠN HÀNG -->
     <!-- MỞ RƯƠNG -->
             <div x-show="tab === 'chest'" x-transition class="tab-enter space-y-3 text-center">
@@ -523,6 +604,22 @@
                         <option value="en">🇬🇧 English</option>
                     </select>
                 </div>
+                <!-- PHẦN BẬT/TẮT NHẠC -->
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-bold text-sm">🎵 Nhạc Nền</span>
+                        <button @click="toggleMusic()" class="px-3 py-1 rounded-xl text-sm font-black" :class="musicEnabled ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'" x-text="musicEnabled ? '🔊 BẬT' : '🔇 TẮT'"></button>
+                    </div>
+                    <div x-show="musicEnabled" class="space-y-1">
+                        <p class="text-[9px] opacity-60">Chọn bài nhạc:</p>
+                        <div class="space-y-1">
+                            <button @click="setCurrentMusic(0)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Hngle - Tìm em ft. Bảo Anh'"></button>
+                            <button @click="setCurrentMusic(1)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 1 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Đường Tôi Chở Em Về'"></button>
+                            <button @click="setCurrentMusic(2)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 2 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 24K.RIGHT - MỘT NỬA SỰ THẬT'"></button>
+                            <button @click="setCurrentMusic(3)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 3 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Dangrangto - Xương Rồng (Intro)'"></button>
+                        </div>
+                    </div>
+                </div>
                 <div class="glass p-3 rounded-[25px] space-y-1 card-padding">
                     <p class="font-bold text-xs opacity-60">☎️ <span x-text="texts.contactAdmin"></span></p>
                     <a href="https://t.me/dttb12" target="_blank" class="block text-blue-400 text-sm">@dttb12</a>
@@ -772,6 +869,7 @@
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
+                musicEnabled: false, currentMusicIndex: 0, // Bật/tắt nhạc và chỉ số bài nhạc
                 showCoinBoxModal: false, showX2Prompt: false, pendingX2Amount: 0, usedSmartlinks: [],
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
                 isTruckMoving: false, isShaking: false, isOpened: false, texts: translations.vi,
@@ -1000,6 +1098,8 @@
                             this.lastSmartlinkTime = data.lastSmartlinkTime || 0;
                             this.usedSmartlinks = data.usedSmartlinks || [];
                             this.referralMilestones = data.referralMilestones || this.referralMilestones;
+                            this.musicEnabled = data.musicEnabled || false;
+                            this.currentMusicIndex = data.currentMusicIndex || 0;
 
                             // Ensure milestones are parsed if they come as string
                             if (typeof this.referralMilestones === 'string') {
@@ -1600,19 +1700,27 @@
                             deliver10Task.claimable = true;
                         }
                     } else if (action === 'spin') {
-                        let spin1Task = this.dailyTasks.find(t => t.id === 'spin1');
-                        if (spin1Task && !spin1Task.done) { // Assuming spin1 means "spin at least once"
+                        let spin1Task = this.dailyTasks.find(t => t.id === 'spin10');
+                        if (spin1Task && !spin1Task.done && this.chestOpensToday >= 10) {
                             spin1Task.claimable = true;
                         }
                     } else if (action === 'watchAd') {
-                        let adTask = this.dailyTasks.find(t => t.id === 'watch3ads');
-                        if (adTask && !adTask.done && this.adsToday >= 3) {
-                            adTask.claimable = true;
+                        let ad5Task = this.dailyTasks.find(t => t.id === 'watch5ads');
+                        if (ad5Task && !ad5Task.done && this.adsToday >= 5) {
+                            ad5Task.claimable = true;
+                        }
+                        let ad10Task = this.dailyTasks.find(t => t.id === 'watch10ads');
+                        if (ad10Task && !ad10Task.done && this.adsToday >= 10) {
+                            ad10Task.claimable = true;
                         }
                     } else if (action === 'invite') {
-                        let inviteTask = this.dailyTasks.find(t => t.id === 'invite1');
-                        if (inviteTask && !inviteTask.done && this.validInvites >= 1) {
-                            inviteTask.claimable = true;
+                        let invite1Task = this.dailyTasks.find(t => t.id === 'invite1');
+                        if (invite1Task && !invite1Task.done && this.validInvites >= 1) {
+                            invite1Task.claimable = true;
+                        }
+                        let invite5Task = this.dailyTasks.find(t => t.id === 'invite5');
+                        if (invite5Task && !invite5Task.done && this.validInvites >= 5) {
+                            invite5Task.claimable = true;
                         }
                     }
                     this.dailyTasks = [...this.dailyTasks]; // Force Alpine to re-render array
@@ -1705,6 +1813,72 @@
                     };
                     this.watchRewardedAd(grantReward);
                 },
+                // Computed properties cho HOME tab
+                get upgradeCost() {
+                    const level = this.truckLevel || 1;
+                    return level < 999 ? 400 + (level - 1) * 200 : 200000;
+                },
+                get productionTime() {
+                    const level = this.truckLevel || 1;
+                    const minutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
+                    return Math.round(minutes * 100) / 100;
+                },
+                get productionProgress() {
+                    const elapsed = Date.now() - (this.lastProducedAt || Date.now());
+                    const interval = this.productionInterval || (30 * 60 * 1000);
+                    return Math.max(0, Math.min(100, Math.round((elapsed / interval) * 100)));
+                },
+                get timeTillNextProduction() {
+                    const elapsed = Date.now() - (this.lastProducedAt || Date.now());
+                    const interval = this.productionInterval || (30 * 60 * 1000);
+                    const remaining = Math.max(0, interval - elapsed);
+                    const minutes = Math.floor(remaining / 60000);
+                    const seconds = Math.floor((remaining % 60000) / 1000);
+                    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                },
+                get withdrawEligible() {
+                    return this.orders >= 50000 && (this.adsToday || 0) >= 10 && (this.smartlinksToday || 0) >= 5;
+                },
+                
+                // Hàm bật/tắt nhạc
+                toggleMusic() {
+                    this.musicEnabled = !this.musicEnabled;
+                    if (this.musicEnabled) {
+                        this.playCurrentMusic();
+                    } else {
+                        this.stopMusic();
+                    }
+                    this.saveState();
+                },
+                setCurrentMusic(index) {
+                    this.currentMusicIndex = index;
+                    if (this.musicEnabled) {
+                        this.stopMusic();
+                        this.playCurrentMusic();
+                    }
+                    this.saveState();
+                },
+                playCurrentMusic() {
+                    // Dừng nhạc cũ nếu có
+                    if (this.audioPlayer) {
+                        this.audioPlayer.pause();
+                    }
+                    const musicUrls = [
+                        'https://www.youtube.com/embed/abcd1234',
+                        'https://www.youtube.com/embed/efgh5678',
+                        'https://www.youtube.com/embed/ijkl9012',
+                        'https://www.youtube.com/embed/mnop3456'
+                    ];
+                    // Dùng Web Audio API hoặc tạo audio element để phát nhạc
+                    // Có thể dùng Spotify API, YouTube API, hoặc các dịch vụ nhạc khác
+                    console.log('Playing music:', musicUrls[this.currentMusicIndex]);
+                },
+                stopMusic() {
+                    if (this.audioPlayer) {
+                        this.audioPlayer.pause();
+                    }
+                },
+                
                 // Removed checkAndClaimTask as it was redundant with claimTaskReward and completeTask
                 claimTaskReward(idx) {
                     const task = this.dailyTasks[idx];
@@ -2053,6 +2227,8 @@
                         usedSmartlinks: this.usedSmartlinks,
                         referralMilestones: this.referralMilestones, // Ensure milestones are saved
                         clientWalletSyncedAt: this.walletSyncedAt, // Mốc ví client biết gần nhất, để server chống ghi đè thay đổi của admin
+                        musicEnabled: this.musicEnabled,
+                        currentMusicIndex: this.currentMusicIndex,
                     };
                     try {
                         const res = await fetch(`${API_URL}/api/user/${this.user.id}`, {
