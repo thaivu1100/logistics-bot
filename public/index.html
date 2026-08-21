@@ -235,170 +235,7 @@
     </div>
 
     <!-- MODAL HỎI X2 ĐƠN HÀNG -->
-    <div x-show="showX2Prompt" class="modal-overlay" x-cloak @click.self="skipX2Ad()">
-        <div class="modal-content">
-            <div class="text-6xl mb-3">🚚💨</div>
-            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.deliverySuccessTitle"></h3>
-            <p class="text-sm text-slate-300 mb-4"><span x-text="texts.x2Question"></span> <span class="text-yellow-400 font-black">X2</span> <span x-text="texts.x2Suffix"></span></p>
-            <div class="flex gap-2">
-                <button @click="skipX2Ad()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.noThanks"></button>
-                <button @click="confirmX2Ad()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdX2Now"></button>
-            </div>
-        </div>
-    </div>
-
-    <!-- COIN BOX CONFIRMATION MODAL -->
-    <div x-show="showCoinBoxModal" class="modal-overlay" x-cloak @click.self="showCoinBoxModal = false">
-        <div class="modal-content">
-            <div class="text-6xl mb-3">🎁</div>
-            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.coinBoxTitle"></h3>
-            <p class="text-sm text-slate-300 mb-4" x-text="texts.coinBoxDesc"></p>
-            <div class="flex gap-2">
-                <button @click="showCoinBoxModal = false" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.later"></button>
-                <button @click="openCoinBoxWithAd()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdGetGift"></button>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
-    <div x-show="showDeliveryAnimation" class="delivery-animation" x-transition>
-        <div class="delivery-scene">
-            <div class="factory">🏭</div>
-            <div class="conveyor">
-                <div class="box-on-conveyor">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: 0.5s">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: 1s">📦</div>
-            </div>
-            <div class="delivery-truck" :class="{ 'moving': isTruckMoving }" x-text="truckIcon"></div>
-            <div class="house">🏠</div>
-        </div>
-        <p class="text-white font-bold mt-4 animate-pulse" x-text="isTruckMoving ? '🚛 Đang vận chuyển đơn hàng đến nhà...' : '📦 Đang xếp hàng lên xe...'"></p>
-    </div>
-
-    <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
-    <div x-show="!joinedGroups && !dismissedJoinBanner" class="join-banner">
-        <div class="join-banner-close" @click="dismissedJoinBanner = true">✕</div>
-        <div class="font-black text-sm mb-1" x-text="texts.joinBannerTitle"></div>
-        <div class="text-[10px] opacity-90 mb-1" x-text="texts.joinBannerDesc"></div>
-        <div class="join-banner-btns">
-            <a href="https://t.me/khohangkiemtien" target="_blank" class="bg-blue-500 text-white" x-text="texts.channel"></a>
-            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="bg-yellow-500 text-slate-900" x-text="texts.group"></a>
-            <button @click="checkGroupMembership()" class="bg-green-500 text-white" x-text="texts.checkJoin"></button>
-        </div>
-    </div>
-
-    <!-- BANNER QUẢNG BÁ XEM QC X2 (chỉ hiện khi đã vào được app, có nút X để tắt) -->
-    <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
-        <div class="join-banner-close" @click="dismissedPromoBanner = true">✕</div>
-        <div class="font-black text-sm mb-1" x-text="texts.promoBannerTitle"></div>
-        <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
-    </div>
-
-    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
-        <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
-            <div class="flex items-center space-x-2">
-                <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦</div>
-                <div>
-                    <p class="font-bold text-xs tracking-tight flex items-center header-text"><span x-text="user.name || 'Shipper'"></span><span class="bg-blue-500/20 text-blue-400 text-[8px] px-2 py-0.5 rounded-full ml-2" x-text="'LV.' + truckLevel"></span></p>
-                    <p class="text-[7px] font-bold text-slate-500 tracking-widest mt-0.5 italic" x-text="'ID: ' + user.id"></p>
-                </div>
-            </div>
-            <div class="space-y-1">
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="font-black mr-1 text-blue-400" :class="ordersPopped ? 'value-pop' : ''" x-text="formatNumber(orders)"></span> 📦</div>
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></span></div>
-            </div>
-        </header>
-
-        <!-- Banner 320x50 -->
-        <div id="banner-ad-top" style="text-align: center; padding: 10px 0; background: rgba(0,0,0,0.1); margin: 10px 0; max-width: 100vw; overflow: hidden;">
-            <script>
-                atOptions = {
-                    'key': '8ee7fbebb850f04e4e48dda69ae38579',
-                    'format': 'iframe',
-                    'height': 50,
-                    'width': 320,
-                    'params': {}
-                };
-            </script>
-            <script src="https://thatlobster.com/8ee7fbebb850f04e4e48dda69ae38579/invoke.js"></script>
-        </div>
-        <!-- Native Banner container -->
-        <div id="container-405ba88e2f0cd4bcbbe4ed9cd2efe2ed"></div>
-
-        <main class="p-2 space-y-3">
-            <!-- TRANG CHỦ -->
-            <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
-                <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
-                <div class="p-4 rounded-[25px] neon-blue shadow-2xl relative overflow-hidden group card-padding">
-                    <h3 class="text-[9px] font-black uppercase opacity-60 tracking-[4px]" x-text="texts.warehouse"></h3>
-                    <h2 class="text-2xl font-black mt-1" x-text="texts.wallet"></h2>
-                    <div class="mt-4"><span class="text-3xl font-extrabold tracking-tighter italic text-neon" x-text="formatNumber(orders)"></span><span class="text-[9px] opacity-40 ml-2 font-black italic" x-text="texts.orders"></span></div>
-                    <div class="absolute -right-4 -bottom-4 text-[80px] opacity-10 group-hover:rotate-12 transition-all duration-700"></div>
-                </div>
-                <div class="glass p-3 rounded-[20px] flex justify-between items-center card-padding">
-                    <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + ' - ' + truckName"></p></div>
-                    <div class="text-right"><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.products"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
-                </div>
-                
-                <!-- BĂNG CHUYỀN SẢN XUẤT (hiện khi đang đếm ngược) -->
-                <div x-show="currentProducts > 0 && currentProducts < maxProducts && !isShipping" class="conveyor-belt-anim">
-                    <div class="conveyor-line"></div>
-                    <div class="conveyor-goods">📦</div>
-                    <div class="conveyor-goods" style="animation-delay: 1s;">📦</div>
-                    <div class="conveyor-goods" style="animation-delay: 2s;">📦</div>
-                    <div class="truck-mini" x-text="truckIcon"></div>
-                </div>
-                
-                <div class="grid grid-cols-2 gap-2">
-                    <div class="p-2 glass rounded-[20px] text-center card-padding"><p class="text-[6px] font-black uppercase opacity-40" x-text="texts.timeLeft"></p><p class="text-sm font-black text-blue-400" x-text="productionCountdown"></p></div>
-                    <div class="p-2 glass rounded-[20px] text-center card-padding"><p class="text-[6px] font-black uppercase opacity-40" x-text="texts.prodMax"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
-                </div>
-                <div class="space-y-2">
-                    <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="w-full py-3 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-base uppercase italic shadow-[0_6px_0_#b45309] active:translate-y-1 active:shadow-none transition-all disabled:opacity-40 disabled:translate-y-1 disabled:shadow-none flex items-center justify-center gap-2 btn-text">
-                        <span :class="!isShipping && currentProducts > 0 ? 'truck-idle' : ''">🚚</span>
-                        <span x-text="texts.deliver"></span>
-                        <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
-                    </button>
-                    <button @click="upgradeTruck()" :disabled="truckLevel >= 999 || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= 999 || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
-                        <div class="flex items-center gap-2">
-                            <span>🛠️</span>
-                            <span x-text="texts.upgrade"></span>
-                        </div>
-                        <span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span>
-                    </button>
-                    <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
-                    <button x-show="showX2Ad" @click="watchAdX2()" class="w-full py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[10px] uppercase text-green-400 hover:bg-green-600/50 transition btn-text" x-text="texts.watchAdX2Orders"></button>
-                </div>
-                <div class="p-3 glass rounded-[25px] flex justify-between items-center card-padding">
-                    <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
-                    <span class="text-sm font-black" x-text="user.joinDate"></span>
-                </div>
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-black uppercase opacity-60">🧠 Quiz Hàng Ngày</h3>
-                        <span class="text-[10px] font-black text-yellow-400" x-text="quizPaidToday + '/4'">0/4</span>
-                    </div>
-                    <p class="text-[9px] text-slate-400">Mỗi ngày: 4 câu hỏi qua QC + 1 câu hỏi miễn phí. Đúng +200 💰 + 1 lượt mở rương.</p>
-                    <div class="grid grid-cols-2 gap-2 mt-2">
-                        <button @click="openQuiz('free')" :disabled="quizFreeUsedToday" class="py-2 rounded-xl bg-emerald-600/30 border border-emerald-500 text-emerald-300 text-[9px] font-black uppercase disabled:opacity-40">💡 Miễn phí</button>
-                        <button @click="openQuiz('paid')" :disabled="quizPaidToday >= 4" class="py-2 rounded-xl bg-blue-600/30 border border-blue-500 text-blue-300 text-[9px] font-black uppercase disabled:opacity-40">📺 QC</button>
-                    </div>
-                    <div x-show="showQuizModal && activeQuiz" class="fixed inset-0 z-[5000] bg-slate-950/95 flex items-center justify-center p-4">
-                        <div class="w-full max-w-sm rounded-[28px] border border-yellow-500/30 bg-slate-900 p-4 shadow-2xl">
-                            <div class="text-center text-xs font-black uppercase text-yellow-400 mb-2">Câu hỏi <span x-text="activeQuiz.mode === 'free' ? 'miễn phí' : 'qua QC'"></span></div>
-                            <h4 class="text-sm font-black leading-relaxed mb-3" x-text="activeQuiz.q"></h4>
-                            <div class="space-y-2">
-                                <template x-for="(opt, i) in activeQuiz.a" :key="i">
-                                    <button @click="submitQuizAnswer(opt)" class="w-full text-left px-3 py-2 rounded-xl bg-slate-800 border border-white/5 text-xs font-bold text-slate-200 hover:bg-slate-700"><span x-text="opt"></span></button>
-                                </template>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- MỞ RƯƠNG -->
+    <!-- MỞ RƯƠNG -->
             <div x-show="tab === 'chest'" x-transition class="tab-enter space-y-3 text-center">
                 <h2 class="text-xl font-extrabold italic text-neon uppercase" x-text="texts.chestTitle"></h2>
                 <div class="glass p-3 rounded-[25px] relative card-padding">
@@ -913,15 +750,24 @@
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
                 lastResetDate: '', lastWeekReset: '',
+                weeklyAdsLeaderboard: [],
+                weeklyAdsLeaderboardReset: '',
+                adsLeaderboardResetTime: '',
+                deliveryAdsCountToday: 0,
+                weeklyAdsLeaderboard: [],
+                weeklyAdsLeaderboardReset: '',
+                adsLeaderboardResetTime: '',
+                deliveryAdsCountToday: 0,
                 dailyTasks: [
                     { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'watch5ads', name: '📺 Xem 5 QC', icon: '📺', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'watch10ads', name: '📺 Xem 10 QC', icon: '📺', reward: 500, rewardOrders: 0, rewardSpins: 1, done: false, claimable: false },
                     { id: 'deliver5', name: '🚚 Giao hàng 5 lần', icon: '🚚', reward: 200, rewardOrders: 20, rewardSpins: 0, done: false, claimable: false },
                     { id: 'deliver10', name: '🚚 Giao hàng 10 lần', icon: '🚚', reward: 400, rewardOrders: 40, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, once: true },
-                    { id: 'smartlink15', name: '🔗 SmartLink 30 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
+                    { id: 'invite1', name: '👥 Mời 1 bạn', icon: '👥', reward: 200, rewardOrders: 0, rewardSpins: 1, done: false, claimable: false },
+                    { id: 'invite5', name: '👥 Mời 5 bạn', icon: '👥', reward: 500, rewardOrders: 50, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'spin10', name: '🎁 Mở rương 10 lần', icon: '🎁', reward: 500, rewardOrders: 50, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'smartlink15', name: '🔗 SmartLink 30 lần (ở lại 4s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -1349,6 +1195,21 @@
                     this.activeQuiz = null;
                     this.saveState();
                 },
+                skipQuiz() {
+                    if (!this.activeQuiz) return;
+                    this.showQuizModal = false;
+                    this.activeQuiz = null;
+                    
+                    // Xem QC để nhận thưởng bất kể skip
+                    this.watchRewardedAd(() => {
+                        this.adsToday = (this.adsToday || 0) + 1;
+                        this.onAdWatched();
+                        this.coins += 100;
+                        this.showNotification('⏭️ Đã bỏ qua. +100 💰 từ QC (không cộng thưởng chính)');
+                        this.saveState();
+                    });
+                },
+
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
@@ -1421,7 +1282,9 @@
                 },
                 resetDailyIfNeeded() {
                     const today = new Date().toDateString();
-                    if (this.lastResetDate !== today) {
+                    const savedResetDate = localStorage.getItem('lastResetDate_' + this.user.id);
+                    
+                    if (savedResetDate !== today) {
                         this.spinFree = 1; 
                         this.spinAdCount = 0; 
                         this.spinAdProgress = 0;
@@ -1439,6 +1302,10 @@
                         this.lastSmartlinkTime = 0; 
                         this.usedSmartlinks = [];
                         this.lastResetDate = today;
+                        localStorage.setItem('lastResetDate_' + this.user.id, today);
+                        this.deliveryAdsCountToday = 0;
+                        localStorage.setItem('lastResetDate_' + this.user.id, today);
+                        this.deliveryAdsCountToday = 0;
                         const loginTask = this.dailyTasks.find(t => t.id === 'login');
                         if (loginTask) loginTask.claimable = true;
                         this.saveState();
@@ -1548,8 +1415,7 @@
                     this.saveState();
                     
                     this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(delivered) + ' Đơn hàng');
-                    this.pendingX2Amount = delivered;
-                    this.showX2Prompt = true;
+                    this.pendingX2Amount = 0;
                 },
                 confirmX2Ad() {
                     this.showX2Prompt = false;
@@ -2176,6 +2042,8 @@
                         lastResetDate: this.lastResetDate,
                         lastWeekReset: this.lastWeekReset,
                         dailyTasks: this.dailyTasks,
+                        deliveryAdsCountToday: this.deliveryAdsCountToday,
+                        deliveryAdsCountToday: this.deliveryAdsCountToday,
                         allTasksClaimed: this.allTasksClaimed,
                         deliveryCount: this.deliveryCount,
                         chestOpensTotal: this.chestOpensTotal,
