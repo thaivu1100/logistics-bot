@@ -174,6 +174,47 @@
         .cta-shine { position: relative; overflow: hidden; }
         .cta-shine::after { content: ''; position: absolute; top: 0; left: -75%; width: 50%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,255,255,0.35), transparent); animation: ctaShineMove 2.6s ease-in-out infinite; }
         @keyframes ctaShineMove { 0% { left: -75%; } 60%, 100% { left: 130%; } }
+
+        /* ==================== NÂNG CẤP ANIMATION TOÀN DIỆN ==================== */
+        /* Header "hô hấp" nhẹ theo nhịp, số dư nhấp nháy khi thay đổi */
+        @keyframes headerGlow { 0%, 100% { box-shadow: 0 8px 24px rgba(0,0,0,0.25); } 50% { box-shadow: 0 8px 32px rgba(37, 99, 235, 0.35); } }
+        header.glass { animation: headerGlow 5s ease-in-out infinite; }
+
+        /* Xe tải trang chủ chạy ngang nền卡片 trang chủ */
+        .hero-truck-track { position: absolute; left: 0; right: 0; bottom: 8px; height: 18px; overflow: hidden; opacity: 0.5; pointer-events: none; }
+        .hero-truck-track span { position: absolute; bottom: 0; font-size: 14px; animation: heroTruckRun 6s linear infinite; }
+        @keyframes heroTruckRun { 0% { left: -30px; } 100% { left: 100%; } }
+
+        /* Đáp án quiz: nổi khi hover, rung khi sai, nổ khi đúng */
+        .quiz-option { transition: transform 0.18s cubic-bezier(.34,1.56,.64,1), border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease; }
+        .quiz-option:active { transform: scale(0.96); }
+        .quiz-option.correct { animation: quizCorrect 0.6s cubic-bezier(.34,1.56,.64,1); border-color: #22c55e !important; background: rgba(34,197,94,0.18) !important; box-shadow: 0 0 18px rgba(34,197,94,0.4); }
+        .quiz-option.wrong { animation: quizWrong 0.45s ease; border-color: #ef4444 !important; background: rgba(239,68,68,0.15) !important; }
+        @keyframes quizCorrect { 0% { transform: scale(1); } 45% { transform: scale(1.08); } 100% { transform: scale(1); } }
+        @keyframes quizWrong { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-8px); } 40% { transform: translateX(8px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(5px); } }
+
+        /* Pháo giấy khi trả lời đúng / nhận thưởng lớn */
+        .confetti-piece { position: fixed; top: -12px; width: 9px; height: 14px; z-index: 9000; pointer-events: none; animation: confettiFall linear forwards; }
+        @keyframes confettiFall { 0% { transform: translateY(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(105vh) rotate(720deg); opacity: 0.1; } }
+
+        /* Mã CAPTCHA: chữ nghiêng ngẫu nhiên từng ký tự, khó bot đọc theo DOM */
+        .captcha-box { display: inline-flex; gap: 6px; align-items: center; justify-content: center; background: repeating-linear-gradient(45deg, #1e293b 0 8px, #0f172a 8px 16px); border: 1px dashed rgba(251,191,36,0.5); border-radius: 12px; padding: 10px 18px; user-select: none; cursor: pointer; }
+        .captcha-box span { font-family: 'Courier New', monospace; font-size: 24px; font-weight: 900; color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,0.55); display: inline-block; animation: captchaFloat 2.6s ease-in-out infinite; }
+        @keyframes captchaFloat { 0%, 100% { transform: translateY(0) rotate(var(--rot, 0deg)); } 50% { transform: translateY(-3px) rotate(calc(var(--rot, 0deg) * -1)); } }
+        .captcha-box.refreshing { animation: quizWrong 0.3s ease; }
+
+        /* Nút nhạc nổi: đĩa xoay khi đang phát, tĩnh khi tắt */
+        .music-fab { position: fixed; right: 12px; bottom: 76px; z-index: 4000; width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #1e293b, #0f172a); border: 1px solid rgba(251,191,36,0.4); display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+        .music-fab.playing { animation: musicSpin 3.2s linear infinite; border-color: #22c55e; box-shadow: 0 0 16px rgba(34,197,94,0.45); }
+        @keyframes musicSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Thanh tab BXH chuyển đổi Mời bạn / Xem QC */
+        .lb-toggle-btn { flex: 1; padding: 7px 4px; border-radius: 13px; font-size: 10px; font-weight: 900; text-transform: uppercase; transition: all 0.22s cubic-bezier(.34,1.56,.64,1); }
+        .lb-toggle-btn.active { background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(37,99,235,0.45); }
+
+        /* Số lượt quiz đếm ngược dạng "thùng hàng" */
+        .quiz-slot { width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); animation: fadeInUp 0.3s ease-out; }
+        .quiz-slot.used { opacity: 0.35; filter: grayscale(1); }
     </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -240,7 +281,56 @@
 
     </div>
 
-    <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
+        <!-- MODAL CAPTCHA: bắt buộc nhập đúng mã trước MỖI lần Giao Hàng / MỖI lần Rút Tiền -->
+        <div x-show="captchaShow" class="modal-overlay" x-cloak @click.self="closeCaptcha()">
+            <div class="modal-content">
+                <div class="text-5xl mb-2">🔐</div>
+                <h3 class="text-base font-black text-yellow-400 mb-1" x-text="captchaShow && captchaAction === 'withdraw' ? 'XÁC MINH RÚT TIỀN' : 'XÁC MINH GIAO HÀNG'"></h3>
+                <p class="text-[11px] text-slate-400 mb-3">Nhập chính xác mã bên dưới để tiếp tục</p>
+                <div class="captcha-box mb-3" :class="{ 'refreshing': captchaRefreshing }" @click="newCaptchaCode()">
+                    <template x-for="(ch, i) in captchaChars" :key="i">
+                        <span :style="'--rot:' + ch.rot + 'deg; animation-delay:' + (i * 0.13) + 's'" x-text="ch.ch"></span>
+                    </template>
+                </div>
+                <input type="text" x-model="captchaInput" @keyup.enter="verifyCaptcha()" placeholder="Nhập mã..." maxlength="5" autocomplete="off"
+                       class="w-full bg-slate-800 rounded-xl px-3 py-2.5 text-center text-lg font-black tracking-[6px] border border-white/10 uppercase mb-3" />
+                <div class="flex gap-2">
+                    <button @click="newCaptchaCode()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-xs">🔄 Đổi mã</button>
+                    <button @click="verifyCaptcha()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-xs">✅ Xác nhận</button>
+                </div>
+                <p x-show="captchaError" class="text-red-400 text-[11px] font-bold mt-2" x-text="captchaError"></p>
+            </div>
+        </div>
+
+        <!-- MODAL TRẢ LỜI CÂU HỎI (Quiz): hiện đầy đủ 4 đáp án A-B-C-D để chọn -->
+        <div x-show="quizModalShow" class="modal-overlay" x-cloak @click.self="quizModalShow = false">
+            <div class="modal-content" style="max-width: 340px;">
+                <div class="text-5xl mb-2">🧠</div>
+                <h3 class="text-base font-black text-yellow-400 mb-1">TRẢ LỜI CÂU HỎI</h3>
+                <p class="text-[10px] text-slate-400 mb-3">✅ Trả lời đúng: <span class="text-yellow-400 font-black">+200 💰 +1 🎁</span> · ❌ Sai: không nhận gì</p>
+                <p class="text-sm font-black text-white text-left leading-relaxed mb-4" x-text="quizCurrent ? quizCurrent.q : ''"></p>
+                <div class="space-y-2">
+                    <template x-for="(opt, i) in (quizCurrent ? quizCurrent.options : [])" :key="i">
+                        <button @click="answerQuiz(i)" class="quiz-option w-full text-left px-3 py-2.5 rounded-xl bg-slate-800/70 border border-white/10 text-sm font-bold flex items-center gap-2"
+                                :class="quizChosen === null ? '' : (quizChosen === i ? (quizIsCorrect ? 'correct' : 'wrong') : (i === quizCurrent.answer ? 'correct' : ''))">
+                            <span class="font-black text-blue-400" x-text="String.fromCharCode(65 + i) + '.'"></span>
+                            <span x-text="opt"></span>
+                        </button>
+                    </template>
+                </div>
+                <div class="flex gap-2 mt-4">
+                    <button @click="skipQuiz()" :disabled="quizChosen !== null" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-[11px] disabled:opacity-40">⏭️ Bỏ qua (Xem QC)</button>
+                    <button x-show="quizChosen !== null" @click="quizModalShow = false" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-[11px]">Đóng</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- NÚT NHẠC NỀN NỔI: chỉ BẬT/TẮT (không chọn bài), 4 bài tự phát lặp lại tuần tự -->
+        <button x-show="joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak @click="toggleMusic()" class="music-fab" :class="musicOn ? 'playing' : ''">
+            <span x-text="musicOn ? '🎶' : '🔇'"></span>
+        </button>
+
+        <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
     <div x-show="showDeliveryAnimation" class="delivery-animation" x-transition>
         <div class="delivery-scene">
             <div class="factory">🏭</div>
@@ -332,6 +422,27 @@
                     </button>
                     <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
                     <button x-show="showX2Ad" @click="watchAdX2()" class="w-full py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[10px] uppercase text-green-400 hover:bg-green-600/50 transition btn-text" x-text="texts.watchAdX2Orders"></button>
+                </div>
+                <!-- TRẢ LỜI CÂU HỎI: mỗi ngày 1 câu MIỄN PHÍ + 4 câu mở thêm bằng XEM QC. Đúng hoặc Bỏ qua (sau QC) = +200 xu +1 lượt mở rương. Sai = không nhận gì -->
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding border border-purple-500/30 bg-purple-900/10">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-black uppercase text-purple-300 flex items-center gap-1.5">🧠 Trả Lời Câu Hỏi</h3>
+                        <span class="text-[10px] font-black text-purple-300" x-text="quizSlotsUsed() + '/5 hôm nay'"></span>
+                    </div>
+                    <p class="text-[9px] text-slate-400">✅ Đúng hoặc Bỏ qua (xem QC): <span class="text-yellow-400 font-black">+200 💰 +1 🎁</span> · ❌ Sai: không nhận gì</p>
+                    <!-- 5 ô lượt: ô 1 miễn phí, 4 ô còn lại mở bằng xem QC -->
+                    <div class="flex items-center gap-1.5 justify-center py-1">
+                        <span class="quiz-slot" :class="quizFreeUsed ? 'used' : ''" x-text="quizFreeUsed ? '✅' : '🆓'"></span>
+                        <template x-for="i in 4" :key="i">
+                            <span class="quiz-slot" :class="quizAdUnlocked >= i ? 'used' : ''" x-text="quizAdUnlocked >= i ? '📺' : '🔒'"></span>
+                        </template>
+                    </div>
+                    <div class="flex flex-col gap-2">
+                        <button x-show="!quizFreeUsed" @click="openQuizFree()" class="cta-shine w-full py-2 bg-purple-600 border border-purple-400 rounded-[25px] font-black text-[10px] uppercase text-purple-100 hover:bg-purple-500 transition btn-text">🆓 TRẢ LỜI CÂU MIỄN PHÍ (1/NGÀY)</button>
+                        <button x-show="quizFreeUsed && quizAdUnlocked < 4 && !quizCurrent" @click="addQuizWithAd()" class="cta-shine w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition btn-text">➕ THÊM CÂU HỎI (XEM QC MỞ KHÓA) (<span x-text="(4 - quizAdUnlocked) + ' còn lại'"></span>)</button>
+                        <button x-show="quizCurrent" @click="quizModalShow = true" class="cta-shine w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-[10px] uppercase btn-text">🧠 ĐANG CÓ CÂU HỎI - TRẢ LỜI NGAY!</button>
+                        <p x-show="quizFreeUsed && quizAdUnlocked >= 4" class="text-center text-[10px] text-slate-500 italic font-bold">🎉 Bạn đã dùng hết 5 câu hỏi hôm nay. Quay lại vào ngày mai!</p>
+                    </div>
                 </div>
                 <div class="p-3 glass rounded-[25px] flex justify-between items-center card-padding">
                     <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
@@ -450,19 +561,47 @@
                     </div>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <!-- Chuyển đổi giữa BXH Mời Bạn và BXH Xem QC (cùng phần thưởng Top 1-3 hàng tuần) -->
+                    <div class="flex gap-1.5 p-1 bg-slate-800/60 rounded-2xl border border-white/5">
+                        <button @click="switchLeaderboard('invite')" class="lb-toggle-btn" :class="leaderboardMode === 'invite' ? 'active' : 'text-slate-400'">👥 Mời Bạn</button>
+                        <button @click="switchLeaderboard('ads')" class="lb-toggle-btn" :class="leaderboardMode === 'ads' ? 'active' : 'text-slate-400'">📺 Xem QC</button>
+                    </div>
                     <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.topPlayers"></h3>
-                    <template x-for="(r, idx) in rankList" :key="idx">
-                        <div class="flex items-center justify-between p-2 rounded-xl border border-white/5 transition-all stagger-item" :style="'animation-delay:' + (Math.min(idx, 15) * 45) + 'ms'" :class="r.rank === 1 ? 'rank-1' : r.rank === 2 ? 'rank-2' : r.rank === 3 ? 'rank-3' : 'bg-slate-800/40'">
-                            <div class="flex items-center space-x-2">
-                                <span class="text-base font-black" :class="r.rank <= 3 ? 'text-white' : 'text-slate-500'" x-text="r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : r.rank + '️⃣'"></span>
-                                <div>
-                                    <p class="text-xs font-black italic" x-text="r.name"></p>
-                                    <p class="text-[6px] font-black opacity-60" x-text="r.title"></p>
+                    <template x-if="leaderboardMode === 'invite'">
+                        <div class="space-y-2">
+                            <template x-for="(r, idx) in rankList" :key="idx">
+                                <div class="flex items-center justify-between p-2 rounded-xl border border-white/5 transition-all stagger-item" :style="'animation-delay:' + (Math.min(idx, 15) * 45) + 'ms'" :class="r.rank === 1 ? 'rank-1' : r.rank === 2 ? 'rank-2' : r.rank === 3 ? 'rank-3' : 'bg-slate-800/40'">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-base font-black" :class="r.rank <= 3 ? 'text-white' : 'text-slate-500'" x-text="r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : r.rank + '️⃣'"></span>
+                                        <div>
+                                            <p class="text-xs font-black italic" x-text="r.name"></p>
+                                            <p class="text-[6px] font-black opacity-60" x-text="r.title"></p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-xs font-black text-blue-400 italic" x-text="formatNumber(r.invites) + ' 👥'"></p>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="text-right">
-                                <p class="text-xs font-black text-blue-400 italic" x-text="formatNumber(r.invites) + ' 👥'"></p>
-                            </div>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="leaderboardMode === 'ads'">
+                        <div class="space-y-2">
+                            <template x-for="(r, idx) in qcRankList" :key="'qc' + idx">
+                                <div class="flex items-center justify-between p-2 rounded-xl border border-white/5 transition-all stagger-item" :style="'animation-delay:' + (Math.min(idx, 15) * 45) + 'ms'" :class="r.rank === 1 ? 'rank-1' : r.rank === 2 ? 'rank-2' : r.rank === 3 ? 'rank-3' : 'bg-slate-800/40'">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-base font-black" :class="r.rank <= 3 ? 'text-white' : 'text-slate-500'" x-text="r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : r.rank + '️⃣'"></span>
+                                        <div>
+                                            <p class="text-xs font-black italic" x-text="r.name"></p>
+                                            <p class="text-[6px] font-black opacity-60" x-text="r.title"></p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-xs font-black text-blue-400 italic" x-text="formatNumber(r.ads) + ' 📺'"></p>
+                                    </div>
+                                </div>
+                            </template>
+                            <p x-show="qcRankList.length === 0" class="text-center text-slate-500 text-xs italic py-3">Chưa có ai xem QC trong tuần này</p>
                         </div>
                     </template>
                     <div class="mt-2 text-center text-[7px] text-slate-400 italic" x-text="texts.resetSunday"></div>
@@ -626,6 +765,16 @@
                         <option value="vi">🇻🇳 Tiếng Việt</option>
                         <option value="en">🇬🇧 English</option>
                     </select>
+                </div>
+                <!-- NHẠC NỀN: chỉ BẬT/TẮT (không cho chọn bài). 4 bài tự phát lặp lại tuần tự -->
+                <div class="glass p-3 rounded-[25px] flex justify-between items-center card-padding">
+                    <div>
+                        <p class="text-sm font-black">🎵 Nhạc nền</p>
+                        <p class="text-[9px] text-slate-400" x-text="musicOn ? 'Đang phát - 4 bài lặp lại tuần tự' : 'Đã tắt'"></p>
+                    </div>
+                    <button @click="toggleMusic()" class="px-4 py-2 rounded-xl font-black text-xs transition"
+                            :class="musicOn ? 'bg-green-600 text-white shadow-lg shadow-green-600/30' : 'bg-slate-800 text-slate-400 border border-white/10'"
+                            x-text="musicOn ? '🔊 BẬT' : '🔇 TẮT'"></button>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-1 card-padding">
                     <p class="font-bold text-xs opacity-60">☎️ <span x-text="texts.contactAdmin"></span></p>
@@ -811,6 +960,23 @@
             }
         };
 
+        // 5 CÂU HỎI QUIZ MỖI NGÀY (answer = index đáp án đúng trong mảng options)
+        const QUIZ_QUESTIONS = [
+            { q: 'Hành tinh nào gần Mặt Trời nhất?', options: ['Sao Kim', 'Sao Thủy', 'Trái Đất', 'Sao Hỏa'], answer: 1 },
+            { q: 'Ai là người đầu tiên đặt chân lên Mặt Trăng?', options: ['Buzz Aldrin', 'Neil Armstrong', 'Yuri Gagarin', 'John Glenn'], answer: 1 },
+            { q: 'Năm 1945, Việt Nam tuyên bố độc lập vào ngày nào?', options: ['2/9', '30/4', '19/5', '1/1'], answer: 0 },
+            { q: 'Cái gì bạn không cầm được dù có nắm chặt?', options: ['Cát', 'Nước', 'Gió', 'Tất cả đều đúng'], answer: 2 },
+            { q: 'Nguyên tố hóa học nào có ký hiệu là "O"?', options: ['Oxy', 'Ozon', 'Oganesson', 'Osmium'], answer: 0 }
+        ];
+
+        // 4 BÀI NHẠC NỀN - tự phát lặp lại tuần tự (người dùng chỉ được BẬT/TẮT, không chọn bài)
+        const MUSIC_FILES = [
+            'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+            'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+            'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+            'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3'
+        ];
+
         function app() {
             return {
                 joinedGroups: false, // Mặc định là false để hiển thị banner khi mới vào
@@ -848,6 +1014,19 @@
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
                 isTruckMoving: false, isShaking: false, isOpened: false, texts: translations.vi,
                 botUsername: BOT_USERNAME, countdownText: '',
+
+                // ===== TRẢ LỜI CÂU HỎI (Quiz) =====
+                // Mỗi ngày: 1 câu MIỄN PHÍ + 4 câu mở thêm bằng XEM QC. Trả lời ĐÚNG hoặc bấm BỎ QUA (xem QC xong)
+                // = +200 Coin +1 lượt mở rương. Trả lời SAI = không nhận gì (kết thúc câu đó).
+                quizDate: '', quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
+                quizCurrent: null, quizModalShow: false, quizChosen: null, quizIsCorrect: false,
+                // ===== CAPTCHA: bắt buộc MỖI lần giao hàng + MỖI lần rút tiền =====
+                captchaShow: false, captchaCode: '', captchaChars: [], captchaInput: '', captchaError: '',
+                captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null,
+                // ===== NHẠC NỀN: chỉ bật/tắt, 4 bài phát lặp lại tuần tự =====
+                musicOn: false, musicTrack: 0, _musicEl: null,
+                // ===== BXH XEM QC (hàng tuần, reset Chủ Nhật 00:00 cùng BXH mời bạn) =====
+                leaderboardMode: 'invite', qcRankList: [],
                 
                 referralMilestones: [ // Updated referral rewards based on request
                     { friends: 5, reward: '1,000 Coin + 3,000 Đơn Hàng', coins: 1000, orders: 3000, spins: 0, claimed: false },
@@ -1047,6 +1226,10 @@
                             this.smartlinkCount = data.smartlinkCount || 0;
                             this.lastSmartlinkTime = data.lastSmartlinkTime || 0;
                             this.usedSmartlinks = data.usedSmartlinks || [];
+                            this.quizDate = data.quizDate || '';
+                            this.quizFreeUsed = !!data.quizFreeUsed;
+                            this.quizAdUnlocked = data.quizAdUnlocked || 0;
+                            this.quizUsedIds = Array.isArray(data.quizUsedIds) ? data.quizUsedIds : [];
                             this.referralMilestones = data.referralMilestones || this.referralMilestones;
 
                             // Ensure milestones are parsed if they come as string
@@ -1151,6 +1334,26 @@
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
+
+                    // ===== NHẠC NỀN: khôi phục lựa chọn BẬT/TẮT từ lần trước (lưu theo thiết bị) =====
+                    // Lưu ý autoplay: trình duyệt chỉ cho phát tiếng sau 1 thao tác chạm của người dùng,
+                    // nên nếu lần trước đang BẬT thì giờ cũng chỉ đánh dấu "đang bật" và tự chơi ngay khi có
+                    // thao tác chạm đầu tiên (nút nhạc hoặc bất kỳ cú click nào) - đây chính là cách sửa
+                    // lỗi "đã bật nhạc nhưng không có tiếng".
+                    this.musicOn = localStorage.getItem('shipper_music') === '1';
+                    if (this.musicOn) this.armMusicOnFirstTouch();
+
+                    // ===== BXH XEM QC: tải ngay lúc mở app =====
+                    this.initQcRankList();
+
+                    // ===== ĐẢM BẢO DỮ LIỆU KHÔNG MẤT KHI CHUYỂN TAB / TẮT MỞ LẠI =====
+                    // Lưu NGAY khi người dùng ẩn app (chuyển tab, thu nhỏ, khóa màn hình, vuốt tắt):
+                    // đăng ký cả visibilitychange + pagehide + beforeunload vì mỗi WebView Telegram
+                    // bắn khác nhau 1 trong các sự kiện này.
+                    const flushSave = () => { this.saveState(); };
+                    document.addEventListener('visibilitychange', () => { if (document.hidden) flushSave(); });
+                    window.addEventListener('pagehide', flushSave);
+                    window.addEventListener('beforeunload', flushSave);
                 },
                 
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
@@ -1273,6 +1476,13 @@
                         this.smartlinkCount = 0;
                         this.lastSmartlinkTime = 0; 
                         this.usedSmartlinks = [];
+                        // Reset TRẢ LỜI CÂU HỎI mỗi ngày: trả lại 1 câu miễn phí + 4 câu mở bằng QC
+                        this.quizFreeUsed = false;
+                        this.quizAdUnlocked = 0;
+                        this.quizUsedIds = [];
+                        this.quizCurrent = null;
+                        this.quizChosen = null;
+                        this.quizDate = today;
                         this.lastResetDate = today;
                         const loginTask = this.dailyTasks.find(t => t.id === 'login');
                         if (loginTask) loginTask.claimable = true;
@@ -1328,6 +1538,10 @@
                 },
                 deliverWithAd() {
                     if (this.isShipping || this.currentProducts <= 0) return;
+                    // Bắt buộc nhập đúng CAPTCHA trước MỖI lần giao hàng (chống bot/autoclick)
+                    this.startCaptcha('deliver', () => this.runDeliverAd());
+                },
+                runDeliverAd() {
                     // Trigger ad and then animation
                     if (typeof show_11457064 === 'function') {
                         show_11457064().then(() => {
@@ -1665,6 +1879,13 @@
                 onAdWatched() {
                     this.lifetimeAdsWatched = (this.lifetimeAdsWatched || 0) + 1;
                     this.checkReferralNow();
+                    // Cộng dồn 1 lượt vào BXH XEM QC TUẦN trên server (server tự tăng atomic để không
+                    // bị mất lượt khi nhiều request chồng chéo, và tự reset mỗi Chủ Nhật 00:00)
+                    fetch(`${API_URL}/api/ad/watched`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: this.user.id })
+                    }).catch(() => {});
                 },
                 // Gọi khi hoàn thành 1 smartlink - cũng là điều kiện mời bạn thành công (≥2 smartlink trọn đời)
                 onSmartlinkWatched() {
@@ -1874,7 +2095,10 @@
                         this.showNotification('❌ Vui lòng nhập số điện thoại nhận tiền.');
                         return;
                     }
-
+                    // Form đã hợp lệ -> Bắt buộc nhập đúng CAPTCHA trước khi GỬI MỖI yêu cầu rút tiền
+                    this.startCaptcha('withdraw', () => this.submitWithdraw());
+                },
+                async submitWithdraw() {
                     try {
                         const res = await fetch(`${API_URL}/api/withdraw`, {
                             method: 'POST',
