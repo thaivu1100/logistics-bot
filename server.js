@@ -2155,14 +2155,5 @@ app.get('/admin', async (req, res) => {
     </body></html>`);
 });
 
-// KHỞI ĐỘNG BOT - FIX LỖI "BOT KHÔNG PHẢN HỒI": Lệnh này là bắt buộc để bot bắt đầu nhận tin nhắn từ Telegram
-bot.launch({ polling: { allowed_updates: ['message', 'callback_query', 'pre_checkout_query'] } })
-    .then(() => console.log('✅ Bot Telegram đã khởi động (polling mode)'))
-    .catch(err => console.error('❌ Lỗi khởi động bot:', err));
-
-// Graceful shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server chính chạy trên port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
