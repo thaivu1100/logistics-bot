@@ -1019,7 +1019,14 @@
                 // Mỗi ngày: 1 câu MIỄN PHÍ + 4 câu mở thêm bằng XEM QC. Trả lời ĐÚNG hoặc bấm BỎ QUA (xem QC xong)
                 // = +200 Coin +1 lượt mở rương. Trả lời SAI = không nhận gì (kết thúc câu đó).
                 quizDate: '', quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
-                quizCurrent: null, quizModalShow: false, quizChosen: null, quizIsCorrect: false,
+                quizCurrent: null, quizModalShow: false, quizChosen: null, quizIsCorrect: false, quizPendingReward: false,
+                quizQuestions: [
+                    { q: 'Hành tinh nào gần Mặt Trời nhất?', options: ['Sao Kim', 'Sao Thủy', 'Trái Đất', 'Sao Hỏa'], answer: 1 },
+                    { q: 'Ai là người đầu tiên đặt chân lên Mặt Trăng?', options: ['Buzz Aldrin', 'Neil Armstrong', 'Yuri Gagarin', 'John Glenn'], answer: 1 },
+                    { q: 'Năm 1945, Việt Nam tuyên bố độc lập vào ngày nào?', options: ['2/9', '30/4', '19/5', '1/1'], answer: 0 },
+                    { q: 'Cái gì bạn không cầm được dù có nắm chặt?', options: ['Cát', 'Nước', 'Gió', 'Tất cả đều đúng'], answer: 3 },
+                    { q: 'Nguyên tố hóa học nào có ký hiệu là “O”?', options: ['Oxy', 'Ozon', 'Oganesson', 'Osmium'], answer: 0 }
+                ],
                 // ===== CAPTCHA: bắt buộc MỖI lần giao hàng + MỖI lần rút tiền =====
                 captchaShow: false, captchaCode: '', captchaChars: [], captchaInput: '', captchaError: '',
                 captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null,
@@ -1331,9 +1338,11 @@
                     let prevCoins = this.coins, prevOrders = this.orders;
                     this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
+                    this.$watch('tab', () => { this.saveState(); });
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
+                    setInterval(() => this.syncLatestUser(), 15000);
 
                     // ===== NHẠC NỀN: khôi phục lựa chọn BẬT/TẮT từ lần trước (lưu theo thiết bị) =====
                     // Lưu ý autoplay: trình duyệt chỉ cho phát tiếng sau 1 thao tác chạm của người dùng,
@@ -1341,6 +1350,7 @@
                     // thao tác chạm đầu tiên (nút nhạc hoặc bất kỳ cú click nào) - đây chính là cách sửa
                     // lỗi "đã bật nhạc nhưng không có tiếng".
                     this.musicOn = localStorage.getItem('shipper_music') === '1';
+                    this.loadQuizLocal();
                     if (this.musicOn) this.armMusicOnFirstTouch();
 
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
@@ -1452,6 +1462,28 @@
                         console.error('Lỗi tải bảng xếp hạng:', e);
                     }
                 },
+                async initQcRankList() {
+                    const titles = ['👑 Đại lý QC', '🚛 Chuyên gia QC', '🚚 Cao thủ QC', '📺 Thợ săn QC', '📺 Tài xế tích cực', '📦 Shipper chăm chỉ', '📦 Thành viên nổi bật', '📦 Shipper', '📦 Người xem QC', '📦 Tân binh'];
+                    try {
+                        const res = await fetch(`${API_URL}/api/leaderboard-ads`, { cache: 'no-store' });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        this.qcRankList = (data.leaderboard || []).map((u, idx) => ({
+                            rank: idx + 1,
+                            name: u.name || ('User ' + u.id),
+                            ads: u.adsCount || 0,
+                            title: titles[idx] || 'Người xem QC'
+                        }));
+                    } catch (e) {
+                        console.error('Lỗi tải BXH Xem QC:', e);
+                    }
+                },
+                switchLeaderboard(mode) {
+                    this.leaderboardMode = mode === 'ads' ? 'ads' : 'invite';
+                    if (this.leaderboardMode === 'ads') this.initQcRankList();
+                    else this.initRankList();
+                },
+                
                 getWeekIdentifier(date) {
                     // Mốc Chủ Nhật 00:00, khớp với server (weeklyLeaderboardReset) và đồng hồ đếm ngược "Reset vào 00:00 Chủ Nhật"
                     const d = new Date(date); d.setHours(0,0,0,0);
@@ -2238,6 +2270,294 @@
                 // trạng thái cũ dù người dùng đã thực sự hoàn thành. Cách fix: mọi lệnh gọi saveState() giờ
                 // được XẾP HÀNG (queue) và LUÔN CHỜ lệnh lưu trước đó xong rồi mới gửi lệnh tiếp theo, đảm bảo
                 // các request luôn tới server ĐÚNG THỨ TỰ và luôn dùng dữ liệu MỚI NHẤT tại thời điểm gửi.
+                // ==================== CAPTCHA ====================
+                newCaptchaCode() {
+                    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                    let code = '';
+                    for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
+                    this.captchaCode = code;
+                    this.captchaChars = [...code].map((ch, i) => ({ ch, rot: Math.round((Math.random() * 22) - 11), i }));
+                    this.captchaInput = '';
+                    this.captchaError = '';
+                    this.captchaRefreshing = true;
+                    setTimeout(() => { this.captchaRefreshing = false; }, 320);
+                },
+                startCaptcha(action, onSuccess) {
+                    this.captchaAction = action;
+                    this.captchaOnSuccess = onSuccess;
+                    this.captchaShow = true;
+                    this.newCaptchaCode();
+                    this.$nextTick(() => document.querySelector('.captcha-box')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                },
+                closeCaptcha() {
+                    this.captchaShow = false;
+                    this.captchaInput = '';
+                    this.captchaError = '';
+                    this.captchaOnSuccess = null;
+                },
+                verifyCaptcha() {
+                    const input = String(this.captchaInput || '').trim().toUpperCase();
+                    if (input.length !== 5 || input !== this.captchaCode) {
+                        this.captchaError = '❌ CAPTCHA không đúng. Vui lòng nhập lại!';
+                        this.newCaptchaCode();
+                        return;
+                    }
+                    const fn = this.captchaOnSuccess;
+                    this.closeCaptcha();
+                    if (typeof fn === 'function') Promise.resolve(fn()).catch(err => console.error('Captcha action error:', err));
+                },
+
+                // ==================== QUIZ ====================
+                quizTodayKey() { return new Date().toDateString(); },
+                ensureQuizDay() {
+                    const today = this.quizTodayKey();
+                    if (this.quizDate !== today) {
+                        this.quizDate = today;
+                        this.quizFreeUsed = false;
+                        this.quizAdUnlocked = 0;
+                        this.quizUsedIds = [];
+                        this.quizCurrent = null;
+                        this.quizChosen = null;
+                        this.quizIsCorrect = false;
+                        this.quizPendingReward = false;
+                        this.saveQuizLocal();
+                    }
+                },
+                quizSlotsUsed() {
+                    this.ensureQuizDay();
+                    return (this.quizFreeUsed ? 1 : 0) + Math.min(this.quizAdUnlocked || 0, 4);
+                },
+                nextQuizQuestion() {
+                    this.ensureQuizDay();
+                    const available = this.quizQuestions
+                        .map((q, i) => ({ q, i }))
+                        .filter(x => !this.quizUsedIds.includes(x.i));
+                    if (!available.length) return null;
+                    return available[Math.floor(Math.random() * available.length)];
+                },
+                showQuizQuestion() {
+                    const picked = this.nextQuizQuestion();
+                    if (!picked) {
+                        this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
+                        return;
+                    }
+                    this.quizCurrent = { ...picked.q, id: picked.i };
+                    this.quizChosen = null;
+                    this.quizIsCorrect = false;
+                    this.quizModalShow = true;
+                },
+                openQuizFree() {
+                    this.ensureQuizDay();
+                    if (this.quizFreeUsed) return;
+                    this.quizFreeUsed = true;
+                    this.saveQuizLocal();
+                    this.showQuizQuestion();
+                    this.saveState();
+                },
+                playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
+                    const done = () => Promise.resolve().then(onDone);
+                    if (typeof show_11457064 === 'function') {
+                        return show_11457064().then(done).catch(() => { this.showNotification(failMessage); });
+                    }
+                    this.showNotification('(Demo) Đang xem quảng cáo...');
+                    return new Promise(resolve => setTimeout(() => resolve(done()), 900));
+                },
+                addQuizWithAd() {
+                    this.ensureQuizDay();
+                    if (!this.quizFreeUsed) {
+                        this.showNotification('🆓 Hãy dùng câu miễn phí trước.');
+                        return;
+                    }
+                    if (this.quizAdUnlocked >= 4) {
+                        this.showNotification('✅ Bạn đã mở đủ 4 câu bằng quảng cáo hôm nay.');
+                        return;
+                    }
+                    this.playRewardedAd(() => {
+                        this.quizAdUnlocked++;
+                        this.adsToday++;
+                        this.checkTaskProgress('watchAd');
+                        this.onAdWatched();
+                        this.saveQuizLocal();
+                        this.saveState();
+                        this.showQuizQuestion();
+                    });
+                },
+                answerQuiz(index) {
+                    if (!this.quizCurrent || this.quizChosen !== null) return;
+                    this.quizChosen = index;
+                    this.quizIsCorrect = index === this.quizCurrent.answer;
+                    const questionId = this.quizCurrent.id;
+                    if (!this.quizUsedIds.includes(questionId)) this.quizUsedIds = [...this.quizUsedIds, questionId];
+                    this.saveQuizLocal();
+                    if (this.quizIsCorrect) {
+                        this.coins += 200;
+                        this.spinFree += 1;
+                        this.checkTaskProgress('quizCorrect');
+                        this.showNotification('🎉 Chính xác! +200 Coin +1 Lượt Mở Rương');
+                        this.createConfetti();
+                    } else {
+                        this.showNotification('❌ Sai rồi! Câu này không nhận thưởng.');
+                    }
+                    this.saveState();
+                },
+                skipQuiz() {
+                    if (!this.quizCurrent || this.quizChosen !== null) return;
+                    const questionId = this.quizCurrent.id;
+                    this.quizChosen = -3;
+                    this.playRewardedAd(() => {
+                        if (!this.quizUsedIds.includes(questionId)) this.quizUsedIds = [...this.quizUsedIds, questionId];
+                        this.coins += 200;
+                        this.spinFree += 1;
+                        this.adsToday++;
+                        this.checkTaskProgress('watchAd');
+                        this.onAdWatched();
+                        this.quizChosen = -2;
+                        this.quizIsCorrect = false;
+                        this.saveQuizLocal();
+                        this.saveState();
+                        this.showNotification('📺 Bỏ qua sau khi xem QC: +200 Coin +1 Lượt Mở Rương');
+                        this.createConfetti();
+                    });
+                },
+                saveQuizLocal() {
+                    try {
+                        localStorage.setItem('shipper_quiz_state', JSON.stringify({
+                            date: this.quizDate,
+                            freeUsed: this.quizFreeUsed,
+                            adUnlocked: this.quizAdUnlocked,
+                            usedIds: this.quizUsedIds
+                        }));
+                    } catch (e) {}
+                },
+                loadQuizLocal() {
+                    try {
+                        const raw = localStorage.getItem('shipper_quiz_state');
+                        if (!raw) return;
+                        const d = JSON.parse(raw);
+                        this.quizDate = d.date || this.quizDate;
+                        this.quizFreeUsed = !!d.freeUsed;
+                        this.quizAdUnlocked = Math.min(4, Number(d.adUnlocked) || 0);
+                        this.quizUsedIds = Array.isArray(d.usedIds) ? d.usedIds.map(Number).filter(Number.isFinite) : [];
+                    } catch (e) {}
+                    this.ensureQuizDay();
+                },
+                createConfetti() {
+                    const frag = document.createDocumentFragment();
+                    for (let i = 0; i < 26; i++) {
+                        const el = document.createElement('span');
+                        el.className = 'confetti-piece';
+                        el.style.left = Math.round(Math.random() * 100) + 'vw';
+                        el.style.animationDuration = (1.3 + Math.random() * 1.2).toFixed(2) + 's';
+                        el.style.animationDelay = (Math.random() * 0.25).toFixed(2) + 's';
+                        el.style.transform = `rotate(${Math.round(Math.random() * 360)}deg)`;
+                        frag.appendChild(el);
+                        setTimeout(() => el.remove(), 3000);
+                    }
+                    document.body.appendChild(frag);
+                },
+
+                // ==================== NHẠC NỀN ====================
+                musicSources: [
+                    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+                    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+                    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+                    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3'
+                ],
+                async playMusicTrack(index = this.musicTrack) {
+                    if (!this.musicOn) return;
+                    const src = this.musicSources[index % this.musicSources.length];
+                    if (!this._musicEl) {
+                        this._musicEl = new Audio();
+                        this._musicEl.preload = 'auto';
+                        this._musicEl.volume = 0.35;
+                        this._musicEl.addEventListener('ended', () => {
+                            if (!this.musicOn) return;
+                            this.musicTrack = (this.musicTrack + 1) % this.musicSources.length;
+                            this.playMusicTrack(this.musicTrack);
+                        });
+                    }
+                    if (this._musicEl.src !== src) this._musicEl.src = src;
+                    this._musicEl.volume = 0.35;
+                    try {
+                        await this._musicEl.play();
+                    } catch (e) {
+                        // Autoplay policy: retry after next user gesture.
+                        this.musicOn = true;
+                        localStorage.setItem('shipper_music', '1');
+                    }
+                },
+                stopMusic() {
+                    if (this._musicEl) {
+                        this._musicEl.pause();
+                        this._musicEl.currentTime = 0;
+                    }
+                },
+                toggleMusic() {
+                    this.musicOn = !this.musicOn;
+                    localStorage.setItem('shipper_music', this.musicOn ? '1' : '0');
+                    if (this.musicOn) {
+                        this.armMusicOnFirstTouch();
+                        this.playMusicTrack(this.musicTrack);
+                    } else {
+                        this.stopMusic();
+                    }
+                },
+                armMusicOnFirstTouch() {
+                    if (this._musicArmed) return;
+                    this._musicArmed = true;
+                    const handler = () => {
+                        if (this.musicOn) this.playMusicTrack(this.musicTrack);
+                        document.removeEventListener('pointerdown', handler, true);
+                        document.removeEventListener('touchstart', handler, true);
+                        document.removeEventListener('click', handler, true);
+                    };
+                    document.addEventListener('pointerdown', handler, true);
+                    document.addEventListener('touchstart', handler, true);
+                    document.addEventListener('click', handler, true);
+                },
+                async syncLatestUser() {
+                    if (!this.user?.id || this.isAppLoading || this.isShipping) return;
+                    try {
+                        const res = await fetch(`${API_URL}/api/user/${this.user.id}`, { cache: 'no-store' });
+                        if (!res.ok) return;
+                        const d = await res.json();
+                        const serverTime = d.walletUpdatedAt ? new Date(d.walletUpdatedAt).getTime() : 0;
+                        const localTime = this.walletSyncedAt ? new Date(this.walletSyncedAt).getTime() : 0;
+                        if (serverTime > localTime) {
+                            this.coins = d.coins ?? this.coins;
+                            this.orders = d.orders ?? this.orders;
+                            this.spinFree = d.spins ?? this.spinFree;
+                            this.truckLevel = d.truckLevel ?? this.truckLevel;
+                            this.currentProducts = d.currentProducts ?? this.currentProducts;
+                            this.lastProducedAt = d.lastProducedAt ?? this.lastProducedAt;
+                            this.maxProducts = d.maxProducts ?? this.maxProducts;
+                            this.productionInterval = d.productionInterval ?? this.productionInterval;
+                            this.productionAmount = d.productionAmount ?? this.productionAmount;
+                            this.speedUpUsed = d.speedUpUsed ?? this.speedUpUsed;
+                            this.adsToday = d.adsToday ?? this.adsToday;
+                            this.smartlinksToday = d.smartlinksToday ?? this.smartlinksToday;
+                            this.smartlinkCount = d.smartlinkCount ?? this.smartlinkCount;
+                            this.usedSmartlinks = d.usedSmartlinks ?? this.usedSmartlinks;
+                            this.spinAdCount = d.spinAdCount ?? this.spinAdCount;
+                            this.spinAdProgress = d.spinAdProgress ?? this.spinAdProgress;
+                            this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
+                            this.lifetimeAdsWatched = d.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
+                            this.lifetimeSmartlinks = d.lifetimeSmartlinks ?? this.lifetimeSmartlinks;
+                            this.invitedCount = d.invitedCount ?? this.invitedCount;
+                            this.validInvites = d.validInvites ?? this.validInvites;
+                            this.deliveryCount = d.deliveryCount ?? this.deliveryCount;
+                            this.chestOpensTotal = d.chestOpensTotal ?? this.chestOpensTotal;
+                            this.chestOpensToday = d.chestOpensToday ?? this.chestOpensToday;
+                            this.dailyTasks = Array.isArray(d.dailyTasks) ? d.dailyTasks : this.dailyTasks;
+                            this.walletSyncedAt = d.walletUpdatedAt;
+                        }
+                    } catch (e) {}
+                },
+                async loadQuizAndSync() {
+                    this.loadQuizLocal();
+                    await this.syncLatestUser();
+                },
+
                 saveState() {
                     this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => {});
                     return this._saveQueue;
