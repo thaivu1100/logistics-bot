@@ -9,33 +9,12 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
-    <script>
-      window.__inAppAdCfg = { type: 'inApp', inAppSettings: { Frequency: 2, capping: 0.1, interval: 30, timeout: 5, EveryPage: false } };
-      window.addEventListener('load', function () {
-        try {
-          if (typeof show_11457064 === 'function') {
-            setTimeout(function () {
-              show_11457064({ type: 'inApp', inAppSettings: { Frequency: 2, capping: 0.1, interval: 30, timeout: 5, EveryPage: false } });
-            }, 5000);
-          }
-        } catch (e) {}
-      });
-    </script>
     <!-- Đã bỏ zone quảng cáo Popunder (10406527) kém ổn định, toàn app giờ dùng chung 1 zone Rewarded Video -->
-
-    <!-- QC Popunder (chống chặn QC) -->
-    <script src="https://thatlobster.com/9f/b2/a0/9fb2a0b68b28febf048ccc93007c969c.js"></script>
-    <!-- Thanh xã hội QC (chống chặn QC) -->
-    <script src="https://thatlobster.com/c5/d4/82/c5d482f841680852f6e0215c17ad234b.js"></script>
-    <!-- Native Banner (async) -->
-    <script async="async" data-cfasync="false" src="https://thatlobster.com/405ba88e2f0cd4bcbbe4ed9cd2efe2ed/invoke.js"></script>
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
     <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
     <style>
         [x-cloak] { display: none !important; }
-        #banner-ad-top { max-width: 100vw; overflow: hidden; }
-        @media (max-width: 320px) { #banner-ad-top { margin: 5px -5px; } }
         html { -webkit-text-size-adjust: 100%; }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; padding-bottom: env(safe-area-inset-bottom, 0px); padding-top: env(safe-area-inset-top, 0px); }
         /* Đảm bảo icon (FontAwesome + emoji) luôn hiển thị đúng kích thước, không vỡ layout hay tràn ra ngoài trên bất kỳ thiết bị nào */
@@ -220,7 +199,7 @@
         <div class="text-6xl mb-4">❌</div>
         <h2 class="text-lg font-black text-red-400 uppercase mb-2" x-text="texts.bannedTitle"></h2>
         <p class="text-sm text-slate-300" x-text="texts.bannedDesc"></p>
-        <a href="https://t.me/dttb12" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
+        <a href="https://t.me/noameazonus" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
     </div>
 
     <!-- MÀN HÌNH BẢO TRÌ (khi Admin dùng /khoabot) - ưu tiên cao nhất, che toàn bộ Mini App -->
@@ -234,89 +213,133 @@
         </div>
     </div>
 
-    <!-- CONTAINER CHÍNH CỦA APP -->
-    <main class="main-container overflow-y-auto pb-32">
-        <!-- TRANG CHỦ (HOME) - PHẦN BỊ THIẾU -->
-        <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3">
-            <!-- Header thông tin người dùng -->
-            <div class="glass p-4 rounded-[25px] card-padding">
-                <div class="flex items-center justify-between mb-3">
-                    <div>
-                        <p class="text-[10px] font-bold opacity-60" x-text="texts.nameLabel"></p>
-                        <p class="text-lg font-black" x-text="user.name"></p>
-                    </div>
-                    <div class="text-3xl">👤</div>
-                </div>
-                <div class="grid grid-cols-2 gap-2 text-[9px]">
-                    <div><span class="opacity-60" x-text="texts.idLabel"></span><br><span class="font-black" x-text="user.id"></span></div>
-                    <div><span class="opacity-60" x-text="texts.joinDateIcon"></span><br><span class="font-black" x-text="user.joinDate || 'N/A'"></span></div>
-                </div>
+    <!-- MODAL HỎI X2 ĐƠN HÀNG -->
+    <div x-show="showX2Prompt" class="modal-overlay" x-cloak @click.self="skipX2Ad()">
+        <div class="modal-content">
+            <div class="text-6xl mb-3">🚚💨</div>
+            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.deliverySuccessTitle"></h3>
+            <p class="text-sm text-slate-300 mb-4"><span x-text="texts.x2Question"></span> <span class="text-yellow-400 font-black">X2</span> <span x-text="texts.x2Suffix"></span></p>
+            <div class="flex gap-2">
+                <button @click="skipX2Ad()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.noThanks"></button>
+                <button @click="confirmX2Ad()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdX2Now"></button>
             </div>
+        </div>
+    </div>
 
-            <!-- Tài sản người dùng -->
-            <div class="glass p-3 rounded-[25px] card-padding">
-                <div class="grid grid-cols-3 gap-2">
-                    <div class="text-center p-2 bg-yellow-600/20 rounded-xl">
-                        <p class="text-2xl font-black text-yellow-400" x-text="formatNumber(coins)"></p>
-                        <p class="text-[8px] font-black opacity-60">💰 COIN</p>
-                    </div>
-                    <div class="text-center p-2 bg-blue-600/20 rounded-xl">
-                        <p class="text-2xl font-black text-blue-400" x-text="formatNumber(orders)"></p>
-                        <p class="text-[8px] font-black opacity-60">📦 ĐƠN</p>
-                    </div>
-                    <div class="text-center p-2 bg-green-600/20 rounded-xl">
-                        <p class="text-2xl font-black text-green-400" x-text="spinFree"></p>
-                        <p class="text-[8px] font-black opacity-60">🎁 LƯỢT</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Xe vận chuyển -->
-            <div class="glass p-3 rounded-[25px] card-padding">
-                <p class="text-[10px] font-black uppercase opacity-60 mb-2" x-text="texts.truckLevelIcon + ' Xe Vận Chuyển'"></p>
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-sm font-black">LEVEL <span x-text="truckLevel"></span>/999</span>
-                    <span class="text-[9px] text-yellow-400" x-text="coins >= upgradeCost ? '💰 Đủ Coin' : '❌ Chưa đủ Coin'"></span>
-                </div>
-                <div class="grid grid-cols-2 gap-2 text-[9px] mb-2">
-                    <div><span class="opacity-60">Thời gian/lần:</span><br><span class="font-black text-blue-400" x-text="productionTime + ' phút'"></span></div>
-                    <div><span class="opacity-60">Sản phẩm/lần:</span><br><span class="font-black text-blue-400" x-text="productionAmount"></span></div>
-                    <div><span class="opacity-60">Kho tối đa:</span><br><span class="font-black text-blue-400" x-text="maxProducts"></span></div>
-                    <div><span class="opacity-60">Chi phí nâng cấp:</span><br><span class="font-black text-yellow-400" x-text="formatNumber(upgradeCost) + ' 💰'"></span></div>
-                </div>
-                <button @click="upgradeTruck()" :disabled="coins < upgradeCost || truckLevel >= 999" class="w-full py-2 bg-yellow-600/30 border border-yellow-500 rounded-[25px] font-black text-[9px] uppercase text-yellow-400 hover:bg-yellow-600/50 transition disabled:opacity-40 btn-text" x-text="texts.upgrade"></button>
-            </div>
-
-            <!-- Sản xuất và giao hàng -->
-            <div class="glass p-3 rounded-[25px] card-padding">
-                <p class="text-[10px] font-black uppercase opacity-60 mb-2">📦 Sản Xuất & Giao Hàng</p>
-                <div class="mb-3">
-                    <div class="flex justify-between text-[9px] mb-1">
-                        <span x-text="'Kho: ' + currentProducts + ' / ' + maxProducts"></span>
-                        <span class="text-blue-400" x-text="timeTillNextProduction"></span>
-                    </div>
-                    <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
-                        <div class="h-full bg-blue-600 progress-bar" :style="'width: ' + productionProgress + '%'"></div>
-                    </div>
-                </div>
-                <div class="flex gap-2">
-                    <button @click="speedUpProduction()" :disabled="currentProducts >= maxProducts || speedUpUsed || isShipping" class="flex-1 py-2 bg-red-600/30 border border-red-500 rounded-[25px] font-black text-[9px] uppercase text-red-400 hover:bg-red-600/50 transition disabled:opacity-40 btn-text" x-text="'⚡ TĂNG TỐC'"></button>
-                    <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="flex-1 py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[9px] uppercase text-green-400 hover:bg-green-600/50 transition disabled:opacity-40 btn-text" x-text="'🚚 GIAO HÀNG'"></button>
-                </div>
-            </div>
-
-            <!-- Hộp quà công cộng -->
-            <div x-show="coinBoxVisible" class="glass p-3 rounded-[25px] card-padding">
-                <p class="text-[10px] font-black uppercase opacity-60 mb-2">🎁 Hộp Quà May Mắn</p>
-                <div class="text-center mb-3">
-                    <div class="text-5xl mb-2 cursor-pointer float-box" @click="openCoinBoxWithAd()">🎁</div>
-                </div>
-                <button @click="openCoinBoxWithAd()" class="w-full py-2 bg-pink-600/30 border border-pink-500 rounded-[25px] font-black text-[9px] uppercase text-pink-400 hover:bg-pink-600/50 transition btn-text" x-text="'📺 NHẬN QUÀ'"></button>
+    <!-- COIN BOX CONFIRMATION MODAL -->
+    <div x-show="showCoinBoxModal" class="modal-overlay" x-cloak @click.self="showCoinBoxModal = false">
+        <div class="modal-content">
+            <div class="text-6xl mb-3">🎁</div>
+            <h3 class="text-lg font-black text-yellow-400 mb-2" x-text="texts.coinBoxTitle"></h3>
+            <p class="text-sm text-slate-300 mb-4" x-text="texts.coinBoxDesc"></p>
+            <div class="flex gap-2">
+                <button @click="showCoinBoxModal = false" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-sm" x-text="texts.later"></button>
+                <button @click="openCoinBoxWithAd()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-sm" x-text="texts.watchAdGetGift"></button>
             </div>
         </div>
 
-    <!-- MODAL HỎI X2 ĐƠN HÀNG -->
-    <!-- MỞ RƯƠNG -->
+    </div>
+
+    <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
+    <div x-show="showDeliveryAnimation" class="delivery-animation" x-transition>
+        <div class="delivery-scene">
+            <div class="factory">🏭</div>
+            <div class="conveyor">
+                <div class="box-on-conveyor">📦</div>
+                <div class="box-on-conveyor" style="animation-delay: 0.5s">📦</div>
+                <div class="box-on-conveyor" style="animation-delay: 1s">📦</div>
+            </div>
+            <div class="delivery-truck" :class="{ 'moving': isTruckMoving }" x-text="truckIcon"></div>
+            <div class="house">🏠</div>
+        </div>
+        <p class="text-white font-bold mt-4 animate-pulse" x-text="isTruckMoving ? '🚛 Đang vận chuyển đơn hàng đến nhà...' : '📦 Đang xếp hàng lên xe...'"></p>
+    </div>
+
+    <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
+    <div x-show="!joinedGroups && !dismissedJoinBanner" class="join-banner">
+        <div class="join-banner-close" @click="dismissedJoinBanner = true">✕</div>
+        <div class="font-black text-sm mb-1" x-text="texts.joinBannerTitle"></div>
+        <div class="text-[10px] opacity-90 mb-1" x-text="texts.joinBannerDesc"></div>
+        <div class="join-banner-btns">
+            <a href="https://t.me/khohangkiemtien" target="_blank" class="bg-blue-500 text-white" x-text="texts.channel"></a>
+            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="bg-yellow-500 text-slate-900" x-text="texts.group"></a>
+            <button @click="checkGroupMembership()" class="bg-green-500 text-white" x-text="texts.checkJoin"></button>
+        </div>
+    </div>
+
+    <!-- BANNER QUẢNG BÁ XEM QC X2 (chỉ hiện khi đã vào được app, có nút X để tắt) -->
+    <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
+        <div class="join-banner-close" @click="dismissedPromoBanner = true">✕</div>
+        <div class="font-black text-sm mb-1" x-text="texts.promoBannerTitle"></div>
+        <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
+    </div>
+
+    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
+        <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
+            <div class="flex items-center space-x-2">
+                <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦</div>
+                <div>
+                    <p class="font-bold text-xs tracking-tight flex items-center header-text"><span x-text="user.name || 'Shipper'"></span><span class="bg-blue-500/20 text-blue-400 text-[8px] px-2 py-0.5 rounded-full ml-2" x-text="'LV.' + truckLevel"></span></p>
+                    <p class="text-[7px] font-bold text-slate-500 tracking-widest mt-0.5 italic" x-text="'ID: ' + user.id"></p>
+                </div>
+            </div>
+            <div class="space-y-1">
+                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="font-black mr-1 text-blue-400" :class="ordersPopped ? 'value-pop' : ''" x-text="formatNumber(orders)"></span> 📦</div>
+                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></span></div>
+            </div>
+        </header>
+
+        <main class="p-2 space-y-3">
+            <!-- TRANG CHỦ -->
+            <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
+                <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
+                <div class="p-4 rounded-[25px] neon-blue shadow-2xl relative overflow-hidden group card-padding">
+                    <h3 class="text-[9px] font-black uppercase opacity-60 tracking-[4px]" x-text="texts.warehouse"></h3>
+                    <h2 class="text-2xl font-black mt-1" x-text="texts.wallet"></h2>
+                    <div class="mt-4"><span class="text-3xl font-extrabold tracking-tighter italic text-neon" x-text="formatNumber(orders)"></span><span class="text-[9px] opacity-40 ml-2 font-black italic" x-text="texts.orders"></span></div>
+                    <div class="absolute -right-4 -bottom-4 text-[80px] opacity-10 group-hover:rotate-12 transition-all duration-700"></div>
+                </div>
+                <div class="glass p-3 rounded-[20px] flex justify-between items-center card-padding">
+                    <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + ' - ' + truckName"></p></div>
+                    <div class="text-right"><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.products"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
+                </div>
+                
+                <!-- BĂNG CHUYỀN SẢN XUẤT (hiện khi đang đếm ngược) -->
+                <div x-show="currentProducts > 0 && currentProducts < maxProducts && !isShipping" class="conveyor-belt-anim">
+                    <div class="conveyor-line"></div>
+                    <div class="conveyor-goods">📦</div>
+                    <div class="conveyor-goods" style="animation-delay: 1s;">📦</div>
+                    <div class="conveyor-goods" style="animation-delay: 2s;">📦</div>
+                    <div class="truck-mini" x-text="truckIcon"></div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="p-2 glass rounded-[20px] text-center card-padding"><p class="text-[6px] font-black uppercase opacity-40" x-text="texts.timeLeft"></p><p class="text-sm font-black text-blue-400" x-text="productionCountdown"></p></div>
+                    <div class="p-2 glass rounded-[20px] text-center card-padding"><p class="text-[6px] font-black uppercase opacity-40" x-text="texts.prodMax"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
+                </div>
+                <div class="space-y-2">
+                    <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="w-full py-3 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-base uppercase italic shadow-[0_6px_0_#b45309] active:translate-y-1 active:shadow-none transition-all disabled:opacity-40 disabled:translate-y-1 disabled:shadow-none flex items-center justify-center gap-2 btn-text">
+                        <span :class="!isShipping && currentProducts > 0 ? 'truck-idle' : ''">🚚</span>
+                        <span x-text="texts.deliver"></span>
+                        <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
+                    </button>
+                    <button @click="upgradeTruck()" :disabled="truckLevel >= 10 || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= 10 || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
+                        <div class="flex items-center gap-2">
+                            <span>🛠️</span>
+                            <span x-text="texts.upgrade"></span>
+                        </div>
+                        <span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span>
+                    </button>
+                    <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
+                    <button x-show="showX2Ad" @click="watchAdX2()" class="w-full py-2 bg-green-600/30 border border-green-500 rounded-[25px] font-black text-[10px] uppercase text-green-400 hover:bg-green-600/50 transition btn-text" x-text="texts.watchAdX2Orders"></button>
+                </div>
+                <div class="p-3 glass rounded-[25px] flex justify-between items-center card-padding">
+                    <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
+                    <span class="text-sm font-black" x-text="user.joinDate"></span>
+                </div>
+            </div>
+
+            <!-- MỞ RƯƠNG -->
             <div x-show="tab === 'chest'" x-transition class="tab-enter space-y-3 text-center">
                 <h2 class="text-xl font-extrabold italic text-neon uppercase" x-text="texts.chestTitle"></h2>
                 <div class="glass p-3 rounded-[25px] relative card-padding">
@@ -523,8 +546,8 @@
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 50.000'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 5'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 20'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 20'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 2'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
                     </div>
@@ -604,25 +627,9 @@
                         <option value="en">🇬🇧 English</option>
                     </select>
                 </div>
-                <!-- PHẦN BẬT/TẮT NHẠC -->
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <div class="flex justify-between items-center mb-2">
-                        <span class="font-bold text-sm">🎵 Nhạc Nền</span>
-                        <button @click="toggleMusic()" class="px-3 py-1 rounded-xl text-sm font-black" :class="musicEnabled ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'" x-text="musicEnabled ? '🔊 BẬT' : '🔇 TẮT'"></button>
-                    </div>
-                    <div x-show="musicEnabled" class="space-y-1">
-                        <p class="text-[9px] opacity-60">Chọn bài nhạc:</p>
-                        <div class="space-y-1">
-                            <button @click="setCurrentMusic(0)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 0 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Hngle - Tìm em ft. Bảo Anh'"></button>
-                            <button @click="setCurrentMusic(1)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 1 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Đường Tôi Chở Em Về'"></button>
-                            <button @click="setCurrentMusic(2)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 2 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 24K.RIGHT - MỘT NỬA SỰ THẬT'"></button>
-                            <button @click="setCurrentMusic(3)" class="w-full py-1.5 text-[9px] font-black rounded-lg transition" :class="currentMusicIndex === 3 ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'" x-text="'🎶 Dangrangto - Xương Rồng (Intro)'"></button>
-                        </div>
-                    </div>
-                </div>
                 <div class="glass p-3 rounded-[25px] space-y-1 card-padding">
                     <p class="font-bold text-xs opacity-60">☎️ <span x-text="texts.contactAdmin"></span></p>
-                    <a href="https://t.me/dttb12" target="_blank" class="block text-blue-400 text-sm">@dttb12</a>
+                    <a href="https://t.me/noameazonus" target="_blank" class="block text-blue-400 text-sm">@noameazonus</a>
                     <a href="https://t.me/khohangkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.channel"></a>
                     <a href="https://t.me/khohangchatkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.group"></a>
                 </div>
@@ -694,30 +701,7 @@
             "https://omg10.com/4/10406589", "https://omg10.com/4/10406570", "https://omg10.com/4/10406586",
             "https://omg10.com/4/10406538", "https://omg10.com/4/10406567", "https://omg10.com/4/10406588",
             "https://omg10.com/4/10406587", "https://omg10.com/4/10406592", "https://omg10.com/4/10406575",
-            "https://omg10.com/4/10406598", "https://omg10.com/4/10406577",
-            "https://thatlobster.com/qeet7sp1ej?key=566f8d33076af8dda956a6226b69f3d5",
-            "https://thatlobster.com/qgj4qst7?key=13be5f4a8dd4a81b4cfc72d2a5cc2dea",
-            "https://thatlobster.com/sx11e8be7u?key=37d984173af681961a887443ecfd00fd",
-            "https://thatlobster.com/i049yxkw?key=f3579f5a7c31dce620279b187ed90a5c",
-            "https://thatlobster.com/htg7mu20?key=a01ff4e5e531578eeaac0648d4e2a3dd",
-            "https://thatlobster.com/rrab6x55?key=09cab93a5aaf2552b32f3814602d94b9",
-            "https://thatlobster.com/ut1vih9z?key=0029ffe34d48f1ce0d1504a2d59317f0",
-            "https://thatlobster.com/z7dr3r6q7?key=913493fe04b64f79220e0fb7b9d57e32",
-            "https://thatlobster.com/e3kfv622w?key=8ccef0990e58824a2d622375d11735fb",
-            "https://thatlobster.com/bqx020sv?key=00a314f6dc6f691f4b765f3d2ec06e85",
-            "https://thatlobster.com/iyqdc9ns?key=d251fa968f87328436a6c083cf6baf1a",
-            "https://thatlobster.com/qs1i0h9z0?key=e6ec51ee1270180b3b18d7e4f5c13ff0",
-            "https://thatlobster.com/tsmufkh4?key=aee6b9d937891432d40e28c9e0ca0cc6",
-            "https://thatlobster.com/j68qriqj?key=40bef72361d42e7ccdb12b8e7ea786f1",
-            "https://thatlobster.com/q0zpx1rxcw?key=d8fcdb5212100bff572648eb29d41527"
-        ];
-
-        const QUIZ_QUESTIONS = [
-            { q: 'Hành tinh nào gần Mặt Trời nhất?', a: ['A. Sao Kim', 'B. Sao Thủy', 'C. Trái Đất', 'D. Sao Hỏa'], correct: 'B. Sao Thủy' },
-            { q: 'Ai là người đầu tiên đặt chân lên Mặt Trăng?', a: ['A. Buzz Aldrin', 'B. Neil Armstrong', 'C. Yuri Gagarin', 'D. John Glenn'], correct: 'B. Neil Armstrong' },
-            { q: 'Năm 1945, Việt Nam tuyên bố độc lập vào ngày nào?', a: ['A. 2/9', 'B. 30/4', 'C. 19/5', 'D. 1/1'], correct: 'A. 2/9' },
-            { q: 'Cái gì bạn không cầm được dù có nắm chặt?', a: ['A. Cát', 'B. Nước', 'C. Gió', 'D. Tất cả đều đúng'], correct: 'B. Nước' },
-            { q: 'Nguyên tố hóa học nào có ký hiệu là “O”?', a: ['A. Oxy', 'B. Ozon', 'C. Oganesson', 'D. Osmium'], correct: 'A. Oxy' }
+            "https://omg10.com/4/10406598", "https://omg10.com/4/10406577"
         ];
         
         const translations = {
@@ -847,29 +831,19 @@
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
                 lastResetDate: '', lastWeekReset: '',
-                weeklyAdsLeaderboard: [],
-                weeklyAdsLeaderboardReset: '',
-                adsLeaderboardResetTime: '',
-                deliveryAdsCountToday: 0,
-                weeklyAdsLeaderboard: [],
-                weeklyAdsLeaderboardReset: '',
-                adsLeaderboardResetTime: '',
-                deliveryAdsCountToday: 0,
                 dailyTasks: [
                     { id: 'login', name: '📅 Đăng nhập', icon: '📅', reward: 150, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'watch5ads', name: '📺 Xem 5 QC', icon: '📺', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'watch10ads', name: '📺 Xem 10 QC', icon: '📺', reward: 500, rewardOrders: 0, rewardSpins: 1, done: false, claimable: false },
                     { id: 'deliver5', name: '🚚 Giao hàng 5 lần', icon: '🚚', reward: 200, rewardOrders: 20, rewardSpins: 0, done: false, claimable: false },
                     { id: 'deliver10', name: '🚚 Giao hàng 10 lần', icon: '🚚', reward: 400, rewardOrders: 40, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'invite1', name: '👥 Mời 1 bạn', icon: '👥', reward: 200, rewardOrders: 0, rewardSpins: 1, done: false, claimable: false },
-                    { id: 'invite5', name: '👥 Mời 5 bạn', icon: '👥', reward: 500, rewardOrders: 50, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'spin10', name: '🎁 Mở rương 10 lần', icon: '🎁', reward: 500, rewardOrders: 50, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'smartlink15', name: '🔗 SmartLink 30 lần (ở lại 4s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false }
+                    { id: 'watch3ads', name: '📺 Xem 3 quảng cáo', icon: '📺', reward: 200, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, once: true },
+                    { id: 'smartlink15', name: '🔗 SmartLink 15 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'zalogroup', name: '💬 Tham gia nhóm Zalo', icon: '💬', reward: 500, rewardOrders: 500, rewardSpins: 0, done: false, claimable: false, once: true }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
-                musicEnabled: false, currentMusicIndex: 0, // Bật/tắt nhạc và chỉ số bài nhạc
                 showCoinBoxModal: false, showX2Prompt: false, pendingX2Amount: 0, usedSmartlinks: [],
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
                 isTruckMoving: false, isShaking: false, isOpened: false, texts: translations.vi,
@@ -885,33 +859,17 @@
                     { friends: 100, reward: '20,000 Đơn Hàng + 10 Lượt Mở Rương', coins: 0, orders: 20000, spins: 10, claimed: false }
                 ],
                 
-                // Công thức cấp độ xe (1-999) - PHẢI giống hệt calculateLevelStats() ở server.js, không được
-                // sửa bất kỳ con số nào trong các công thức này.
-                calculateLevelStats(level) {
-                    level = Math.max(1, Math.min(999, parseInt(level) || 1));
-                    const productionMinutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
-                    const productsPerDelivery = 100 + (level - 1) * 3;
-                    const maxWarehouse = 100 + (level - 1) * 5;
-                    const upgradeCost = level < 999 ? 400 + (level - 1) * 200 : 200000;
-                    return {
-                        level,
-                        productionMs: Math.round(productionMinutes * 60 * 1000),
-                        productsPerDelivery,
-                        maxWarehouse,
-                        upgradeCost
-                    };
-                },
                 get truckName() {
                     const names = ['', '🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh', '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
-                    if (this.truckLevel <= 10) return names[this.truckLevel] || '🚛 Xe';
-                    return '🏆 Siêu xe Logistics Lv.' + this.truckLevel; // Cấp 11-999: giữ hình ảnh cao nhất, chỉ tăng số liệu
+                    return names[this.truckLevel] || '🚛 Xe';
                 },
                 get truckIcon() {
                     const icons = ['', '🛵', '🛺', '🚐', '🚚', '🚛', '🚛', '🚛', '🚛', '🚛', '🏆'];
-                    return this.truckLevel <= 10 ? (icons[this.truckLevel] || '🚛') : '🏆';
+                    return icons[this.truckLevel] || '🚛';
                 },
                 get upgradeCost() {
-                    return this.truckLevel < 999 ? this.calculateLevelStats(this.truckLevel).upgradeCost : 0;
+                    const costs = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000, 15000, 20000];
+                    return this.truckLevel < 10 ? costs[this.truckLevel] : 0;
                 },
                 get withdrawProgress() {
                     const orderProgress = Math.min(this.orders / 50000, 1) * 0.7;
@@ -985,44 +943,36 @@
                     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
+                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
+                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
+                    // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
+                    await this.checkMaintenanceLock();
+                    setInterval(() => this.checkMaintenanceLock(), 15000);
+                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
+
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
                     const savedDeviceId = localStorage.getItem('shipper_uid') || null;
 
-                    // FIX LỖI "ADMIN VÀO MINIAPP CHỈ HIỆN MÀN HÌNH ĐEN": trước đây bước kiểm tra khóa bảo trì
-                    // đọc window.Telegram.WebApp.initDataUnsafe.user NGAY LẬP TỨC (đồng bộ), trong khi phần
-                    // load user chính bên dưới lại dùng waitForTelegramUser() để CHỜ tối đa 1.5s cho Telegram
-                    // kịp bơm dữ liệu user vào trang (đúng như comment ở hàm waitForTelegramUser đã giải
-                    // thích). Vì bước kiểm tra khóa bảo trì chạy TRƯỚC và không chờ, nếu Telegram chưa kịp bơm
-                    // dữ liệu, ID admin đọc được là "undefined" -> server không nhận diện được là Admin chính
-                    // -> Admin bị tính như user thường -> nếu bot đang /khoabot thì chính Admin cũng bị khóa,
-                    // initApp() return sớm ngay tại đây -> không có gì được khởi tạo -> màn hình đen. Sửa
-                    // bằng cách dùng CHUNG cơ chế chờ waitForTelegramUser() trước khi kiểm tra khóa bảo trì.
-                    let earlyTgUser = null;
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
-                        earlyTgUser = await this.waitForTelegramUser();
-                    }
-                    const lockCheckUserId = earlyTgUser?.id || savedDeviceId || null;
-
-                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
-                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
-                    // NGOẠI LỆ: Admin CHÍNH (ID 6327666718) vẫn dùng được Mini App bình thường ngay cả khi
-                    // đang khoá bảo trì, để có thể tự kiểm tra/test trong lúc bảo trì.
-                    await this.checkMaintenanceLock(lockCheckUserId);
-                    setInterval(() => this.checkMaintenanceLock(lockCheckUserId), 15000);
-                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
-
-                    if (earlyTgUser) {
-                        this.user.id = earlyTgUser.id.toString();
-                        this.user.name = earlyTgUser.first_name || 'Shipper';
-                        if (earlyTgUser.last_name) this.user.name += ' ' + earlyTgUser.last_name;
-                        localStorage.setItem('shipper_uid', this.user.id);
+                        const tgUser = await this.waitForTelegramUser();
+                        if (tgUser) {
+                            this.user.id = tgUser.id.toString();
+                            this.user.name = tgUser.first_name || 'Shipper';
+                            if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
+                            localStorage.setItem('shipper_uid', this.user.id);
+                        } else {
+                            // Không lấy được thông tin user từ Telegram lúc này -> DÙNG LẠI id đã lưu trên máy
+                            // (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ liệu" khi tải lại.
+                            this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
+                            this.user.name = 'Shipper Demo';
+                            localStorage.setItem('shipper_uid', this.user.id);
+                        }
                     } else {
-                        // Không lấy được thông tin user từ Telegram (hoặc không chạy trong Telegram) -> DÙNG LẠI
-                        // id đã lưu trên máy (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ
-                        // liệu" khi tải lại.
+                        // Không chạy trong Telegram (vd mở thẳng bằng trình duyệt) -> vẫn ưu tiên dùng lại id cũ
+                        // trên máy này để tải lại trang không bị mất dữ liệu.
                         this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
                         this.user.name = 'Shipper Demo';
                         localStorage.setItem('shipper_uid', this.user.id);
@@ -1098,8 +1048,6 @@
                             this.lastSmartlinkTime = data.lastSmartlinkTime || 0;
                             this.usedSmartlinks = data.usedSmartlinks || [];
                             this.referralMilestones = data.referralMilestones || this.referralMilestones;
-                            this.musicEnabled = data.musicEnabled || false;
-                            this.currentMusicIndex = data.currentMusicIndex || 0;
 
                             // Ensure milestones are parsed if they come as string
                             if (typeof this.referralMilestones === 'string') {
@@ -1132,7 +1080,6 @@
                     // chính của user, các bước còn lại (lưu IP, xếp hạng...) chạy ngầm phía sau không cần
                     // người dùng phải chờ thêm.
                     this.isAppLoading = false;
-                    this.checkAdBlockStatus();
                     
                     // Check group membership for banner (only on mini-app load)
                     const memberStatus = await this.checkGroupMembership(true); // Pass true to only check, not show notification
@@ -1209,9 +1156,9 @@
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
                 // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
                 // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
-                async checkMaintenanceLock(userId) {
+                async checkMaintenanceLock() {
                     try {
-                        const res = await fetch(`${API_URL}/api/lock-status${userId ? '?userId=' + userId : ''}`);
+                        const res = await fetch(`${API_URL}/api/lock-status`);
                         if (!res.ok) return;
                         const data = await res.json();
                         this.maintenanceLocked = !!data.locked;
@@ -1239,77 +1186,6 @@
                     }
                 },
                 
-                checkAdBlockStatus() {
-                    const blocked = typeof window.show_11457064 !== 'function';
-                    this.adblockDetected = blocked;
-                    if (blocked) {
-                        this.showNotification('⚠️ Trình chặn QC đang bật. Vui lòng tắt trình chặn quảng cáo để tiếp tục nhận thưởng!');
-                    }
-                    return blocked;
-                },
-                ensureCaptcha(label) {
-                    const value = Math.floor(Math.random() * 9) + 1;
-                    const answer = 7 + value;
-                    const input = window.prompt('CAPTCHA ' + label + ': 7 + ' + value + ' = ?');
-                    if (input === null) return false;
-                    return Number(input) === answer;
-                },
-                openQuiz(mode) {
-                    if (mode === 'free') {
-                        if (this.quizFreeUsedToday) {
-                            this.showNotification('⚠️ Hôm nay bạn đã dùng câu hỏi miễn phí rồi.');
-                            return;
-                        }
-                        this.activeQuiz = { ...QUIZ_QUESTIONS[Math.floor(Math.random() * QUIZ_QUESTIONS.length)], mode: 'free' };
-                        this.showQuizModal = true;
-                        return;
-                    }
-                    if (this.quizPaidToday >= 4) {
-                        this.showNotification('⚠️ Mỗi ngày chỉ trả lời tối đa 4 câu hỏi qua QC.');
-                        return;
-                    }
-                    this.watchRewardedAd(() => {
-                        this.adsToday = (this.adsToday || 0) + 1;
-                        this.onAdWatched();
-                        this.activeQuiz = { ...QUIZ_QUESTIONS[Math.floor(Math.random() * QUIZ_QUESTIONS.length)], mode: 'paid' };
-                        this.showQuizModal = true;
-                        this.showNotification('📺 Đã mở câu hỏi thưởng qua QC.');
-                    });
-                },
-                submitQuizAnswer(choice) {
-                    if (!this.activeQuiz) return;
-                    const correct = choice === this.activeQuiz.correct;
-                    if (this.activeQuiz.mode === 'paid') {
-                        this.quizPaidToday += 1;
-                    } else {
-                        this.quizFreeUsedToday = true;
-                    }
-                    if (correct) {
-                        this.coins += 200;
-                        this.spinFree += 1;
-                        this.showNotification('✅ Đúng! +200 💰 và +1 Lượt Mở Rương.');
-                    } else {
-                        this.showNotification('❌ Sai rồi! Không nhận thưởng cho câu này.');
-                    }
-                    this.showQuizModal = false;
-                    this.activeQuiz = null;
-                    this.saveState();
-                },
-                skipQuiz() {
-                    if (!this.activeQuiz) return;
-                    this.showQuizModal = false;
-                    this.activeQuiz = null;
-                    
-                    // Xem QC để nhận thưởng bất kể skip
-                    this.watchRewardedAd(() => {
-                        this.adsToday = (this.adsToday || 0) + 1;
-                        this.onAdWatched();
-                        this.coins += 100;
-                        this.showNotification('⏭️ Đã bỏ qua. +100 💰 từ QC (không cộng thưởng chính)');
-                        this.saveState();
-                    });
-                },
-
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
@@ -1382,18 +1258,14 @@
                 },
                 resetDailyIfNeeded() {
                     const today = new Date().toDateString();
-                    const savedResetDate = localStorage.getItem('lastResetDate_' + this.user.id);
-                    
-                    if (savedResetDate !== today) {
+                    if (this.lastResetDate !== today) {
                         this.spinFree = 1; 
                         this.spinAdCount = 0; 
                         this.spinAdProgress = 0;
                         this.adsToday = 0; 
                         this.smartlinksToday = 0; 
                         this.bonusAdsToday = 0;
-                        this.withdrawRemain = 20;
-                        this.quizFreeUsedToday = false;
-                        this.quizPaidToday = 0;
+                        this.withdrawRemain = 1;
                         this.dailyTasks.forEach(t => { if (!t.once) { t.done = false; t.claimable = false; } });
                         this.allTasksClaimed = false; 
                         this.deliveryCount = 0; 
@@ -1402,40 +1274,12 @@
                         this.lastSmartlinkTime = 0; 
                         this.usedSmartlinks = [];
                         this.lastResetDate = today;
-                        localStorage.setItem('lastResetDate_' + this.user.id, today);
-                        this.deliveryAdsCountToday = 0;
-                        localStorage.setItem('lastResetDate_' + this.user.id, today);
-                        this.deliveryAdsCountToday = 0;
                         const loginTask = this.dailyTasks.find(t => t.id === 'login');
                         if (loginTask) loginTask.claimable = true;
                         this.saveState();
                     }
                 },
                 // Xem QC Tăng Tốc x2: giảm 1 nửa thời gian chờ còn lại của mẻ hàng đang sản xuất
-                // Hàm xem QC nhận thưởng DÙNG CHUNG cho mọi nơi trong app (giao hàng, x2 đơn hàng, hộp quà,
-                // tăng tốc sản xuất, nhiệm vụ xem QC, mở rương, nâng cấp xe...). YÊU CẦU: phải ở lại xem QC
-                // tối thiểu 4 GIÂY mới được tính thưởng - nếu Promise của SDK quảng cáo trả về sớm hơn 4s
-                // (vd bị chặn quảng cáo, lỗi mạng, hoặc SDK trả về ngay lập tức) thì KHÔNG cộng thưởng, báo
-                // lỗi và bắt xem lại từ đầu.
-                watchRewardedAd(onSuccess, demoMessage) {
-                    const MIN_WATCH_MS = 4000;
-                    const startedAt = Date.now();
-                    const tryGrant = () => {
-                        if (Date.now() - startedAt < MIN_WATCH_MS) {
-                            this.showNotification('⚠️ Bạn cần xem QC tối thiểu 4 giây mới được tính thưởng! Vui lòng xem lại.');
-                            return;
-                        }
-                        onSuccess();
-                    };
-                    if (typeof show_11457064 === 'function') {
-                        show_11457064().then(tryGrant).catch(() => {
-                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
-                        });
-                    } else {
-                        this.showNotification(demoMessage || '(Demo) Đang xem quảng cáo...');
-                        setTimeout(tryGrant, 4200); // Demo cũng mô phỏng đủ 4s để test đúng luồng thật
-                    }
-                },
                 speedUpProduction() {
                     if (this.currentProducts >= this.maxProducts) {
                         this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
@@ -1459,7 +1303,14 @@
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
                         this.saveState();
                     };
-                    this.watchRewardedAd(applyBoost, '(Demo) Đang xem quảng cáo tăng tốc...');
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(applyBoost).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                        this.showNotification('(Demo) Đang xem quảng cáo tăng tốc...');
+                        setTimeout(applyBoost, 1000);
+                    }
                 },
                 produceLoop() {
                     setInterval(() => {
@@ -1477,12 +1328,26 @@
                 },
                 deliverWithAd() {
                     if (this.isShipping || this.currentProducts <= 0) return;
-                    this.watchRewardedAd(() => {
-                        this.adsToday++; // Count ad view
-                        this.checkTaskProgress('watchAd'); // Check progress for watchAd task
-                        this.onAdWatched();
-                        this.startDeliveryAnimation();
-                    });
+                    // Trigger ad and then animation
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(() => {
+                            this.adsToday++; // Count ad view
+                            this.checkTaskProgress('watchAd'); // Check progress for watchAd task
+                            this.onAdWatched();
+                            this.startDeliveryAnimation();
+                        }).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                         // Fallback for testing without actual ad
+                        this.showNotification('(Demo) Đang xem quảng cáo...');
+                        setTimeout(() => {
+                            this.adsToday++;
+                            this.checkTaskProgress('watchAd');
+                            this.onAdWatched();
+                            this.startDeliveryAnimation();
+                        }, 1000);
+                    }
                 },
                 startDeliveryAnimation() {
                     this.showDeliveryAnimation = true;
@@ -1505,46 +1370,62 @@
                     this.lastProducedAt = Date.now(); // Reset production timer
                     this.speedUpUsed = false; // Mẻ hàng mới sau khi giao -> cho phép Tăng Tốc X2 lại 1 lần
                     this.deliveryCount = (this.deliveryCount || 0) + 1;
-                    if (this.deliveryCount >= 2 && this.deliveryCount <= 4 && Math.random() < 0.5) {
-                        if (!this.ensureCaptcha('giao hàng')) {
-                            this.showNotification('❌ CAPTCHA sai, vui lòng thử lại giao hàng.');
-                            return;
-                        }
-                    }
                     this.checkTaskProgress('deliver');
                     this.saveState();
                     
                     this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(delivered) + ' Đơn hàng');
-                    this.pendingX2Amount = 0;
+                    this.pendingX2Amount = delivered;
+                    this.showX2Prompt = true;
                 },
                 confirmX2Ad() {
                     this.showX2Prompt = false;
-                    this.watchRewardedAd(() => {
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(() => {
+                            this.orders += this.pendingX2Amount;
+                            this.adsToday++; // Count this as another ad view
+                            this.checkTaskProgress('watchAd');
+                            this.onAdWatched();
+                            this.saveState();
+                            this.showNotification('📺 Xem AD thành công! Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
+                            this.pendingX2Amount = 0;
+                        }).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                            this.pendingX2Amount = 0;
+                        });
+                    } else {
+                        // Demo fallback
                         this.orders += this.pendingX2Amount;
-                        this.adsToday++; // Count this as another ad view
+                        this.showNotification('📺 (Demo) Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
+                        this.adsToday++;
                         this.checkTaskProgress('watchAd');
                         this.onAdWatched();
                         this.saveState();
-                        this.showNotification('📺 Xem AD thành công! Đã nhận thêm ' + this.formatNumber(this.pendingX2Amount) + ' Đơn Hàng (Tổng x2)');
                         this.pendingX2Amount = 0;
-                    });
+                    }
                 },
                 skipX2Ad() { this.showX2Prompt = false; this.pendingX2Amount = 0; },
                 upgradeTruck() {
-                    if (this.truckLevel >= 999 || this.coins < this.upgradeCost) return;
-                    // Bắt buộc xem QC trước khi nâng cấp (giống lúc ấn giao hàng), rồi mới thực sự trừ coin + nâng cấp
-                    this.watchRewardedAd(() => this.applyTruckUpgrade());
-                },
-                applyTruckUpgrade() {
+                    if (this.truckLevel >= 10 || this.coins < this.upgradeCost) return;
                     this.coins -= this.upgradeCost;
                     this.truckLevel++;
-                    const stats = this.calculateLevelStats(this.truckLevel);
-                    this.productionInterval = stats.productionMs;
-                    this.productionAmount = stats.productsPerDelivery;
-                    this.maxProducts = stats.maxWarehouse;
-                    this.adsToday++;
-                    this.checkTaskProgress('watchAd');
-                    this.onAdWatched();
+                    const config = [
+                        { interval: 30*60*1000, amount: 100, max: 100 },
+                        { interval: 28*60*1000, amount: 120, max: 120 },
+                        { interval: 26*60*1000, amount: 145, max: 145 },
+                        { interval: 24*60*1000, amount: 175, max: 175 },
+                        { interval: 22*60*1000, amount: 210, max: 210 },
+                        { interval: 20*60*1000, amount: 250, max: 250 },
+                        { interval: 18*60*1000, amount: 300, max: 300 },
+                        { interval: 16*60*1000, amount: 360, max: 360 },
+                        { interval: 14*60*1000, amount: 430, max: 430 },
+                        { interval: 12*60*1000, amount: 500, max: 500 }
+                    ];
+                    const idx = this.truckLevel - 1; // truckLevel 1 maps to config[0]
+                    if (idx < config.length) {
+                        this.productionInterval = config[idx].interval;
+                        this.productionAmount = config[idx].amount;
+                        this.maxProducts = config[idx].max;
+                    }
                     this.saveState();
                     this.showNotification('⬆️ Nâng cấp thành công! Xe: ' + this.truckName);
                 },
@@ -1568,13 +1449,31 @@
                 },
                 openCoinBoxWithAd() {
                     this.showCoinBoxModal = false;
-                    this.watchRewardedAd(() => {
-                        this.completeOpenCoinBox();
-                        this.adsToday++;
-                        this.checkTaskProgress('watchAd');
-                        this.onAdWatched();
-                        this.saveState();
-                    }, '(Demo) Đang xem quảng cáo cho hộp quà...');
+                    // FIX: trước đây dùng show_10406527('pop') - zone Popunder có tỉ lệ lấp đầy quảng cáo
+                    // thấp/không ổn định, khiến 1 số user hay bị báo "QC Đã Hết Hoặc Lỗi". Đổi sang dùng
+                    // chung zone Rewarded Video (show_11457064) đã chạy ổn định ở mọi nơi khác trong app.
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(() => {
+                            this.completeOpenCoinBox();
+                            this.adsToday++;
+                            this.checkTaskProgress('watchAd');
+                            this.onAdWatched();
+                            this.saveState();
+                        }).catch(e => {
+                            console.error('QC error:', e);
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                        // Demo fallback
+                        this.showNotification('(Demo) Đang xem quảng cáo cho hộp quà...');
+                        setTimeout(() => {
+                             this.completeOpenCoinBox();
+                             this.adsToday++;
+                             this.checkTaskProgress('watchAd');
+                             this.onAdWatched();
+                             this.saveState();
+                        }, 1000);
+                    }
                 },
                 completeOpenCoinBox() {
                     if (!this.coinBoxVisible) return;
@@ -1677,7 +1576,15 @@
                         this.showNotification('📺 +1 Lượt Mở Rương!');
                         this.saveState();
                     };
-                    this.watchRewardedAd(grantSpin);
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(grantSpin).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
+                    } else {
+                         // Demo fallback
+                        this.showNotification('(Demo) Đang xem quảng cáo...');
+                        setTimeout(grantSpin, 1000);
+                    }
                 },
                 buyChestWithOrders() {
                     if (this.orders < 500) {
@@ -1700,27 +1607,19 @@
                             deliver10Task.claimable = true;
                         }
                     } else if (action === 'spin') {
-                        let spin1Task = this.dailyTasks.find(t => t.id === 'spin10');
-                        if (spin1Task && !spin1Task.done && this.chestOpensToday >= 10) {
+                        let spin1Task = this.dailyTasks.find(t => t.id === 'spin1');
+                        if (spin1Task && !spin1Task.done) { // Assuming spin1 means "spin at least once"
                             spin1Task.claimable = true;
                         }
                     } else if (action === 'watchAd') {
-                        let ad5Task = this.dailyTasks.find(t => t.id === 'watch5ads');
-                        if (ad5Task && !ad5Task.done && this.adsToday >= 5) {
-                            ad5Task.claimable = true;
-                        }
-                        let ad10Task = this.dailyTasks.find(t => t.id === 'watch10ads');
-                        if (ad10Task && !ad10Task.done && this.adsToday >= 10) {
-                            ad10Task.claimable = true;
+                        let adTask = this.dailyTasks.find(t => t.id === 'watch3ads');
+                        if (adTask && !adTask.done && this.adsToday >= 3) {
+                            adTask.claimable = true;
                         }
                     } else if (action === 'invite') {
-                        let invite1Task = this.dailyTasks.find(t => t.id === 'invite1');
-                        if (invite1Task && !invite1Task.done && this.validInvites >= 1) {
-                            invite1Task.claimable = true;
-                        }
-                        let invite5Task = this.dailyTasks.find(t => t.id === 'invite5');
-                        if (invite5Task && !invite5Task.done && this.validInvites >= 5) {
-                            invite5Task.claimable = true;
+                        let inviteTask = this.dailyTasks.find(t => t.id === 'invite1');
+                        if (inviteTask && !inviteTask.done && this.validInvites >= 1) {
+                            inviteTask.claimable = true;
                         }
                     }
                     this.dailyTasks = [...this.dailyTasks]; // Force Alpine to re-render array
@@ -1736,7 +1635,7 @@
                         case 'deliver5': cur = this.deliveryCount || 0; max = 5; break;
                         case 'deliver10': cur = this.deliveryCount || 0; max = 10; break;
                         case 'watch3ads': cur = this.adsToday || 0; max = 3; break;
-                        case 'smartlink15': cur = this.smartlinkCount || 0; max = 30; break;
+                        case 'smartlink15': cur = this.smartlinkCount || 0; max = 15; break;
                         case 'invite1': cur = this.validInvites || 0; max = 1; break;
                         default: return 0;
                     }
@@ -1748,7 +1647,7 @@
                         case 'deliver5': return Math.min(this.deliveryCount || 0, 5) + '/5';
                         case 'deliver10': return Math.min(this.deliveryCount || 0, 10) + '/10';
                         case 'watch3ads': return Math.min(this.adsToday || 0, 3) + '/3';
-                        case 'smartlink15': return Math.min(this.smartlinkCount || 0, 30) + '/30';
+                        case 'smartlink15': return Math.min(this.smartlinkCount || 0, 15) + '/15';
                         case 'invite1': return Math.min(this.validInvites || 0, 1) + '/1';
                         default: return '';
                     }
@@ -1811,74 +1710,15 @@
                         this.showNotification('📺 +100 Coin & +100 Đơn Hàng (' + this.bonusAdsToday + '/30)');
                         this.saveState();
                     };
-                    this.watchRewardedAd(grantReward);
-                },
-                // Computed properties cho HOME tab
-                get upgradeCost() {
-                    const level = this.truckLevel || 1;
-                    return level < 999 ? 400 + (level - 1) * 200 : 200000;
-                },
-                get productionTime() {
-                    const level = this.truckLevel || 1;
-                    const minutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
-                    return Math.round(minutes * 100) / 100;
-                },
-                get productionProgress() {
-                    const elapsed = Date.now() - (this.lastProducedAt || Date.now());
-                    const interval = this.productionInterval || (30 * 60 * 1000);
-                    return Math.max(0, Math.min(100, Math.round((elapsed / interval) * 100)));
-                },
-                get timeTillNextProduction() {
-                    const elapsed = Date.now() - (this.lastProducedAt || Date.now());
-                    const interval = this.productionInterval || (30 * 60 * 1000);
-                    const remaining = Math.max(0, interval - elapsed);
-                    const minutes = Math.floor(remaining / 60000);
-                    const seconds = Math.floor((remaining % 60000) / 1000);
-                    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-                },
-                get withdrawEligible() {
-                    return this.orders >= 50000 && (this.adsToday || 0) >= 10 && (this.smartlinksToday || 0) >= 5;
-                },
-                
-                // Hàm bật/tắt nhạc
-                toggleMusic() {
-                    this.musicEnabled = !this.musicEnabled;
-                    if (this.musicEnabled) {
-                        this.playCurrentMusic();
+                    if (typeof show_11457064 === 'function') {
+                        show_11457064().then(grantReward).catch(() => {
+                            this.showNotification('QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!');
+                        });
                     } else {
-                        this.stopMusic();
-                    }
-                    this.saveState();
-                },
-                setCurrentMusic(index) {
-                    this.currentMusicIndex = index;
-                    if (this.musicEnabled) {
-                        this.stopMusic();
-                        this.playCurrentMusic();
-                    }
-                    this.saveState();
-                },
-                playCurrentMusic() {
-                    // Dừng nhạc cũ nếu có
-                    if (this.audioPlayer) {
-                        this.audioPlayer.pause();
-                    }
-                    const musicUrls = [
-                        'https://www.youtube.com/embed/abcd1234',
-                        'https://www.youtube.com/embed/efgh5678',
-                        'https://www.youtube.com/embed/ijkl9012',
-                        'https://www.youtube.com/embed/mnop3456'
-                    ];
-                    // Dùng Web Audio API hoặc tạo audio element để phát nhạc
-                    // Có thể dùng Spotify API, YouTube API, hoặc các dịch vụ nhạc khác
-                    console.log('Playing music:', musicUrls[this.currentMusicIndex]);
-                },
-                stopMusic() {
-                    if (this.audioPlayer) {
-                        this.audioPlayer.pause();
+                        this.showNotification('(Demo) Đang xem quảng cáo...');
+                        setTimeout(grantReward, 1000);
                     }
                 },
-                
                 // Removed checkAndClaimTask as it was redundant with claimTaskReward and completeTask
                 claimTaskReward(idx) {
                     const task = this.dailyTasks[idx];
@@ -1905,8 +1745,12 @@
                 handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink15');
                     if (!task || this.smartlinkStartTime <= 0) return;
-                    // Chốt chặn CỨNG: nếu đã đủ 30 lần trong ngày, dừng ngay, không cộng thêm bất kỳ thưởng nào.
-                    if ((this.smartlinkCount || 0) >= 30) {
+                    // FIX LỖI "ĐÃ ĐỦ 15 LẦN SMARTLINK VẪN CHO LÀM TIẾP VÀ NHẬN THÊM 500 COIN": chốt chặn CỨNG
+                    // ngay tại đây - nếu vì bất kỳ lý do gì (dữ liệu cũ chưa đồng bộ, task.done bị lệch...) mà
+                    // smartlinkCount đã >= 15 nhưng task.done vẫn chưa được đánh dấu true, dừng lại NGAY LẬP TỨC,
+                    // ép cờ done/claimable về đúng trạng thái đã hoàn thành và KHÔNG cộng thêm bất kỳ phần
+                    // thưởng nào nữa, thay vì chỉ dựa duy nhất vào việc kiểm tra "task.done" như code cũ.
+                    if ((this.smartlinkCount || 0) >= 15) {
                         task.done = true;
                         task.claimable = false;
                         this.smartlinkStartTime = 0;
@@ -1917,36 +1761,35 @@
                     if (task.done) { this.smartlinkStartTime = 0; return; }
                     const timeSpent = Date.now() - this.smartlinkStartTime;
                     this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
-                    if (timeSpent >= 5000) { // 5 giây
-                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 30); // Không bao giờ vượt quá 30
+                    if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
+                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 15); // Không bao giờ vượt quá 15
                         this.smartlinksToday = (this.smartlinksToday || 0) + 1;
                         this.lifetimeSmartlinks = (this.lifetimeSmartlinks || 0) + 1; // Đếm trọn đời, không reset theo ngày - dùng cho điều kiện mời bạn thành công
                         this.onSmartlinkWatched();
-                        // MỖI LẦN hoàn thành 1 SmartLink đều được thưởng NGAY: +25 Coin + 50 Đơn Hàng
-                        this.coins += 25;
-                        this.orders += 50;
                         this.saveState();
-                        if (this.smartlinkCount >= 30) {
+                        if (this.smartlinkCount >= 15) {
                             task.done = true;
-                            task.claimable = false;
+                            task.claimable = false; // Thưởng được cộng NGAY tại đây, không cần "claim" thêm lần nữa (tránh 1 nguồn thưởng thứ 2)
+                            this.coins += 500;
+                            this.spinFree += 2;
                             this.dailyTasks = [...this.dailyTasks];
                             this.saveState();
-                            this.showNotification('✅ Hoàn thành 30/30 SmartLink hôm nay! +25 💰 +50 📦 (lần cuối)');
+                            this.showNotification('✅ Hoàn thành 15 SmartLink! Nhận 500 💰 + 2 🎡');
                         } else {
-                            this.showNotification(`✅ +25 💰 +50 📦 (${this.smartlinkCount}/30 SmartLink hôm nay)`);
+                            this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/15 SmartLink!`);
                         }
                     } else {
-                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 5 giây để được tính!');
+                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 10 giây để được tính!');
                     }
                 },
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
                     if (!task || task.done) return;
                     if (task.id === 'smartlink15') {
-                        // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 30 lần (phòng trường hợp
+                        // Chốt chặn CỨNG thứ 2: không cho mở thêm SmartLink nếu đã đủ 15 lần (phòng trường hợp
                         // task.done chưa kịp cập nhật) hoặc đang có 1 vòng SmartLink khác chưa xử lý xong (chống
                         // bấm nhiều lần liên tiếp mở nhiều tab cùng lúc rồi cộng dồn thưởng sai).
-                        if ((this.smartlinkCount || 0) >= 30) {
+                        if ((this.smartlinkCount || 0) >= 15) {
                             task.done = true; task.claimable = false;
                             this.dailyTasks = [...this.dailyTasks]; this.saveState();
                             return;
@@ -2008,10 +1851,6 @@
                 async requestWithdraw() {
                     if (this.withdrawRemain <= 0) {
                         this.showNotification('❌ Bạn đã hết lượt rút tiền trong ngày!');
-                        return;
-                    }
-                    if (!this.ensureCaptcha('rút tiền')) {
-                        this.showNotification('❌ CAPTCHA sai, vui lòng kiểm tra lại trước khi rút tiền.');
                         return;
                     }
                     if (!this.withdrawEligible) {
@@ -2216,8 +2055,6 @@
                         lastResetDate: this.lastResetDate,
                         lastWeekReset: this.lastWeekReset,
                         dailyTasks: this.dailyTasks,
-                        deliveryAdsCountToday: this.deliveryAdsCountToday,
-                        deliveryAdsCountToday: this.deliveryAdsCountToday,
                         allTasksClaimed: this.allTasksClaimed,
                         deliveryCount: this.deliveryCount,
                         chestOpensTotal: this.chestOpensTotal,
@@ -2227,8 +2064,6 @@
                         usedSmartlinks: this.usedSmartlinks,
                         referralMilestones: this.referralMilestones, // Ensure milestones are saved
                         clientWalletSyncedAt: this.walletSyncedAt, // Mốc ví client biết gần nhất, để server chống ghi đè thay đổi của admin
-                        musicEnabled: this.musicEnabled,
-                        currentMusicIndex: this.currentMusicIndex,
                     };
                     try {
                         const res = await fetch(`${API_URL}/api/user/${this.user.id}`, {
