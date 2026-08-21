@@ -407,7 +407,7 @@
                             <span>🛠️</span>
                             <span x-text="texts.upgrade"></span>
                         </div>
-                        <span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span>
+                        <span class="flex items-center gap-1"><span x-show="truckLevel < 10" class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span><span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span></span>
                     </button>
                     <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
                 </div>
@@ -1228,14 +1228,8 @@
                             let data = await res.json();
                             // Nếu snapshot cục bộ đã được server xác nhận ở một mốc mới hơn dữ liệu server hiện tại,
                             // ưu tiên snapshot đó để tránh hiện tượng reload làm lùi coin/đơn hàng/nhiệm vụ/quảng cáo.
-                            try {
-                                const backup = JSON.parse(localStorage.getItem('shipper_state_backup') || 'null');
-                                const serverTs = data.walletUpdatedAt ? new Date(data.walletUpdatedAt).getTime() : 0;
-                                const backupTs = backup?.walletUpdatedAt ? new Date(backup.walletUpdatedAt).getTime() : 0;
-                                if (backup?.data && backupTs > serverTs) {
-                                    data = { ...data, ...backup.data, walletUpdatedAt: backup.walletUpdatedAt };
-                                }
-                            } catch (e) {}
+                            // Khi server trả dữ liệu thành công, Supabase là nguồn sự thật duy nhất.
+                            // Backup local chỉ dùng khi server lỗi, tránh snapshot cũ ghi đè dữ liệu mới sau reload.
                             // Dữ liệu từ Supabase là phẳng (flat), gán trực tiếp vào this.user
                             this.user.name = data.name || this.user.name;
                             this.user.referrerId = data.referrerId || null;
@@ -1448,6 +1442,7 @@
                     // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
                     this.ensureYouTubePlayer().catch(() => {});
                     if (this.musicOn) this.armMusicOnFirstTouch();
+                    this.preloadRewardedAd().catch(() => {});
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
                     this.initQcRankList();
 
@@ -1456,9 +1451,28 @@
                     // đăng ký cả visibilitychange + pagehide + beforeunload vì mỗi WebView Telegram
                     // bắn khác nhau 1 trong các sự kiện này.
                     const flushSave = () => { this.saveState(); };
-                    document.addEventListener('visibilitychange', () => { if (document.hidden) flushSave(); });
-                    window.addEventListener('pagehide', flushSave);
-                    window.addEventListener('beforeunload', flushSave);
+                    const stopMusicOnExit = () => { try { this.stopMusic(); } catch (e) {} };
+                    document.addEventListener('visibilitychange', () => {
+                        if (document.hidden) {
+                            stopMusicOnExit();
+                            flushSave();
+                        }
+                    });
+                    window.addEventListener('pagehide', () => {
+                        stopMusicOnExit();
+                        flushSave();
+                    });
+                    window.addEventListener('beforeunload', () => {
+                        stopMusicOnExit();
+                        flushSave();
+                    });
+                    try {
+                        if (window.Telegram?.WebApp?.onEvent) {
+                            Telegram.WebApp.onEvent('viewportChanged', () => {
+                                if (document.hidden) stopMusicOnExit();
+                            });
+                        }
+                    } catch (e) {}
                 },
                 
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
@@ -1694,6 +1708,19 @@
                     this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(delivered) + ' Đơn hàng');
                 },
                 upgradeTruck() {
+                    if (this.truckLevel >= 10) return;
+                    if (this.coins < this.upgradeCost) {
+                        this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
+                        return;
+                    }
+                    if (this.isShipping) {
+                        this.showNotification('⏳ Vui lòng chờ giao hàng hoàn tất.');
+                        return;
+                    }
+                    // Nâng cấp xe cũng phải xem Rewarded Interstitial, giống nút Giao Hàng.
+                    this.playRewardedAd(() => this.completeTruckUpgrade());
+                },
+                completeTruckUpgrade() {
                     if (this.truckLevel >= 10 || this.coins < this.upgradeCost) return;
                     this.coins -= this.upgradeCost;
                     this.truckLevel++;
@@ -2361,44 +2388,65 @@
                     this.showQuizQuestion();
                     this.saveState();
                 },
-                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
-                    const startedAt = Date.now();
-                    let token = null;
-                    let sdkError = null;
-                    let sdkErrorAt = 0;
+                async preloadRewardedAd() {
+                    if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
+                    this._rewardedPreloadStarted = true;
                     try {
-                        const sr = await fetch(`${API_URL}/api/ad/session/start`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ userId: this.user.id, adType: 'rewarded' }) });
-                        const sd = await sr.json().catch(() => ({}));
-                        token = sd.token || null;
+                        await Promise.resolve(show_11457064({ type: 'preload', ymid: String(this.user?.id || '') }));
+                        this._rewardedPreloaded = true;
+                        return true;
+                    } catch (e) {
+                        this._rewardedPreloaded = false;
+                        return false;
+                    }
+                },
+                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
+                    let token = null;
+                    try {
                         if (typeof show_11457064 !== 'function') throw new Error('Rewarded SDK chưa sẵn sàng');
-                        try {
-                            await Promise.resolve(show_11457064());
-                        } catch (e) {
-                            sdkError = e;
-                            sdkErrorAt = Date.now();
-                        }
-                        const elapsed = Date.now() - startedAt;
-                        const remain = Math.max(0, 5000 - elapsed);
-                        if (remain) await new Promise(r => setTimeout(r, remain));
-                        const totalElapsed = Date.now() - startedAt;
-                        // SDK có thể reject sau khi quảng cáo đã chạy xong. Chỉ thất bại thật sự khi
-                        // SDK lỗi trước mốc 5 giây; đủ 5 giây thì tiếp tục xác nhận phiên với server.
-                        // SDK có thể reject sau khi quảng cáo đã hiển thị xong; sau 5s server là nguồn xác nhận cuối.
-                        if (sdkError && (sdkErrorAt - startedAt) < 5000) throw sdkError;
-                        if (token) {
-                            const cr = await fetch(`${API_URL}/api/ad/session/complete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ userId:this.user.id, token, adType:'rewarded' }) });
-                            const cd = await cr.json().catch(() => ({}));
-                            if (!cr.ok || !cd.success) throw new Error(cd.error || 'QC chưa đủ 5 giây');
-                            this.onAdWatched('rewarded', cd.weeklyAdsCount);
-                        } else {
-                            this.onAdWatched('rewarded');
-                        }
+
+                        // Server tracking chỉ dùng để ghi nhận lượt QC/BXH. Không được phép chặn phần thưởng:
+                        // Promise của Rewarded Interstitial resolve sau khi người dùng xem/xong quảng cáo.
+                        const sessionPromise = fetch(`${API_URL}/api/ad/session/start`, {
+                            method: 'POST',
+                            headers: {'Content-Type':'application/json'},
+                            body: JSON.stringify({ userId: this.user.id, adType: 'rewarded' })
+                        }).then(async r => {
+                            const d = await r.json().catch(() => ({}));
+                            return r.ok ? (d.token || null) : null;
+                        }).catch(() => null);
+
+                        await Promise.resolve(show_11457064({ ymid: String(this.user.id || '') }));
+
+                        // Trao thưởng NGAY sau khi SDK xác nhận đã xem xong; không chờ server tracking.
+                        this.onAdWatched('rewarded');
                         await Promise.resolve(onDone());
                         await this.saveState();
+
+                        // Tracking chạy sau. Lỗi mạng/server ở đây tuyệt đối không làm mất phần thưởng.
+                        token = await sessionPromise;
+                        if (token) {
+                            fetch(`${API_URL}/api/ad/session/complete`, {
+                                method:'POST',
+                                headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({ userId:this.user.id, token, adType:'rewarded' })
+                            }).then(async r => {
+                                const d = await r.json().catch(() => ({}));
+                                if (r.ok && d.success && Number.isFinite(Number(d.weeklyAdsCount))) {
+                                    this.weeklyAdsCount = Number(d.weeklyAdsCount);
+                                    await this.saveState();
+                                }
+                            }).catch(() => {});
+                        }
+
+                        // Preload lượt kế tiếp để giảm độ trễ khi bấm xem QC lần sau.
+                        this._rewardedPreloadStarted = false;
+                        this._rewardedPreloaded = false;
+                        this.preloadRewardedAd().catch(() => {});
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
-                        this.showNotification(e?.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính thưởng.' : failMessage);
+                        this.showNotification(failMessage);
                         return false;
                     }
                 },
@@ -2511,15 +2559,19 @@
                     if (!window.YT || !window.YT.Player) {
                         await new Promise(resolve => {
                             const timer = setInterval(() => { if (window.YT && window.YT.Player) { clearInterval(timer); resolve(); } }, 100);
-                            setTimeout(() => { clearInterval(timer); resolve(); }, 8000);
+                            setTimeout(() => { clearInterval(timer); resolve(); }, 2500);
                         });
                     }
                     if (!window.YT || !window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
                     if (!document.getElementById('yt-bg-player')) return null;
                     this._ytPlayer = new YT.Player('yt-bg-player', {
                         height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
-                        playerVars:{ autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1, origin: window.location.origin },
-                        events:{ onStateChange:(e)=>{ if (e.data === 0 && this.musicOn) { this.musicTrack=(this.musicTrack+1)%this.musicVideoIds.length; this.playMusicTrack(this.musicTrack); } } }
+                        playerVars:{
+                            autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1,
+                            origin: window.location.origin,
+                            playlist: this.musicVideoIds.join(','),
+                            loop: 1
+                        }
                     });
                     this._ytReady = true;
                     await new Promise(r => setTimeout(r, 250));
