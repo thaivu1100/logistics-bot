@@ -1004,7 +1004,7 @@
                 spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
                 isAppLoading: true, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
@@ -1188,7 +1188,17 @@
                             // Initial save for new user (minimal data, referrer handled by bot /start)
                             await this.saveState(); 
                         } else if (res.ok) {
-                            const data = await res.json();
+                            let data = await res.json();
+                            // Nếu snapshot cục bộ đã được server xác nhận ở một mốc mới hơn dữ liệu server hiện tại,
+                            // ưu tiên snapshot đó để tránh hiện tượng reload làm lùi coin/đơn hàng/nhiệm vụ/quảng cáo.
+                            try {
+                                const backup = JSON.parse(localStorage.getItem('shipper_state_backup') || 'null');
+                                const serverTs = data.walletUpdatedAt ? new Date(data.walletUpdatedAt).getTime() : 0;
+                                const backupTs = backup?.walletUpdatedAt ? new Date(backup.walletUpdatedAt).getTime() : 0;
+                                if (backup?.data && backupTs > serverTs) {
+                                    data = { ...data, ...backup.data, walletUpdatedAt: backup.walletUpdatedAt };
+                                }
+                            } catch (e) {}
                             // Dữ liệu từ Supabase là phẳng (flat), gán trực tiếp vào this.user
                             this.user.name = data.name || this.user.name;
                             this.user.referrerId = data.referrerId || null;
@@ -1220,6 +1230,7 @@
                             this.lifetimeAdsWatched = data.lifetimeAdsWatched || 0;
                             this.lifetimeSmartlinks = data.lifetimeSmartlinks || 0;
                             this.bonusAdsToday = data.bonusAdsToday || 0;
+                            this.weeklyAdsCount = data.weeklyAdsCount || 0;
                             this.walletSyncedAt = data.walletUpdatedAt || null;
                             if (data.isBanned) {
                                 this.bannedScreen = true;
@@ -1278,8 +1289,38 @@
                             throw new Error(`Failed to fetch user data: ${res.status} ${res.statusText}`);
                         }
                     } catch (e) { 
-                        console.error("Lỗi kết nối DB hoặc tải dữ liệu user:", e); 
-                        this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
+                        console.error("Lỗi kết nối DB hoặc tải dữ liệu user:", e);
+                        try {
+                            const backup = JSON.parse(localStorage.getItem('shipper_state_backup') || 'null');
+                            if (backup?.data) {
+                                const b = backup.data;
+                                this.orders = b.orders ?? this.orders;
+                                this.coins = b.coins ?? this.coins;
+                                this.spinFree = b.spins ?? this.spinFree;
+                                this.currentProducts = b.currentProducts ?? this.currentProducts;
+                                this.lastProducedAt = b.lastProducedAt ?? this.lastProducedAt;
+                                this.truckLevel = b.truckLevel ?? this.truckLevel;
+                                this.maxProducts = b.maxProducts ?? this.maxProducts;
+                                this.productionInterval = b.productionInterval ?? this.productionInterval;
+                                this.productionAmount = b.productionAmount ?? this.productionAmount;
+                                this.speedUpUsed = b.speedUpUsed ?? this.speedUpUsed;
+                                this.dailyTasks = Array.isArray(b.dailyTasks) ? b.dailyTasks : this.dailyTasks;
+                                this.smartlinkCount = b.smartlinkCount ?? this.smartlinkCount;
+                                this.usedSmartlinks = b.usedSmartlinks ?? this.usedSmartlinks;
+                                this.lastSmartlinkTime = b.lastSmartlinkTime ?? this.lastSmartlinkTime;
+                                this.quizDate = b.quizDate ?? this.quizDate;
+                                this.quizFreeUsed = b.quizFreeUsed ?? this.quizFreeUsed;
+                                this.quizAdUnlocked = b.quizAdUnlocked ?? this.quizAdUnlocked;
+                                this.quizUsedIds = Array.isArray(b.quizUsedIds) ? b.quizUsedIds : this.quizUsedIds;
+                                this.weeklyAdsCount = b.weeklyAdsCount ?? this.weeklyAdsCount;
+                                this.walletSyncedAt = backup.walletUpdatedAt || this.walletSyncedAt;
+                                this.showNotification('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.');
+                            } else {
+                                this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
+                            }
+                        } catch (restoreErr) {
+                            this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
+                        }
                     }
                     // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
                     // màn loading nào - giờ tắt overlay loading ngay khi đã tải xong (hoặc lỗi) dữ liệu
@@ -1354,7 +1395,7 @@
                     let prevCoins = this.coins, prevOrders = this.orders;
                     this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
-                    this.$watch('tab', () => { this.saveState(); setTimeout(() => this.maybeShowAmbientInApp(true), 400); });
+                    this.$watch('tab', () => { this.saveState(); setTimeout(() => this.maybeShowAmbientInApp(false), 700); });
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
@@ -1367,8 +1408,10 @@
                     // lỗi "đã bật nhạc nhưng không có tiếng".
                     this.musicOn = localStorage.getItem('shipper_music') === '1';
                     this.loadQuizLocal();
+                    // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
+                    this.ensureYouTubePlayer().catch(() => {});
                     if (this.musicOn) this.armMusicOnFirstTouch();
-                    setTimeout(() => this.maybeShowAmbientInApp(true), 3500);
+                    setTimeout(() => this.maybeShowAmbientInApp(false), 3500);
                     setInterval(() => this.maybeShowAmbientInApp(false), 60000);
 
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
@@ -1563,7 +1606,6 @@
                     const applyBoost = () => {
                         this.lastProducedAt -= Math.floor(remaining / 2);
                         this.speedUpUsed = true; // Đánh dấu đã dùng cho mẻ hàng hiện tại
-                        this.onAdWatched('rewarded');
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
                         this.saveState();
                     };
@@ -1590,7 +1632,7 @@
                 },
                 runDeliverAd() {
                     // Trigger ad and then animation
-                    this.playRewardedAd(() => { this.onAdWatched('rewarded'); this.startDeliveryAnimation(); });
+                    this.playRewardedAd(() => { this.startDeliveryAnimation(); });
                 },
                 startDeliveryAnimation() {
                     this.showDeliveryAnimation = true;
@@ -1666,7 +1708,7 @@
                     // FIX: trước đây dùng show_10406527('pop') - zone Popunder có tỉ lệ lấp đầy quảng cáo
                     // thấp/không ổn định, khiến 1 số user hay bị báo "QC Đã Hết Hoặc Lỗi". Đổi sang dùng
                     // chung zone Rewarded Video (show_11457064) đã chạy ổn định ở mọi nơi khác trong app.
-                    this.playRewardedAd(() => { this.completeOpenCoinBox(); this.onAdWatched('rewarded'); this.saveState(); });
+                    this.playRewardedAd(() => { this.completeOpenCoinBox(); this.saveState(); });
                 },
                 completeOpenCoinBox() {
                     if (!this.coinBoxVisible) return;
@@ -1763,7 +1805,6 @@
                     const grantSpin = () => {
                         this.spinAdCount++;
                         this.spinFree++;
-                        this.onAdWatched('rewarded');
                         this.showNotification('📺 +1 Lượt Mở Rương!');
                         this.saveState();
                     };
@@ -1848,12 +1889,14 @@
                 // referrerId và CHƯA được tính hợp lệ (referrerCounted=false) thì mỗi lần xem QC đều gọi lại,
                 // server (tryFinalizeReferral) sẽ tự kiểm tra lại đầy đủ điều kiện từ DB. Khi server xác nhận
                 // thành công thì đánh dấu referrerCounted=true ngay để dừng gọi API này về sau.
-                onAdWatched(type = 'rewarded') {
+                onAdWatched(type = 'rewarded', weeklyCount = null) {
                     if (type !== 'rewarded' && type !== 'inapp') return;
                     this.lifetimeAdsWatched = (this.lifetimeAdsWatched || 0) + 1;
                     this.adsToday = (this.adsToday || 0) + 1;
+                    if (Number.isFinite(Number(weeklyCount))) this.weeklyAdsCount = Number(weeklyCount);
                     this.checkTaskProgress(type === 'inapp' ? 'inapp' : 'watchAd');
                     this.checkReferralNow();
+                    this.initQcRankList();
                 },
                 // Gọi khi hoàn thành 1 smartlink - cũng là điều kiện mời bạn thành công (≥2 smartlink trọn đời)
                 onSmartlinkWatched() {
@@ -1904,7 +1947,6 @@
                         this.bonusAdsToday = Math.min(30, (this.bonusAdsToday || 0) + 1);
                         this.coins += 50;
                         this.orders += 50;
-                        this.onAdWatched('rewarded');
                         this.showNotification(`📺 +50 Coin +50 Đơn Hàng (${this.bonusAdsToday}/30)`);
                         this.saveState();
                     });
@@ -1921,27 +1963,39 @@
                 async playInAppAd(onDone = null, { countForLeaderboard = true } = {}) {
                     const startedAt = Date.now();
                     let token = null;
+                    let sdkError = null;
+                    let sdkErrorAt = 0;
                     try {
                         const sr = await fetch(`${API_URL}/api/ad/session/start`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:this.user.id, adType:'inapp' }) });
                         const sd = await sr.json().catch(() => ({}));
                         token = sd.token || null;
-                        const result = typeof show_11457064 === 'function'
-                            ? show_11457064({ type:'inApp', inAppSettings:{ frequency:2, capping:0.1, interval:30, timeout:5, everyPage:false } })
-                            : null;
-                        await Promise.resolve(result);
-                        const remain = Math.max(0, 5000 - (Date.now() - startedAt));
+                        if (typeof show_11457064 !== 'function') throw new Error('In-App SDK chưa sẵn sàng');
+                        try {
+                            // Gọi đúng cấu hình In-App Interstitial; không gọi Rewarded trong luồng quảng cáo nền.
+                            await Promise.resolve(show_11457064({ type:'inApp', inAppSettings:{ frequency:2, capping:0.1, interval:30, timeout:5, everyPage:false } }));
+                        } catch (e) {
+                            sdkError = e;
+                            sdkErrorAt = Date.now();
+                        }
+                        const elapsed = Date.now() - startedAt;
+                        const remain = Math.max(0, 5000 - elapsed);
                         if (remain) await new Promise(r => setTimeout(r, remain));
+                        const totalElapsed = Date.now() - startedAt;
+                        if (sdkError && (sdkErrorAt - startedAt) < 5000) throw sdkError;
                         if (token) {
                             const cr = await fetch(`${API_URL}/api/ad/session/complete`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:this.user.id, token, adType:'inapp' }) });
                             const cd = await cr.json().catch(() => ({}));
                             if (!cr.ok || !cd.success) throw new Error(cd.error || 'QC chưa đủ 5 giây');
+                            if (countForLeaderboard) this.onAdWatched('inapp', cd.weeklyAdsCount);
+                        } else if (countForLeaderboard) {
+                            this.onAdWatched('inapp');
                         }
-                        if (countForLeaderboard) this.onAdWatched('inapp');
                         if (typeof onDone === 'function') await Promise.resolve(onDone());
+                        await this.saveState();
                         return true;
                     } catch (e) {
                         console.error('In-App Interstitial:', e);
-                        this.showNotification(e.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính.' : 'QC In-App đang bận hoặc lỗi, thử lại sau.');
+                        this.showNotification(e?.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính.' : 'QC In-App đang bận hoặc lỗi, thử lại sau.');
                         return false;
                     }
                 },
@@ -1972,7 +2026,7 @@
                 maybeShowAmbientInApp(force = false) {
                     if (!this.user?.id || this.isAppLoading || this.maintenanceLocked || this.bannedScreen) return;
                     const now = Date.now();
-                    if (!force && now - (this._ambientAdLast || 0) < 3 * 60 * 1000) return;
+                    if (!force && now - (this._ambientAdLast || 0) < 5 * 60 * 1000) return;
                     this._ambientAdLast = now;
                     this.playInAppAd(null, { countForLeaderboard:true });
                 },
@@ -2350,27 +2404,40 @@
                 async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
                     const startedAt = Date.now();
                     let token = null;
+                    let sdkError = null;
+                    let sdkErrorAt = 0;
                     try {
                         const sr = await fetch(`${API_URL}/api/ad/session/start`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ userId: this.user.id, adType: 'rewarded' }) });
                         const sd = await sr.json().catch(() => ({}));
                         token = sd.token || null;
-                        if (typeof show_11457064 === 'function') {
+                        if (typeof show_11457064 !== 'function') throw new Error('Rewarded SDK chưa sẵn sàng');
+                        try {
                             await Promise.resolve(show_11457064());
-                        } else {
-                            this.showNotification('(Demo) Đang xem quảng cáo...');
+                        } catch (e) {
+                            sdkError = e;
+                            sdkErrorAt = Date.now();
                         }
-                        const remain = Math.max(0, 5000 - (Date.now() - startedAt));
+                        const elapsed = Date.now() - startedAt;
+                        const remain = Math.max(0, 5000 - elapsed);
                         if (remain) await new Promise(r => setTimeout(r, remain));
+                        const totalElapsed = Date.now() - startedAt;
+                        // SDK có thể reject sau khi quảng cáo đã chạy xong. Chỉ thất bại thật sự khi
+                        // SDK lỗi trước mốc 5 giây; đủ 5 giây thì tiếp tục xác nhận phiên với server.
+                        if (sdkError && (sdkErrorAt - startedAt) < 5000) throw sdkError;
                         if (token) {
                             const cr = await fetch(`${API_URL}/api/ad/session/complete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ userId:this.user.id, token, adType:'rewarded' }) });
                             const cd = await cr.json().catch(() => ({}));
                             if (!cr.ok || !cd.success) throw new Error(cd.error || 'QC chưa đủ 5 giây');
+                            this.onAdWatched('rewarded', cd.weeklyAdsCount);
+                        } else {
+                            this.onAdWatched('rewarded');
                         }
                         await Promise.resolve(onDone());
+                        await this.saveState();
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
-                        this.showNotification(e.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính thưởng.' : failMessage);
+                        this.showNotification(e?.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính thưởng.' : failMessage);
                         return false;
                     }
                 },
@@ -2386,7 +2453,6 @@
                     }
                     this.playRewardedAd(() => {
                         this.quizAdUnlocked++;
-                        this.onAdWatched('rewarded');
                         this.saveQuizLocal();
                         this.saveState();
                         this.showQuizQuestion();
@@ -2423,7 +2489,6 @@
                     const questionId = this.quizCurrent.id;
                     this.quizChosen = -3;
                     this.playRewardedAd(() => {
-                        this.onAdWatched('rewarded');
                         if (!this.quizUsedIds.includes(questionId)) this.quizUsedIds = [...this.quizUsedIds, questionId];
                         this.coins += 200;
                         this.spinFree += 1;
@@ -2492,7 +2557,7 @@
                     if (!document.getElementById('yt-bg-player')) return null;
                     this._ytPlayer = new YT.Player('yt-bg-player', {
                         height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
-                        playerVars:{ autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1 },
+                        playerVars:{ autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1, origin: window.location.origin },
                         events:{ onStateChange:(e)=>{ if (e.data === 0 && this.musicOn) { this.musicTrack=(this.musicTrack+1)%this.musicVideoIds.length; this.playMusicTrack(this.musicTrack); } } }
                     });
                     this._ytReady = true;
@@ -2515,13 +2580,21 @@
                 toggleMusic() {
                     this.musicOn = !this.musicOn;
                     localStorage.setItem('shipper_music', this.musicOn ? '1' : '0');
-                    if (this.musicOn) this.armMusicOnFirstTouch(); else this.stopMusic();
+                    if (this.musicOn) {
+                        // Khi người dùng vừa bấm nút, đây là user gesture hợp lệ để phát tiếng.
+                        if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
+                        else this.playMusicTrack(this.musicTrack);
+                    } else this.stopMusic();
+                    this.saveState();
                 },
                 armMusicOnFirstTouch() {
                     if (this._musicArmed) return;
                     this._musicArmed = true;
                     const handler = () => {
-                        if (this.musicOn) this.playMusicTrack(this.musicTrack);
+                        if (this.musicOn) {
+                            if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
+                            else this.playMusicTrack(this.musicTrack);
+                        }
                         document.removeEventListener('pointerdown', handler, true);
                         document.removeEventListener('touchstart', handler, true);
                         document.removeEventListener('click', handler, true);
@@ -2559,6 +2632,7 @@
                             this.spinAdCount = d.spinAdCount ?? this.spinAdCount;
                             this.spinAdProgress = d.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
+                            this.weeklyAdsCount = d.weeklyAdsCount ?? this.weeklyAdsCount;
                             this.lifetimeAdsWatched = d.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
                             this.lifetimeSmartlinks = d.lifetimeSmartlinks ?? this.lifetimeSmartlinks;
                             this.invitedCount = d.invitedCount ?? this.invitedCount;
@@ -2612,6 +2686,7 @@
                         lifetimeAdsWatched: this.lifetimeAdsWatched,
                         lifetimeSmartlinks: this.lifetimeSmartlinks,
                         bonusAdsToday: this.bonusAdsToday,
+                        weeklyAdsCount: this.weeklyAdsCount,
                         withdrawRemain: this.withdrawRemain,
                         withdrawHistory: this.withdrawHistory,
                         lastResetDate: this.lastResetDate,
@@ -2649,6 +2724,16 @@
                             }
                         }
                         const result = await res.json().catch(() => null);
+                        if (result?.walletUpdatedAt) {
+                            this.walletSyncedAt = result.walletUpdatedAt;
+                            try {
+                                localStorage.setItem('shipper_state_backup', JSON.stringify({
+                                    savedAt: Date.now(),
+                                    walletUpdatedAt: result.walletUpdatedAt,
+                                    data
+                                }));
+                            } catch (e) {}
+                        }
                         if (result?.walletOverridden && result.wallet) {
                             // Admin vừa thay đổi dữ liệu (coin/đơn hàng/level/khóa TK/reset toàn bộ...) sau lần đồng bộ trước
                             // -> lấy lại TOÀN BỘ giá trị mới nhất từ server (âm thầm đồng bộ lại, không hiện thông báo vì
@@ -2668,6 +2753,7 @@
                             this.spinAdCount = w.spinAdCount ?? this.spinAdCount;
                             this.spinAdProgress = w.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = w.bonusAdsToday ?? this.bonusAdsToday;
+                            this.weeklyAdsCount = w.weeklyAdsCount ?? this.weeklyAdsCount;
                             this.lifetimeAdsWatched = w.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
                             this.lifetimeSmartlinks = w.lifetimeSmartlinks ?? this.lifetimeSmartlinks;
                             this.invitedCount = w.invitedCount ?? this.invitedCount;
