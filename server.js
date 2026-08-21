@@ -108,9 +108,9 @@ async function loadAdmins() {
 loadAdmins();
 
 // Admin chính: chỉ đúng 1 ID hardcode, không thể bị xoá quyền.
-const isMainAdmin = (ctx) => ctx.from.id === ADMIN_ID;
+const isMainAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID);
 // Admin (chính hoặc phụ): dùng cho hầu hết lệnh quản trị.
-const isAdmin = (ctx) => ctx.from.id === ADMIN_ID || subAdminIds.has(String(ctx.from.id));
+const isAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID) || subAdminIds.has(String(ctx.from?.id || ''));
 
 // ==================== KHOÁ BOT / MINI APP (BẢO TRÌ) ====================
 // Trạng thái khoá được lưu ở bảng "app_settings" (key/value) để KHÔNG bị mất khi Render restart/deploy lại
@@ -458,7 +458,12 @@ bot.start(async (ctx) => {
                 isBanned: false,
                 referrerCounted: false, // Thêm trường này để kiểm soát việc đã đếm hợp lệ cho người mời hay chưa
                 lifetimeAdsWatched: 0, // Tổng số QC đã xem trọn đời (không reset theo ngày) - điều kiện xét mời bạn hợp lệ
-                bonusAdsToday: 0, // Số lần đã xem QC nhiệm vụ "Xem QC" hôm nay (tối đa 30)
+                bonusAdsToday: 0, // Số lượt QC Rewarded nhiệm vụ hôm nay
+                weeklyAdsCount: 0,
+                quizDate: '',
+                quizFreeUsed: false,
+                quizAdUnlocked: 0,
+                quizUsedIds: [],
                 chestOpensTotal: 0, // Tổng số lượt đã mở rương (trọn đời) - dùng cho /checkID
                 chestOpensToday: 0, // Số lượt đã mở rương hôm nay - dùng cho /checkID, reset mỗi ngày
                 walletUpdatedAt: new Date().toISOString() // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
@@ -482,7 +487,7 @@ bot.start(async (ctx) => {
                     // công, kèm nhắc nhở đúng 2 điều kiện cần hoàn tất. Thưởng + thông báo "thành công" thật
                     // sự chỉ được gửi trong tryFinalizeReferral() khi bạn bè ĐÃ đủ điều kiện.
                     await safeSendMessage(referrerId, 
-                        `👋 *${userName}* vừa vào Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *CHƯA được tính thành công*.\n📋 Hãy nhắc bạn ấy hoàn tất 2 điều kiện sau để bạn nhận được thưởng mời bạn:\n1️⃣ Tham gia đầy đủ nhóm Telegram bắt buộc\n2️⃣ Xem ít nhất 3 quảng cáo trong Mini App (ngoại trừ SmartLink)\n\n✅ Khi bạn ấy hoàn tất, bot sẽ tự động thông báo cho bạn kèm phần thưởng.`,
+                        `👋 *${userName}* vừa vào Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *CHƯA được tính thành công*.\n📋 Hãy nhắc bạn ấy hoàn tất 2 điều kiện sau để bạn nhận được thưởng mời bạn:\n1️⃣ Tham gia đầy đủ nhóm Telegram bắt buộc\n2️⃣ Xem ít nhất 5 quảng cáo Rewarded/In-App trong Mini App (ngoại trừ SmartLink)\n\n✅ Khi bạn ấy hoàn tất, bot sẽ tự động thông báo cho bạn kèm phần thưởng.`,
                         { parse_mode: 'Markdown' }
                     );
                 }
@@ -810,6 +815,11 @@ function fullResetFields() {
         spinAdCount: 0,
         spinAdProgress: 0,
         bonusAdsToday: 0,
+        weeklyAdsCount: 0,
+        quizDate: '',
+        quizFreeUsed: false,
+        quizAdUnlocked: 0,
+        quizUsedIds: [],
         chestOpensTotal: 0,
         chestOpensToday: 0,
         lifetimeAdsWatched: 0,
@@ -1458,7 +1468,7 @@ setInterval(weeklyLeaderboardReset, 60 * 60 * 1000); // Kiểm tra lại mỗi g
 // Promise sẽ bị reject mà không ai xử lý -> Node coi là "unhandledRejection" và THOÁT TIẾN TRÌNH với mã lỗi 1
 // (đây chính là nguyên nhân phổ biến khiến deploy trên Render báo "Exited with status 1" dù code không có lỗi cú pháp).
 bot.command('ban_ip', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
+    if (!isMainAdmin(ctx)) return;
     
     const args = ctx.message.text.split(' ');
     const ip = args[1];
@@ -1478,11 +1488,15 @@ bot.command('ban_ip', async (ctx) => {
     }
 });
 
-bot.launch()
-    .then(() => console.log("✅ Bot is running..."))
-    .catch((err) => {
+(async () => {
+    try {
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+        await bot.launch({ dropPendingUpdates: true });
+        console.log("✅ Bot is running...");
+    } catch (err) {
         console.error("❌ Lỗi khởi động bot (server vẫn tiếp tục chạy để phục vụ API/Web):", err.message);
-    });
+    }
+})();
 
 // Dừng bot đúng cách khi Render tắt instance cũ lúc deploy bản mới, tránh xung đột polling giữa 2 phiên bản
 process.once('SIGINT', () => bot.stop('SIGINT'));
@@ -1730,20 +1744,43 @@ app.post('/api/ad/impression', async (req, res) => {
     }
 });
 
-// Ghi nhận 1 lượt xem QC vào BXH tuần (atomic, không mất lượt khi nhiều request đồng thời).
-// Cần cột users.weeklyAdsCount (integer default 0). Nếu cột đã có thì chạy ngay; nếu chưa có,
-// endpoint vẫn trả lỗi rõ ràng để không làm ảnh hưởng luồng xem quảng cáo chính.
+const adSessions = new Map();
+function makeAdToken() { return `${Date.now()}_${Math.random().toString(36).slice(2,12)}`; }
+app.post('/api/ad/session/start', async (req, res) => {
+    try {
+        const { userId, adType } = req.body || {};
+        if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
+        const token = makeAdToken();
+        adSessions.set(token, { userId:String(userId), adType, startedAt:Date.now() });
+        setTimeout(() => adSessions.delete(token), 120000);
+        res.json({ success:true, token });
+    } catch (e) { res.status(500).json({success:false,error:e.message}); }
+});
+
+app.post('/api/ad/session/complete', async (req, res) => {
+    try {
+        const { userId, token, adType } = req.body || {};
+        const s = adSessions.get(token);
+        if (!s || s.userId !== String(userId) || s.adType !== adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
+        const elapsed = Date.now() - s.startedAt;
+        if (elapsed < 5000) return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
+        adSessions.delete(token);
+        const next = await atomicIncrement(String(userId), 'weeklyAdsCount', 1, 8);
+        if (next === null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
+        res.json({success:true, weeklyAdsCount:next, elapsed});
+    } catch (e) { res.status(500).json({success:false,error:e.message}); }
+});
+
+// API cũ giữ tương thích nhưng KHÔNG tự cộng BXH nữa.
+// BXH Xem QC chỉ được cộng tại /api/ad/session/complete sau khi server xác nhận
+// đúng loại Rewarded/In-App và đủ >= 5 giây, tránh đếm trùng hoặc bị gọi giả.
 app.post('/api/ad/watched', async (req, res) => {
     try {
-        const { userId } = req.body || {};
-        if (!userId) return res.status(400).json({ success: false, error: 'Missing userId' });
-        const next = await atomicIncrement(userId, 'weeklyAdsCount', 1, 8);
-        if (next === null) return res.status(500).json({ success: false, error: 'Không cập nhật được BXH Xem QC.' });
-        res.json({ success: true, weeklyAdsCount: next });
-    } catch (e) {
-        console.error('Lỗi cập nhật BXH Xem QC:', e);
-        res.status(500).json({ success: false, error: e.message });
-    }
+        const { userId, adType } = req.body || {};
+        if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Chỉ Rewarded/In-App Interstitial được tính BXH.'});
+        const { data } = await supabase.from('users').select('weeklyAdsCount').eq('id', String(userId)).single();
+        res.json({ success:true, weeklyAdsCount: data?.weeklyAdsCount || 0, countingEndpoint:'/api/ad/session/complete' });
+    } catch (e) { console.error('Lỗi kiểm tra BXH Xem QC:',e); res.status(500).json({success:false,error:e.message}); }
 });
 
 // ==================== END CAPTCHA & AD TRACKING ====================
