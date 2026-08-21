@@ -1392,36 +1392,60 @@ const WEEKLY_TOP_REWARDS = [
 async function weeklyLeaderboardReset() {
     try {
         const currentWeek = getWeekIdentifier(new Date());
-        const { data: state } = await supabase.from('weekly_state').select('*').eq('id', 1).single();
-        if (state && state.lastWeekKey === currentWeek) return; // Tuần này đã xử lý rồi, không làm lại
 
-        // Lấy Top 3 theo weeklyValidInvites (số bạn mời hợp lệ TRONG TUẦN, chỉ những ai >0 mới được thưởng)
-        const { data: topUsers, error: topError } = await supabase.from('users')
-            .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
-            .order('weeklyValidInvites', { ascending: false }).limit(3);
-        if (topError) { console.error('Lỗi lấy top BXH tuần:', topError); return; }
-
-        for (let i = 0; i < (topUsers || []).length; i++) {
-            const u = topUsers[i];
-            const prize = WEEKLY_TOP_REWARDS[i];
-            if (!prize) break;
-            const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
-            await touchWallet(u.id, {
-                orders: (cur?.orders || 0) + prize.orders,
-                spins: (cur?.spins || 0) + prize.spins
-            });
-            logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
-            await safeSendMessage(u.id,
-                `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới, chúc bạn tiếp tục giữ vững phong độ!`,
-                { parse_mode: 'Markdown' }
-            );
-            logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này, nhận ${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương`);
+        // ===== BXH MỜI BẠN =====
+        const { data: inviteState } = await supabase.from('weekly_state').select('*').eq('id', 1).single();
+        if (!inviteState || inviteState.lastWeekKey !== currentWeek) {
+            const { data: topUsers, error: topError } = await supabase.from('users')
+                .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
+                .order('weeklyValidInvites', { ascending: false }).limit(3);
+            if (topError) {
+                console.error('Lỗi lấy top BXH mời bạn tuần:', topError);
+            } else {
+                for (let i = 0; i < (topUsers || []).length; i++) {
+                    const u = topUsers[i], prize = WEEKLY_TOP_REWARDS[i];
+                    if (!prize) break;
+                    const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
+                    await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
+                    logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
+                    await safeSendMessage(u.id,
+                        `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới!`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này`);
+                }
+                await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
+                await supabase.from('weekly_state').upsert({ id: 1, lastWeekKey: currentWeek });
+            }
         }
 
-        // Reset weeklyValidInvites về 0 cho TẤT CẢ user để bắt đầu tuần thi đua mới công bằng
-        await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
-        await supabase.from('weekly_state').upsert({ id: 1, lastWeekKey: currentWeek });
-        console.log(`✅ Đã reset BXH tuần + trao thưởng top 3 (tuần: ${currentWeek})`);
+        // ===== BXH XEM QC =====
+        const { data: adsState } = await supabase.from('weekly_state').select('*').eq('id', 2).single();
+        if (!adsState || adsState.lastWeekKey !== currentWeek) {
+            const { data: topAds, error: adsError } = await supabase.from('users')
+                .select('id, name, weeklyAdsCount').gt('weeklyAdsCount', 0)
+                .order('weeklyAdsCount', { ascending: false }).limit(3);
+            if (adsError) {
+                console.error('Lỗi lấy top BXH Xem QC tuần:', adsError);
+            } else {
+                for (let i = 0; i < (topAds || []).length; i++) {
+                    const u = topAds[i], prize = WEEKLY_TOP_REWARDS[i];
+                    if (!prize) break;
+                    const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
+                    await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
+                    logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH Xem QC tuần`);
+                    await safeSendMessage(u.id,
+                        `📺 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Xem QC tuần này với *${u.weeklyAdsCount}* lượt xem!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH Xem QC đã được reset cho tuần mới!`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    logActivity(`📺 ${maskName(u.name)} đạt ${prize.label} BXH Xem QC tuần này`);
+                }
+                await supabase.from('users').update({ weeklyAdsCount: 0 }).gt('weeklyAdsCount', -1);
+                await supabase.from('weekly_state').upsert({ id: 2, lastWeekKey: currentWeek });
+            }
+        }
+
+        console.log(`✅ Kiểm tra/reset BXH tuần xong: ${currentWeek}`);
     } catch (e) {
         console.error('Lỗi weeklyLeaderboardReset:', e);
     }
@@ -1703,6 +1727,22 @@ app.post('/api/ad/impression', async (req, res) => {
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// Ghi nhận 1 lượt xem QC vào BXH tuần (atomic, không mất lượt khi nhiều request đồng thời).
+// Cần cột users.weeklyAdsCount (integer default 0). Nếu cột đã có thì chạy ngay; nếu chưa có,
+// endpoint vẫn trả lỗi rõ ràng để không làm ảnh hưởng luồng xem quảng cáo chính.
+app.post('/api/ad/watched', async (req, res) => {
+    try {
+        const { userId } = req.body || {};
+        if (!userId) return res.status(400).json({ success: false, error: 'Missing userId' });
+        const next = await atomicIncrement(userId, 'weeklyAdsCount', 1, 8);
+        if (next === null) return res.status(500).json({ success: false, error: 'Không cập nhật được BXH Xem QC.' });
+        res.json({ success: true, weeklyAdsCount: next });
+    } catch (e) {
+        console.error('Lỗi cập nhật BXH Xem QC:', e);
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
