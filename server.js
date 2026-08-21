@@ -1433,6 +1433,27 @@ setInterval(weeklyLeaderboardReset, 60 * 60 * 1000); // Kiểm tra lại mỗi g
 // (ví dụ lỗi 409 Conflict do phiên bản deploy cũ vẫn còn đang polling khi Render tạo instance mới),
 // Promise sẽ bị reject mà không ai xử lý -> Node coi là "unhandledRejection" và THOÁT TIẾN TRÌNH với mã lỗi 1
 // (đây chính là nguyên nhân phổ biến khiến deploy trên Render báo "Exited with status 1" dù code không có lỗi cú pháp).
+bot.command('ban_ip', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    
+    const args = ctx.message.text.split(' ');
+    const ip = args[1];
+    if (!ip) { ctx.reply('❌ Dùng: /ban_ip <IP>'); return; }
+    
+    // Ban toàn bộ user từ IP này
+    const { data: users, error } = await supabase
+        .from('users')
+        .select('id')
+        .eq('ip_address', ip);
+    
+    if (users && users.length > 0) {
+        await supabase.from('users').update({ isBanned: true }).eq('ip_address', ip);
+        ctx.reply(`✅ Đã ban ${users.length} user từ IP ${ip}`);
+    } else {
+        ctx.reply(`ℹ️ Không tìm thấy user nào từ IP ${ip}`);
+    }
+});
+
 bot.launch()
     .then(() => console.log("✅ Bot is running..."))
     .catch((err) => {
@@ -1835,6 +1856,22 @@ app.get('/api/withdrawals/:userId', async (req, res) => {
 });
 
 // API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
+app.get('/api/leaderboard-ads', async (req, res) => {
+    // BXH Xem QC hàng tuần
+    const { data, error } = await supabase
+        .from('users')
+        .select('id, name, weeklyAdsCount')
+        .order('weeklyAdsCount', { ascending: false })
+        .limit(10);
+    
+    if (error) { 
+        console.error('Lỗi lấy BXH QC:', error); 
+        res.status(500).json({ leaderboard: [] }); 
+        return; 
+    }
+    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, adsCount: u.weeklyAdsCount || 0 })) });
+});
+
 app.get('/api/leaderboard', async (req, res) => {
     // FIX LỖI "BXH MẤT HẾT DỮ LIỆU/MẤT TOP": trước đây đổi sang xếp hạng theo weeklyValidInvites (cột MỚI,
     // ai cũng bắt đầu từ 0), khiến BXH nhìn như bị xóa sạch dù validInvites trọn đời của mọi người vẫn còn
