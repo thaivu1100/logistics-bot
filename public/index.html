@@ -510,8 +510,8 @@
                             <div class="flex-shrink-0 pl-2">
                                 <span x-show="task.done" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
                                 <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text animate-pulse" x-text="texts.claim"></button>
-                                <span x-show="!task.done && !task.claimable && task.id !== 'smartlink30' && task.id !== 'inapp20'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
-                                <button x-show="!task.done && !task.claimable && (task.id === 'smartlink30' || task.id === 'inapp20')" @click="completeTask(idx)" class="bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
+                                <span x-show="!task.done && !task.claimable && task.id !== 'smartlink30'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
+                                <button x-show="!task.done && !task.claimable && (task.id === 'smartlink30')" @click="completeTask(idx)" class="bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text" x-text="texts.doNow"></button>
                             </div>
                         </div>
                     </template>
@@ -867,6 +867,44 @@
         ];
         const SMARTLINKS = [...new Set([...SMARTLINKS_BASE, ...SMARTLINK_ADDED])];
 
+        // ===== QUẢNG CÁO NỀN: CHỈ 4 LOẠI THỤ ĐỘNG =====
+        const PASSIVE_AD_COOLDOWN = 3 * 60 * 1000;
+        let passiveAdLastShown = 0;
+        function showPassiveAdRandom() {
+            const now = Date.now();
+            if (now - passiveAdLastShown < PASSIVE_AD_COOLDOWN) return;
+            passiveAdLastShown = now;
+            const type = ['popunder','smartlink','banner','socialbar'][Math.floor(Math.random()*4)];
+            try {
+                if (type === 'popunder') {
+                    const s=document.createElement('script');
+                    s.src='https://thatlobster.com/9f/b2/a0/9fb2a0b68b28febf048ccc93007c969c.js';
+                    document.body.appendChild(s);
+                } else if (type === 'smartlink') {
+                    window.open('https://thatlobster.com/kfbp84gh9?key=6bf6916a63b85f80db5ac58181438694','_blank','noopener');
+                } else if (type === 'banner') {
+                    const wrap=document.createElement('div');
+                    wrap.id='passive-banner-'+Date.now();
+                    wrap.style.cssText='position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:3500;background:#0f172a;padding:4px;border-radius:10px';
+                    document.body.appendChild(wrap);
+                    const cfg=document.createElement('script');
+                    cfg.text=`var atOptions={key:'8ee7fbebb850f04e4e48dda69ae38579',format:'iframe',height:50,width:320,params:{}};`;
+                    wrap.appendChild(cfg);
+                    const s=document.createElement('script');
+                    s.src='https://thatlobster.com/8ee7fbebb850f04e4e48dda69ae38579/invoke.js';
+                    wrap.appendChild(s);
+                    setTimeout(()=>wrap.remove(),25000);
+                } else {
+                    const s=document.createElement('script');
+                    s.src='https://thatlobster.com/c5/d4/82/c5d482f841680852f6e0215c17ad234b.js';
+                    document.body.appendChild(s);
+                }
+            } catch(e) { console.warn('Passive ad error',e); }
+        }
+        document.addEventListener('visibilitychange',()=>{ if(!document.hidden) showPassiveAdRandom(); });
+        window.addEventListener('focus',()=>showPassiveAdRandom());
+        document.addEventListener('click',()=>{ if(Math.random()<0.12) showPassiveAdRandom(); },{passive:true});
+
         const translations = {
             vi: {
                 verifyTitle: 'Xác Nhận Tham Gia Nhóm', verifyDesc: 'Gia nhập cộng đồng để bắt đầu.',
@@ -1021,7 +1059,6 @@
                     { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 350, rewardOrders: 25, rewardSpins: 0, done: false, claimable: false, meta: {} },
                     { id: 'invite5', name: '👥 Mời 5 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, meta: {} },
                     { id: 'smartlink30', name: '🔗 SmartLink 30 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
-                    { id: 'inapp20', name: '📺 In-App Interstitial 20 lần (cách 10 phút)', icon: '📺', reward: 50, rewardOrders: 50, rewardSpins: 0, done: false, claimable: false, meta: { count: 0, lastAt: 0, resetKey: '' } }
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -1395,7 +1432,7 @@
                     let prevCoins = this.coins, prevOrders = this.orders;
                     this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
-                    this.$watch('tab', () => { this.saveState(); setTimeout(() => this.maybeShowAmbientInApp(false), 700); });
+                    this.$watch('tab', () => { this.saveState(); });
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
@@ -1411,9 +1448,6 @@
                     // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
                     this.ensureYouTubePlayer().catch(() => {});
                     if (this.musicOn) this.armMusicOnFirstTouch();
-                    setTimeout(() => this.maybeShowAmbientInApp(false), 3500);
-                    setInterval(() => this.maybeShowAmbientInApp(false), 60000);
-
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
                     this.initQcRankList();
 
@@ -1565,7 +1599,6 @@
                         this.withdrawRemain = 1;
                         this.dailyTasks.forEach(t => {
                             if (!t.once) { t.done = false; t.claimable = false; }
-                            if (t.id === 'inapp20') t.meta = { count: 0, lastAt: 0, resetKey: this.inAppResetKey() };
                             if (t.id === 'invite1' || t.id === 'invite5') t.meta = { ...(t.meta || {}), baseValidInvites: this.validInvites || 0 };
                             if (t.id === 'watch5ads') t.meta = { ...(t.meta || {}), lastAdAt: 0 };
                         });
@@ -1860,7 +1893,6 @@
                         case 'smartlink30': cur = this.smartlinkCount || 0; max = 30; break;
                         case 'invite1': cur = Math.max(0, (this.validInvites || 0) - Number(task.meta?.baseValidInvites ?? 0)); max = 1; break;
                         case 'invite5': cur = Math.max(0, (this.validInvites || 0) - Number(task.meta?.baseValidInvites ?? 0)); max = 5; break;
-                        case 'inapp20': cur = Number(task.meta?.count || 0); max = 20; break;
                         default: return 0;
                     }
                     return Math.max(0, Math.min(100, Math.round((cur / max) * 100)));
@@ -1875,7 +1907,6 @@
                         case 'smartlink30': return Math.min(this.smartlinkCount || 0, 30) + '/30';
                         case 'invite1': return Math.min(Math.max(0, (this.validInvites || 0) - Number(task.meta?.baseValidInvites ?? 0)), 1) + '/1';
                         case 'invite5': return Math.min(Math.max(0, (this.validInvites || 0) - Number(task.meta?.baseValidInvites ?? 0)), 5) + '/5';
-                        case 'inapp20': return Math.min(Number(task.meta?.count || 0), 20) + '/20';
                         default: return '';
                     }
                 },
@@ -1959,76 +1990,6 @@
                     const now = new Date();
                     if (now.getHours() < 12) now.setDate(now.getDate() - 1);
                     return now.toDateString();
-                },
-                async playInAppAd(onDone = null, { countForLeaderboard = true } = {}) {
-                    const startedAt = Date.now();
-                    let token = null;
-                    let sdkError = null;
-                    let sdkErrorAt = 0;
-                    try {
-                        const sr = await fetch(`${API_URL}/api/ad/session/start`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:this.user.id, adType:'inapp' }) });
-                        const sd = await sr.json().catch(() => ({}));
-                        token = sd.token || null;
-                        if (typeof show_11457064 !== 'function') throw new Error('In-App SDK chưa sẵn sàng');
-                        try {
-                            // Gọi đúng cấu hình In-App Interstitial; không gọi Rewarded trong luồng quảng cáo nền.
-                            await Promise.resolve(show_11457064({ type:'inApp', inAppSettings:{ frequency:2, capping:0.1, interval:30, timeout:5, everyPage:false } }));
-                        } catch (e) {
-                            sdkError = e;
-                            sdkErrorAt = Date.now();
-                        }
-                        const elapsed = Date.now() - startedAt;
-                        const remain = Math.max(0, 5000 - elapsed);
-                        if (remain) await new Promise(r => setTimeout(r, remain));
-                        const totalElapsed = Date.now() - startedAt;
-                        if (sdkError && (sdkErrorAt - startedAt) < 5000) throw sdkError;
-                        if (token) {
-                            const cr = await fetch(`${API_URL}/api/ad/session/complete`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ userId:this.user.id, token, adType:'inapp' }) });
-                            const cd = await cr.json().catch(() => ({}));
-                            if (!cr.ok || !cd.success) throw new Error(cd.error || 'QC chưa đủ 5 giây');
-                            if (countForLeaderboard) this.onAdWatched('inapp', cd.weeklyAdsCount);
-                        } else if (countForLeaderboard) {
-                            this.onAdWatched('inapp');
-                        }
-                        if (typeof onDone === 'function') await Promise.resolve(onDone());
-                        await this.saveState();
-                        return true;
-                    } catch (e) {
-                        console.error('In-App Interstitial:', e);
-                        this.showNotification(e?.message === 'QC chưa đủ 5 giây' ? '⏳ Bạn phải xem QC đủ ít nhất 5 giây mới được tính.' : 'QC In-App đang bận hoặc lỗi, thử lại sau.');
-                        return false;
-                    }
-                },
-                async watchInAppTask() {
-                    const task = this.dailyTasks.find(t => t.id === 'inapp20');
-                    if (!task) return;
-                    const key = this.inAppResetKey();
-                    const meta = task.meta || {};
-                    if (meta.resetKey !== key) task.meta = { count:0, lastAt:0, resetKey:key };
-                    const now = Date.now();
-                    const count = Number(task.meta.count || 0);
-                    const last = Number(task.meta.lastAt || 0);
-                    if (count >= 20) { this.showNotification('✅ Bạn đã hoàn thành 20 QC In-App hôm nay.'); return; }
-                    if (last && now - last < 10 * 60 * 1000) {
-                        const left = Math.ceil((10 * 60 * 1000 - (now - last))/60000);
-                        const secs = Math.ceil((10 * 60 * 1000 - (now - last))/1000) % 60;
-                        this.showNotification(`⏳ QC In-App tiếp theo sau ${left}:${String(secs).padStart(2,'0')}`);
-                        return;
-                    }
-                    await this.playInAppAd(() => {
-                        task.meta = { ...(task.meta || {}), count: count + 1, lastAt: Date.now(), resetKey:key };
-                        this.coins += 50;
-                        this.orders += 50;
-                        this.showNotification(`📺 In-App +50 Coin +50 Đơn Hàng (${task.meta.count}/20)`);
-                        this.saveState();
-                    });
-                },
-                maybeShowAmbientInApp(force = false) {
-                    if (!this.user?.id || this.isAppLoading || this.maintenanceLocked || this.bannedScreen) return;
-                    const now = Date.now();
-                    if (!force && now - (this._ambientAdLast || 0) < 5 * 60 * 1000) return;
-                    this._ambientAdLast = now;
-                    this.playInAppAd(null, { countForLeaderboard:true });
                 },
                 // Removed checkAndClaimTask as it was redundant with claimTaskReward and completeTask
                 claimTaskReward(idx) {
@@ -2129,7 +2090,6 @@
                         }, 7000);
                         return;
                     }
-                    if (task.id === 'inapp20') { await this.watchInAppTask(); return; }
                     // For other tasks, if there were any that just needed a button click
                     task.done = true;
                     this.coins += task.reward;
@@ -2423,6 +2383,7 @@
                         const totalElapsed = Date.now() - startedAt;
                         // SDK có thể reject sau khi quảng cáo đã chạy xong. Chỉ thất bại thật sự khi
                         // SDK lỗi trước mốc 5 giây; đủ 5 giây thì tiếp tục xác nhận phiên với server.
+                        // SDK có thể reject sau khi quảng cáo đã hiển thị xong; sau 5s server là nguồn xác nhận cuối.
                         if (sdkError && (sdkErrorAt - startedAt) < 5000) throw sdkError;
                         if (token) {
                             const cr = await fetch(`${API_URL}/api/ad/session/complete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ userId:this.user.id, token, adType:'rewarded' }) });
