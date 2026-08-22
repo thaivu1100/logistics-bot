@@ -1058,7 +1058,7 @@
                     { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 350, rewardOrders: 25, rewardSpins: 0, done: false, claimable: false, meta: {} },
                     { id: 'invite5', name: '👥 Mời 5 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, meta: {} },
-                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần (mỗi lần +50 Coin +50 Đơn hàng)', icon: '🔗', reward: 0, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -1602,7 +1602,7 @@
                     return d.toISOString().slice(0,10);
                 },
                 resetDailyIfNeeded() {
-                    const today = new Date().toDateString();
+                    const today = new Intl.DateTimeFormat('sv-SE', { timeZone:'Asia/Ho_Chi_Minh' }).format(new Date());
                     if (this.lastResetDate !== today) {
                         this.spinFree = 1; 
                         this.spinAdCount = 0; 
@@ -2041,44 +2041,38 @@
                 // Xử lý dùng chung khi user quay lại app sau khi mở SmartLink (gọi từ visibilitychange, focus,
                 // và bộ đếm dự phòng bên dưới). Tự reset smartlinkStartTime NGAY khi xử lý để nếu nhiều nguồn
                 // cùng gọi (vd cả focus lẫn bộ đếm dự phòng cùng lúc) thì chỉ tính 1 lần duy nhất.
-                handleSmartlinkReturn() {
+                async handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink30');
                     if (!task || this.smartlinkStartTime <= 0) return;
-                    // FIX LỖI "ĐÃ ĐỦ 15 LẦN SMARTLINK VẪN CHO LÀM TIẾP VÀ NHẬN THÊM 500 COIN": chốt chặn CỨNG
-                    // ngay tại đây - nếu vì bất kỳ lý do gì (dữ liệu cũ chưa đồng bộ, task.done bị lệch...) mà
-                    // smartlinkCount đã >= 30 nhưng task.done vẫn chưa được đánh dấu true, dừng lại NGAY LẬP TỨC,
-                    // ép cờ done/claimable về đúng trạng thái đã hoàn thành và KHÔNG cộng thêm bất kỳ phần
-                    // thưởng nào nữa, thay vì chỉ dựa duy nhất vào việc kiểm tra "task.done" như code cũ.
-                    if ((this.smartlinkCount || 0) >= 30) {
-                        task.done = true;
-                        task.claimable = false;
-                        this.smartlinkStartTime = 0;
-                        this.dailyTasks = [...this.dailyTasks];
-                        this.saveState();
+                    const timeSpent = Date.now() - this.smartlinkStartTime;
+                    this.smartlinkStartTime = 0;
+                    if (timeSpent < 5000) {
+                        this.showNotification('⚠️ Cần ở lại SmartLink ít nhất 5 giây.');
                         return;
                     }
-                    if (task.done) { this.smartlinkStartTime = 0; return; }
-                    const timeSpent = Date.now() - this.smartlinkStartTime;
-                    this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
-                    if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
-                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 30); // Không bao giờ vượt quá 15
-                        this.smartlinksToday = (this.smartlinksToday || 0) + 1;
-                        this.lifetimeSmartlinks = (this.lifetimeSmartlinks || 0) + 1; // Đếm trọn đời, không reset theo ngày - dùng cho điều kiện mời bạn thành công
+                    try {
+                        const response = await fetch(`${API_URL}/api/smartlink/complete`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({ userId:this.user.id })
+                        });
+                        const result = await response.json().catch(() => ({}));
+                        if (!response.ok || !result.success) throw new Error(result.error || 'Không lưu được SmartLink');
+                        this.smartlinkCount = Number(result.smartlinkCount || 0);
+                        this.smartlinksToday = Number(result.smartlinksToday || 0);
+                        this.lifetimeSmartlinks = Number(result.lifetimeSmartlinks || 0);
+                        this.coins = Number(result.coins ?? this.coins);
+                        this.orders = Number(result.orders ?? this.orders);
+                        this.walletSyncedAt = result.walletUpdatedAt || this.walletSyncedAt;
+                        task.done = this.smartlinkCount >= 30;
+                        task.claimable = false;
+                        this.dailyTasks = [...this.dailyTasks];
+                        await this.saveState();
+                        if (result.alreadyComplete) this.showNotification('✅ Bạn đã hoàn thành đủ 30 SmartLink hôm nay.');
+                        else this.showNotification(`✅ SmartLink ${this.smartlinkCount}/30: +50 Coin +50 Đơn hàng`);
                         this.onSmartlinkWatched();
-                        this.saveState();
-                        if (this.smartlinkCount >= 30) {
-                            task.done = true;
-                            task.claimable = false; // Thưởng được cộng NGAY tại đây, không cần "claim" thêm lần nữa (tránh 1 nguồn thưởng thứ 2)
-                            this.coins += 500;
-                            this.spinFree += 2;
-                            this.dailyTasks = [...this.dailyTasks];
-                            this.saveState();
-                            this.showNotification('✅ Hoàn thành 30 SmartLink! Nhận thưởng 500 💰');
-                        } else {
-                            this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/30 SmartLink!`);
-                        }
-                    } else {
-                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 5 giây để được tính!');
+                    } catch (e) {
+                        console.error('SmartLink:', e);
+                        this.showNotification('⚠️ Chưa thể đồng bộ SmartLink, vui lòng thử lại.');
                     }
                 },
                 async completeTask(idx) {
@@ -2344,7 +2338,7 @@
                 },
 
                 // ==================== QUIZ ====================
-                quizTodayKey() { return new Date().toDateString(); },
+                quizTodayKey() { return new Intl.DateTimeFormat('sv-SE', { timeZone:'Asia/Ho_Chi_Minh' }).format(new Date()); },
                 ensureQuizDay() {
                     const today = this.quizTodayKey();
                     if (this.quizDate !== today) {
@@ -2369,7 +2363,13 @@
                     if (!available.length) return null;
                     return available[Math.floor(Math.random() * available.length)];
                 },
-                showQuizQuestion() {
+                async showQuizQuestion() {
+                    await this.syncLatestUser();
+                    this.ensureQuizDay();
+                    if ((this.quizUsedIds || []).length >= 5) {
+                        this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
+                        return;
+                    }
                     const picked = this.nextQuizQuestion();
                     if (!picked) {
                         this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
@@ -2380,13 +2380,13 @@
                     this.quizIsCorrect = false;
                     this.quizModalShow = true;
                 },
-                openQuizFree() {
+                async openQuizFree() {
                     this.ensureQuizDay();
                     if (this.quizFreeUsed) return;
                     this.quizFreeUsed = true;
                     this.saveQuizLocal();
-                    this.showQuizQuestion();
-                    this.saveState();
+                    await this.saveState();
+                    await this.showQuizQuestion();
                 },
                 async preloadRewardedAd() {
                     if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
@@ -2467,7 +2467,7 @@
                         this.showQuizQuestion();
                     });
                 },
-                answerQuiz(index) {
+                async answerQuiz(index) {
                     if (!this.quizCurrent || this.quizChosen !== null) return;
                     const answeredQuestionId = this.quizCurrent.id;
                     this.quizChosen = index;
@@ -2482,7 +2482,7 @@
                         this.showNotification('❌ Sai rồi! Câu này không nhận thưởng.');
                     }
                     this.saveQuizLocal();
-                    this.saveState();
+                    await this.saveState();
                     // Giải phóng câu hiện tại sau khi người dùng đã thấy kết quả, để nhận câu tiếp theo.
                     setTimeout(() => {
                         this.quizModalShow = false;
@@ -2553,7 +2553,7 @@
                 },
 
                 // ==================== NHẠC NỀN ====================
-                musicVideoIds: ['xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
+                musicVideoIds: ['2ShEgpIibzQ','xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
                 async ensureYouTubePlayer() {
                     if (this._ytPlayer) return this._ytPlayer;
                     if (!window.YT || !window.YT.Player) {
@@ -2564,17 +2564,24 @@
                     }
                     if (!window.YT || !window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
                     if (!document.getElementById('yt-bg-player')) return null;
-                    this._ytPlayer = new YT.Player('yt-bg-player', {
-                        height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
-                        playerVars:{
-                            autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1,
-                            origin: window.location.origin,
-                            playlist: this.musicVideoIds.join(','),
-                            loop: 1
-                        }
+                    this._ytPlayer = await new Promise((resolve, reject) => {
+                        const timeout = setTimeout(() => reject(new Error('YouTube player timeout')), 8000);
+                        const player = new YT.Player('yt-bg-player', {
+                            height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
+                            playerVars:{ autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1,
+                                origin:window.location.origin, playlist:this.musicVideoIds.join(','), loop:1 },
+                            events:{
+                                onReady:() => { clearTimeout(timeout); this._ytReady=true; resolve(player); },
+                                onStateChange:(event) => {
+                                    if (event.data === YT.PlayerState.ENDED && this.musicOn) {
+                                        this.musicTrack = (this.musicTrack + 1) % this.musicVideoIds.length;
+                                        player.loadVideoById(this.musicVideoIds[this.musicTrack]);
+                                    }
+                                },
+                                onError:(event) => console.error('YouTube music error:', event.data)
+                            }
+                        });
                     });
-                    this._ytReady = true;
-                    await new Promise(r => setTimeout(r, 250));
                     return this._ytPlayer;
                 },
                 async playMusicTrack(index = this.musicTrack) {
@@ -2627,7 +2634,7 @@
                         const d = await res.json();
                         const serverTime = d.walletUpdatedAt ? new Date(d.walletUpdatedAt).getTime() : 0;
                         const localTime = this.walletSyncedAt ? new Date(this.walletSyncedAt).getTime() : 0;
-                        if (serverTime > localTime) {
+                        if (serverTime >= 0) {
                             this.coins = d.coins ?? this.coins;
                             this.orders = d.orders ?? this.orders;
                             this.spinFree = d.spins ?? this.spinFree;
@@ -2654,6 +2661,11 @@
                             this.chestOpensTotal = d.chestOpensTotal ?? this.chestOpensTotal;
                             this.chestOpensToday = d.chestOpensToday ?? this.chestOpensToday;
                             this.dailyTasks = Array.isArray(d.dailyTasks) ? d.dailyTasks : this.dailyTasks;
+                            this.quizDate = d.quizDate || this.quizDate;
+                            this.quizFreeUsed = !!d.quizFreeUsed;
+                            this.quizAdUnlocked = Math.min(4, Number(d.quizAdUnlocked || 0));
+                            this.quizUsedIds = Array.isArray(d.quizUsedIds) ? d.quizUsedIds.map(Number).filter(Number.isFinite).slice(0,5) : [];
+                            this.lastResetDate = d.lastResetDate || this.lastResetDate;
                             this.walletSyncedAt = d.walletUpdatedAt;
                         }
                     } catch (e) {}
