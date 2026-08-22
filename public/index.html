@@ -54,8 +54,7 @@
         .loading-dots span { display: inline-block; animation: maintenanceHop 1.2s ease-in-out infinite; }
         .loading-dots span:nth-child(2) { animation-delay: 0.15s; }
         .loading-dots span:nth-child(3) { animation-delay: 0.3s; }
-        @keyframes loadingBarMove { 0% { transform: translateX(-100%); } 50% { transform: translateX(0%); } 100% { transform: translateX(100%); } }
-        .loading-bar-anim { width: 60%; animation: loadingBarMove 1.3s ease-in-out infinite; }
+        .loading-bar-anim { width: 0%; transition: width 0.25s ease-out; }
         @keyframes maintenanceBob { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-10px) rotate(3deg); } }
         .maintenance-dots span { display: inline-block; animation: maintenanceHop 1.2s ease-in-out infinite; }
         .maintenance-dots span:nth-child(2) { animation-delay: 0.15s; }
@@ -309,7 +308,7 @@
         <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1">Kho Hàng Kiếm Tiền</h2>
         <p class="relative text-xs text-slate-400" x-text="texts.loadingText || 'Đang tải dữ liệu...'"></p>
         <div class="relative w-40 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden">
-            <div class="h-full bg-blue-500 loading-bar-anim"></div>
+            <div class="h-full bg-blue-500 loading-bar-anim" :style="`width:${loadingProgress}%`"></div>
         </div>
     </div>
 
@@ -1121,7 +1120,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
-                isAppLoading: true, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
+                isAppLoading: true, loadingProgress: 0, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -1281,12 +1280,22 @@
                     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
+                    // FIX HOẠT ẢNH LOADING: thanh loading chạy dần tới ~92% trong lúc chờ tải dữ liệu,
+                    // chỉ chạy đầy 100% khi tải xong (hoặc hết giờ chờ) rồi mới chuyển vào giao diện.
+                    this._loadingProgressTimer = setInterval(() => {
+                        this.loadingProgress = Math.min(92, this.loadingProgress + Math.random() * 7 + 3);
+                    }, 220);
+                    // FIX LỖI "MINI APP KẸT MÃI Ở MÀN LOADING KHÔNG VÀO ĐƯỢC GIAO DIỆN": trước đây nếu fetch tới
+                    // server bị treo (mạng chậm/server không phản hồi) thì isAppLoading không bao giờ được tắt.
+                    // Đặt mốc thời gian chờ tối đa, hết giờ vẫn ép chạy đầy thanh loading rồi vào giao diện.
+                    this._loadingFailsafeTimer = setTimeout(() => { this.finishAppLoading(); }, 10000);
+
                     // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
                     // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
                     // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
                     await this.checkMaintenanceLock();
                     setInterval(() => this.checkMaintenanceLock(), 15000);
-                    if (this.maintenanceLocked) { this.isAppLoading = false; return; }
+                    if (this.maintenanceLocked) { this.finishAppLoading(); return; }
 
                     // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
                     // chưa/không trả về thông tin user kịp lúc app khởi động.
@@ -1364,7 +1373,7 @@
                             this.walletSyncedAt = data.walletUpdatedAt || null;
                             if (data.isBanned) {
                                 this.bannedScreen = true;
-                                this.isAppLoading = false;
+                                this.finishAppLoading();
                                 return;
                             }
                             this.withdrawRemain = data.withdrawRemain ?? 1;
@@ -1457,7 +1466,7 @@
                     // màn loading nào - giờ tắt overlay loading ngay khi đã tải xong (hoặc lỗi) dữ liệu
                     // chính của user, các bước còn lại (lưu IP, xếp hạng...) chạy ngầm phía sau không cần
                     // người dùng phải chờ thêm.
-                    this.isAppLoading = false;
+                    this.finishAppLoading();
                     
                     // Check group membership for banner (only on mini-app load)
                     const memberStatus = this.user.id === MAIN_ADMIN_ID ? true : await this.checkGroupMembership(true);
@@ -1587,6 +1596,17 @@
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
                 // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
                 // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
+                async finishAppLoading() {
+                    // Dừng vòng lặp tăng tiến độ + huỷ mốc chờ dự phòng, ép thanh loading chạy đầy 100%
+                    // rồi mới ẩn màn loading để vào giao diện (đúng yêu cầu: thanh chạy đầy mới vào app).
+                    clearInterval(this._loadingProgressTimer);
+                    clearTimeout(this._loadingFailsafeTimer);
+                    if (!this.isAppLoading) return;
+                    this.loadingProgress = 100;
+                    await new Promise(r => setTimeout(r, 280));
+                    this.isAppLoading = false;
+                },
+
                 async checkMaintenanceLock() {
                     try {
                         const res = await fetch(`${API_URL}/api/lock-status`);
