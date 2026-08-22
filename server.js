@@ -545,7 +545,13 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     logTransaction(userRecord.referrerId, 'coin', INSTANT_REF_COINS, `Mời bạn thành công: ${userRecord.name}`);
     logTransaction(userRecord.referrerId, 'orders', INSTANT_REF_ORDERS, `Mời bạn thành công: ${userRecord.name}`);
 
-    const milestonesData = refUser.referralMilestones ? JSON.parse(refUser.referralMilestones) : [];
+    // FIX: referralMilestones có thể đã là mảng (Supabase trả về jsonb dạng object) thay vì chuỗi JSON,
+    // JSON.parse(object) sẽ ném lỗi và làm hỏng cả luồng cộng thưởng mời bạn -> chỉ parse khi là chuỗi.
+    let milestonesData = [];
+    if (Array.isArray(refUser.referralMilestones)) milestonesData = refUser.referralMilestones;
+    else if (typeof refUser.referralMilestones === 'string' && refUser.referralMilestones) {
+        try { milestonesData = JSON.parse(refUser.referralMilestones); } catch (_) { milestonesData = []; }
+    }
     const nextMilestone = milestonesData.find(m => m.friends > newValid);
     const progressText = nextMilestone
         ? `🎯 Tiến độ: ${newValid}/${nextMilestone.friends} bạn (Phần thưởng mốc: ${nextMilestone.reward})`
@@ -1931,9 +1937,10 @@ app.get('/api/user/:id', async (req, res) => {
         console.error("Lỗi lấy user:", error);
         return res.status(500).json({ error: "Failed to fetch user data" });
     }
-    // Parse referralMilestones if stored as JSON string
+    // Parse referralMilestones if stored as JSON string (bọc try/catch để 1 dòng dữ liệu hỏng
+    // không làm crash cả request, khiến client không bao giờ nhận được phản hồi)
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
-        data.referralMilestones = JSON.parse(data.referralMilestones);
+        try { data.referralMilestones = JSON.parse(data.referralMilestones); } catch (_) { data.referralMilestones = []; }
     }
     
     // Thêm level stats vào response
