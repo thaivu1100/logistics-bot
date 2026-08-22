@@ -221,7 +221,7 @@
             /* ==================== GIAO DIỆN 3D (nhẹ - chỉ dùng transform nên không giật máy yếu) ====================
            Nguyên tắc để KHÔNG LAG: chỉ animate transform/opacity (do GPU xử lý), không animate box-shadow
            hay filter, không thêm backdrop-filter mới, và tự tắt hiệu ứng nếu máy bật chế độ giảm chuyển động. */
-        body { perspective: 1400px; perspective-origin: 50% 0%; }
+        html, body { width: 100%; min-height: 100%; overflow-x: hidden; }
         .glass, .task-card { transform: perspective(1200px) rotateX(1.2deg) translateZ(0); backface-visibility: hidden; }
         .glass:active, .task-card:active { transform: perspective(900px) rotateX(5deg) scale(0.985); }
         button:active { transform: perspective(700px) rotateX(7deg) scale(0.96); filter: brightness(0.95); }
@@ -249,12 +249,52 @@
             .cube-3d, .loading-plate, .truck-idle { animation: none !important; }
             .glass, .task-card, button { transition: none !important; }
         }
+        /* ===== TECHNO LOGISTICS UI: nhẹ, rõ, đồng nhất cho mọi nút ===== */
+        .loading-screen-center {
+            position: fixed !important; inset: 0 !important; width: 100vw !important;
+            min-height: 100vh !important; min-height: 100dvh !important;
+            display: flex !important; align-items: center !important; justify-content: center !important;
+            transform: none !important; perspective: none !important; z-index: 10001 !important;
+        }
+        body {
+            background-color: #07111f;
+            background-image:
+                linear-gradient(rgba(14,165,233,.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(14,165,233,.035) 1px, transparent 1px),
+                radial-gradient(circle at 15% 0%, #17304d 0%, #0b1728 42%, #06101d 100%);
+            background-size: 24px 24px, 24px 24px, auto;
+        }
+        .glass, .task-card {
+            border-color: rgba(56,189,248,.18) !important;
+            box-shadow: 0 10px 26px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
+        }
+        button {
+            position: relative; overflow: hidden; isolation: isolate;
+            border: 1px solid rgba(56,189,248,.20);
+            box-shadow: 0 5px 14px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.10);
+            letter-spacing: .025em;
+        }
+        button:not(:disabled)::after {
+            content: ''; position: absolute; top: 0; left: -75%; width: 38%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(125,211,252,.20), transparent);
+            transform: skewX(-18deg); transition: left .45s ease; pointer-events: none; z-index: -1;
+        }
+        button:not(:disabled):active::after { left: 135%; }
+        button:not(:disabled):hover { border-color: rgba(56,189,248,.48); filter: brightness(1.07); }
+        button:disabled { filter: grayscale(.25); cursor: not-allowed; }
+        .btn-text { text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+        .loading-screen-center::before {
+            content: ''; position: absolute; inset: 0; pointer-events: none;
+            background: linear-gradient(90deg, transparent 49.6%, rgba(56,189,248,.08) 50%, transparent 50.4%),
+                        linear-gradient(transparent 49.6%, rgba(56,189,248,.06) 50%, transparent 50.4%);
+            background-size: 54px 54px;
+        }
 </style>
 </head>
 <body x-data="app()" x-init="initApp()">
 
     <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user) -->
-    <div x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-[10001] bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
+    <div x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="loading-screen-center bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
         <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
         <div class="relative cube-scene mb-3">
             <div class="cube-3d">
@@ -1081,7 +1121,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
-                isAppLoading: true, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
+                isAppLoading: true, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -1142,7 +1182,7 @@
                     const lv = Math.max(1, Math.min(max, parseInt(level) || 1));
                     // 30 phút ở cấp 1, giảm đều xuống đúng 2 phút ở cấp 500
                     const minutes = lv >= max ? 2 : Math.max(2, 30 * Math.pow(2 / 30, (lv - 1) / (max - 1)));
-                    const amount = 100 + (lv - 1) * 30;
+                    const amount = Math.round(100 + (lv - 1) * (4900 / (max - 1))); // Cấp 500 = đúng 5.000 đơn
                     return {
                         interval: Math.round(minutes * 60 * 1000),
                         amount,
@@ -1352,8 +1392,9 @@
                             this.usedSmartlinks = data.usedSmartlinks || [];
                             this.quizDate = data.quizDate || '';
                             this.quizFreeUsed = !!data.quizFreeUsed;
-                            this.quizAdUnlocked = data.quizAdUnlocked || 0;
-                            this.quizUsedIds = Array.isArray(data.quizUsedIds) ? data.quizUsedIds : [];
+                            this.quizAdUnlocked = Math.min(4, Number(data.quizAdUnlocked || 0));
+                            this.quizUsedIds = Array.isArray(data.quizUsedIds) ? data.quizUsedIds.map(Number).filter(Number.isFinite).slice(0,5) : [];
+                            this._quizServerHydrated = true;
                             this.referralMilestones = data.referralMilestones || this.referralMilestones;
 
                             // Ensure milestones are parsed if they come as string
@@ -1744,12 +1785,38 @@
                 },
                 deliverWithAd() {
                     if (this.isShipping || this.currentProducts <= 0) return;
+                    if ((this.deliveryCount || 0) >= 20) {
+                        this.showNotification('✅ Hôm nay bạn đã giao đủ 20 lần.');
+                        return;
+                    }
                     // Bắt buộc nhập đúng CAPTCHA trước MỖI lần giao hàng (chống bot/autoclick)
                     this.startCaptcha('deliver', () => this.runDeliverAd());
                 },
-                runDeliverAd() {
-                    // Trigger ad and then animation
-                    this.playRewardedAd(() => { this.startDeliveryAnimation(); });
+                async runDeliverAd() {
+                    await this.playRewardedAd(async () => {
+                        try {
+                            let r, d;
+                            for (let attempt=0; attempt<2; attempt++) {
+                                r = await fetch(`${API_URL}/api/delivery/claim`, {
+                                    method:'POST', headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify({ userId:this.user.id })
+                                });
+                                d = await r.json().catch(() => ({}));
+                                if (r.status !== 409 || !d.retry) break;
+                                await new Promise(resolve => setTimeout(resolve,500));
+                            }
+                            if (!r.ok || !d.success) {
+                                this.showNotification('⚠️ ' + (d.error || 'Không cấp được lượt giao hàng.'));
+                                return;
+                            }
+                            this.deliveryCount = Number(d.deliveryCount || this.deliveryCount);
+                            if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
+                            this.startDeliveryAnimation();
+                        } catch (e) {
+                            console.error('Delivery claim:',e);
+                            this.showNotification('⚠️ Không lưu được lượt giao hàng, vui lòng thử lại.');
+                        }
+                    });
                 },
                 startDeliveryAnimation() {
                     this.showDeliveryAnimation = true;
@@ -1771,7 +1838,6 @@
                     this.orders += delivered;
                     this.lastProducedAt = Date.now(); // Reset production timer
                     this.speedUpUsed = false; // Mẻ hàng mới sau khi giao -> cho phép Tăng Tốc X2 lại 1 lần
-                    this.deliveryCount = (this.deliveryCount || 0) + 1;
                     this.checkTaskProgress('deliver');
                     this.saveState();
                     
@@ -2445,13 +2511,60 @@
                     if (!available.length) return null;
                     return available[Math.floor(Math.random() * available.length)];
                 },
+                applyQuizServerState(d) {
+                    if (!d) return;
+                    this.quizDate = d.quizDate || this.quizDate;
+                    this.quizFreeUsed = !!d.quizFreeUsed;
+                    this.quizAdUnlocked = Math.min(4, Number(d.quizAdUnlocked || 0));
+                    if (Array.isArray(d.quizUsedIds)) this.quizUsedIds = d.quizUsedIds.map(Number).filter(Number.isFinite).slice(0,5);
+                    this._quizServerHydrated = true;
+                    if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
+                    this.saveQuizLocal();
+                },
+                async fetchQuizStatus() {
+                    try {
+                        const r = await fetch(`${API_URL}/api/quiz/status/${this.user.id}`, { cache:'no-store' });
+                        const d = await r.json().catch(() => ({}));
+                        if (r.ok && d.success) { this.applyQuizServerState(d); return d; }
+                    } catch (e) { console.error('Quiz status:',e); }
+                    return null;
+                },
+                async claimQuizSlot(kind) {
+                    try {
+                        let r, d;
+                        for (let attempt=0; attempt<2; attempt++) {
+                            r = await fetch(`${API_URL}/api/quiz/claim-slot`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({ userId:this.user.id, kind })
+                            });
+                            d = await r.json().catch(() => ({}));
+                            if (r.status !== 409 || !d.retry) break;
+                            await new Promise(resolve => setTimeout(resolve,500));
+                        }
+                        this.applyQuizServerState(d);
+                        if (!r.ok || !d.success) {
+                            this.showNotification('⚠️ ' + (d.error || 'Không cấp được lượt câu hỏi.'));
+                            return null;
+                        }
+                        return d;
+                    } catch (e) {
+                        console.error('Quiz claim:',e);
+                        this.showNotification('⚠️ Không đồng bộ được lượt câu hỏi, vui lòng thử lại.');
+                        return null;
+                    }
+                },
                 async showQuizQuestion() {
-                    // Lấy trạng thái mới nhất từ Supabase trước khi mở câu hỏi: tải lại app hay tắt/mở
-                    // bot đều không thể có thêm lượt ngoài 5 câu/ngày.
-                    await this.syncLatestUser();
+                    const state = await this.fetchQuizStatus();
+                    if (!state) return;
                     this.ensureQuizDay();
-                    if (this.quizSlotsUsed() > 5 || (this.quizUsedIds || []).length >= 5) {
+                    const allocated = Number(state.slotsUsed || 0);
+                    const answered = (this.quizUsedIds || []).length;
+                    if (allocated >= 5 && answered >= 5) {
                         this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
+                        return;
+                    }
+                    if (answered >= allocated) {
+                        this.showNotification('🔒 Bạn chưa có lượt câu hỏi mới.');
                         return;
                     }
                     const picked = this.nextQuizQuestion();
@@ -2465,16 +2578,14 @@
                     this.quizModalShow = true;
                 },
                 async openQuizFree() {
-                    await this.syncLatestUser();
-                    this.ensureQuizDay();
-                    if (this.quizFreeUsed) {
+                    const state = await this.fetchQuizStatus();
+                    if (!state) return;
+                    if (state.quizFreeUsed) {
                         this.showNotification('✅ Hôm nay bạn đã dùng câu miễn phí rồi.');
                         return;
                     }
-                    this.quizFreeUsed = true;
-                    this.saveQuizLocal();
-                    await this.saveState(); // Lưu lên Supabase TRƯỚC khi hiện câu hỏi để không bị lách lượt
-                    await this.showQuizQuestion();
+                    const claimed = await this.claimQuizSlot('free');
+                    if (claimed) await this.showQuizQuestion();
                 },
                 async preloadRewardedAd() {
                     if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
@@ -2524,8 +2635,8 @@
                             const markLeft = () => { leftApp = true; };
                             const checkBack = () => {
                                 if (!leftApp || document.hidden) return;
-                                const wait = Math.max(0, MIN_AD_SECONDS - (Date.now() - startedAt));
-                                setTimeout(() => done(true), wait);
+                                const elapsed = Date.now() - startedAt;
+                                done(elapsed >= MIN_AD_SECONDS ? 'valid' : 'too_early');
                             };
                             const onVisibility = () => { document.hidden ? markLeft() : checkBack(); };
                             const cleanup = () => {
@@ -2540,16 +2651,17 @@
                         });
 
                         const sdkPromise = Promise.resolve(show_11457064({ ymid: String(this.user.id || '') }))
-                            .then(() => true).catch(() => false);
+                            .then(() => (Date.now()-startedAt >= MIN_AD_SECONDS ? 'valid' : 'too_early'))
+                            .catch(() => 'failed');
 
-                        // Ai xong trước thì tính: SDK báo xong, HOẶC người dùng quay lại app
+                        // Ai xong trước thì xét: SDK đóng, hoặc người dùng quay lại Mini App.
                         const completed = await Promise.race([sdkPromise, returnedPromise]);
                         if (typeof finishReturn === 'function') finishReturn();
-                        if (!completed) throw new Error('Quảng cáo chưa hoàn tất');
-
-                        // Bắt buộc tối thiểu 5 giây kể từ lúc mở quảng cáo mới được tính thưởng
-                        const remaining = MIN_AD_SECONDS - (Date.now() - startedAt);
-                        if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
+                        if (completed === 'too_early') {
+                            this.showNotification('⚠️ Bạn chưa xem đủ 5 giây nên không nhận thưởng. Vui lòng xem lại.');
+                            return false;
+                        }
+                        if (completed !== 'valid') throw new Error('Quảng cáo chưa hoàn tất');
 
                         this.onAdWatched('rewarded');
                         await Promise.resolve(onDone());
@@ -2582,21 +2694,20 @@
                         if (this.musicOn) this.resumeMusic();
                     }
                 },
-                addQuizWithAd() {
-                    this.ensureQuizDay();
-                    if (!this.quizFreeUsed) {
+                async addQuizWithAd() {
+                    const state = await this.fetchQuizStatus();
+                    if (!state) return;
+                    if (!state.quizFreeUsed) {
                         this.showNotification('🆓 Hãy dùng câu miễn phí trước.');
                         return;
                     }
-                    if (this.quizAdUnlocked >= 4) {
-                        this.showNotification('✅ Bạn đã mở đủ 4 câu bằng quảng cáo hôm nay.');
+                    if (Number(state.slotsUsed || 0) >= 5 || Number(state.quizAdUnlocked || 0) >= 4) {
+                        this.showNotification('✅ Bạn đã dùng đủ 5 câu hỏi hôm nay.');
                         return;
                     }
-                    this.playRewardedAd(async () => {
-                        this.quizAdUnlocked = Math.min(4, (this.quizAdUnlocked || 0) + 1);
-                        this.saveQuizLocal();
-                        await this.saveState();
-                        await this.showQuizQuestion();
+                    await this.playRewardedAd(async () => {
+                        const claimed = await this.claimQuizSlot('ad');
+                        if (claimed) await this.showQuizQuestion();
                     });
                 },
                 answerQuiz(index) {
@@ -2658,6 +2769,7 @@
                     } catch (e) {}
                 },
                 loadQuizLocal() {
+                    if (this._quizServerHydrated) { this.ensureQuizDay(); return; }
                     try {
                         const raw = localStorage.getItem('shipper_quiz_state');
                         if (!raw) return;
@@ -2869,6 +2981,7 @@
                             this.quizFreeUsed = !!d.quizFreeUsed;
                             this.quizAdUnlocked = Math.min(4, Number(d.quizAdUnlocked || 0));
                             this.quizUsedIds = Array.isArray(d.quizUsedIds) ? d.quizUsedIds.map(Number).filter(Number.isFinite).slice(0, 5) : [];
+                            this._quizServerHydrated = true;
                             this.lastResetDate = d.lastResetDate || this.lastResetDate;
                             this.withdrawRemain = d.withdrawRemain ?? this.withdrawRemain;
                             this.saveQuizLocal();
