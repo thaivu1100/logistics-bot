@@ -765,7 +765,7 @@
                 <div class="glass p-3 rounded-[25px] flex justify-between items-center card-padding">
                     <div>
                         <p class="text-sm font-black">🎵 Nhạc nền</p>
-                        <p class="text-[9px] text-slate-400" x-text="musicOn ? 'Đang phát - 4 bài lặp lại tuần tự' : 'Đã tắt'"></p>
+                        <p class="text-[9px] text-slate-400" x-text="musicOn ? ('Đang phát - ' + musicVideoIds.length + ' bài lặp lại tuần tự') : 'Đã tắt'"></p>
                     </div>
                     <button @click="toggleMusic()" class="px-4 py-2 rounded-xl font-black text-xs transition"
                             :class="musicOn ? 'bg-green-600 text-white shadow-lg shadow-green-600/30' : 'bg-slate-800 text-slate-400 border border-white/10'"
@@ -1441,7 +1441,10 @@
                     this.loadQuizLocal();
                     // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
                     this.ensureYouTubePlayer().catch(() => {});
-                    if (this.musicOn) this.armMusicOnFirstTouch();
+                    if (this.musicOn) {
+                        this.armMusicOnFirstTouch();
+                        this.startMusicWatchdog();
+                    }
                     this.preloadRewardedAd().catch(() => {});
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
                     this.initQcRankList();
@@ -1456,6 +1459,9 @@
                         if (document.hidden) {
                             stopMusicOnExit();
                             flushSave();
+                        } else if (this.musicOn) {
+                            // Quay lại Mini App (sau khi xem QC/SmartLink) -> phát tiếp thay vì im lặng
+                            this.resumeMusic();
                         }
                     });
                     window.addEventListener('pagehide', () => {
@@ -2553,61 +2559,123 @@
                 },
 
                 // ==================== NHẠC NỀN ====================
-                musicVideoIds: ['xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
+                musicVideoIds: ['2ShEgpIibzQ','xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
+                // FIX LỖI "NHẠC NỀN LÚC PHÁT ĐƯỢC LÚC KHÔNG": bản cũ tạo YT.Player rồi coi như đã sẵn sàng
+                // sau 250ms và gọi playVideo() ngay. Thực tế iframe YouTube cần thời gian khởi tạo (mạng chậm,
+                // Telegram WebView nạp API muộn), nên rất nhiều lần playVideo() bị gọi khi player CHƯA sẵn sàng
+                // -> im lặng, không có tiếng. Ngoài ra khi video bị lỗi/chặn hoặc trình duyệt chặn autoplay thì
+                // không có gì thử lại. Nay: chờ đúng sự kiện onReady, tự chuyển bài khi lỗi, và có bộ canh
+                // (watchdog) tự phát lại nếu phát hiện nhạc đang BẬT mà không chạy.
                 async ensureYouTubePlayer() {
-                    if (this._ytPlayer) return this._ytPlayer;
-                    if (!window.YT || !window.YT.Player) {
-                        await new Promise(resolve => {
-                            const timer = setInterval(() => { if (window.YT && window.YT.Player) { clearInterval(timer); resolve(); } }, 100);
-                            setTimeout(() => { clearInterval(timer); resolve(); }, 2500);
-                        });
-                    }
-                    if (!window.YT || !window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
-                    if (!document.getElementById('yt-bg-player')) return null;
-                    this._ytPlayer = new YT.Player('yt-bg-player', {
-                        height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
-                        playerVars:{
-                            autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1,
-                            origin: window.location.origin,
-                            playlist: this.musicVideoIds.join(','),
-                            loop: 1
+                    if (this._ytReady && this._ytPlayer) return this._ytPlayer;
+                    if (this._ytPlayerPromise) return this._ytPlayerPromise;
+                    this._ytPlayerPromise = (async () => {
+                        const deadline = Date.now() + 15000;
+                        while ((!window.YT || !window.YT.Player) && Date.now() < deadline) {
+                            await new Promise(r => setTimeout(r, 150));
                         }
-                    });
-                    this._ytReady = true;
-                    await new Promise(r => setTimeout(r, 250));
-                    return this._ytPlayer;
+                        if (!window.YT || !window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
+                        const host = document.getElementById('yt-bg-player');
+                        if (!host) throw new Error('Thiếu khung phát nhạc');
+                        return await new Promise((resolve, reject) => {
+                            const timeout = setTimeout(() => reject(new Error('YouTube player quá thời gian khởi tạo')), 15000);
+                            const player = new YT.Player('yt-bg-player', {
+                                height: '2', width: '2', videoId: this.musicVideoIds[this.musicTrack],
+                                playerVars: {
+                                    autoplay: 1, controls: 0, playsinline: 1, rel: 0, modestbranding: 1,
+                                    origin: window.location.origin,
+                                    playlist: this.musicVideoIds.join(','),
+                                    loop: 1
+                                },
+                                events: {
+                                    onReady: () => {
+                                        clearTimeout(timeout);
+                                        this._ytPlayer = player;
+                                        this._ytReady = true;
+                                        try {
+                                            player.setVolume(70);
+                                            // Phát ở trạng thái tắt tiếng trước (mọi trình duyệt đều cho phép),
+                                            // rồi mở tiếng ngay ở thao tác chạm đầu tiên của người dùng.
+                                            player.mute();
+                                            player.playVideo();
+                                        } catch (e) {}
+                                        resolve(player);
+                                    },
+                                    onStateChange: (event) => {
+                                        if (event.data === YT.PlayerState.ENDED && this.musicOn) {
+                                            this.musicTrack = (this.musicTrack + 1) % this.musicVideoIds.length;
+                                            try { player.loadVideoById(this.musicVideoIds[this.musicTrack]); } catch (e) {}
+                                        }
+                                    },
+                                    onError: () => {
+                                        // Bài này bị lỗi/chặn -> tự sang bài tiếp theo thay vì tắt hẳn nhạc
+                                        if (!this.musicOn) return;
+                                        this.musicTrack = (this.musicTrack + 1) % this.musicVideoIds.length;
+                                        try { player.loadVideoById(this.musicVideoIds[this.musicTrack]); } catch (e) {}
+                                    }
+                                }
+                            });
+                        });
+                    })();
+                    try {
+                        return await this._ytPlayerPromise;
+                    } catch (e) {
+                        // Cho phép thử tạo lại ở lần sau (vd mạng vừa chậm) thay vì hỏng vĩnh viễn
+                        this._ytPlayerPromise = null;
+                        this._ytReady = false;
+                        this._ytPlayer = null;
+                        throw e;
+                    }
                 },
                 async playMusicTrack(index = this.musicTrack) {
                     if (!this.musicOn) return;
-                    this.musicTrack = index % this.musicVideoIds.length;
+                    const total = this.musicVideoIds.length;
+                    this.musicTrack = ((index % total) + total) % total;
                     try {
-                        const p = await this.ensureYouTubePlayer();
-                        if (!p) return;
-                        p.loadVideoById(this.musicVideoIds[this.musicTrack]);
-                        p.playVideo();
+                        const player = await this.ensureYouTubePlayer();
+                        player.loadVideoById(this.musicVideoIds[this.musicTrack]);
+                        player.unMute();
+                        player.setVolume(70);
+                        player.playVideo();
                     } catch (e) { console.error('Music:', e); }
+                },
+                async resumeMusic() {
+                    if (!this.musicOn) return false;
+                    try {
+                        const player = await this.ensureYouTubePlayer();
+                        player.unMute();
+                        player.setVolume(70);
+                        player.playVideo();
+                        return true;
+                    } catch (e) {
+                        console.error('Music:', e);
+                        return false;
+                    }
                 },
                 stopMusic() {
                     try { this._ytPlayer?.pauseVideo?.(); } catch (e) {}
                 },
-                toggleMusic() {
+                async toggleMusic() {
                     this.musicOn = !this.musicOn;
                     localStorage.setItem('shipper_music', this.musicOn ? '1' : '0');
                     if (this.musicOn) {
-                        // Khi người dùng vừa bấm nút, đây là user gesture hợp lệ để phát tiếng.
-                        if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
-                        else this.playMusicTrack(this.musicTrack);
-                    } else this.stopMusic();
+                        // Đây là user gesture hợp lệ -> mở tiếng được ngay
+                        await this.resumeMusic();
+                        this.startMusicWatchdog();
+                    } else {
+                        this.stopMusic();
+                    }
                     this.saveState();
                 },
                 armMusicOnFirstTouch() {
                     if (this._musicArmed) return;
                     this._musicArmed = true;
-                    const handler = () => {
-                        if (this.musicOn) {
-                            if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
-                            else this.playMusicTrack(this.musicTrack);
-                        }
+                    const handler = async () => {
+                        if (!this.musicOn) return;
+                        const ok = await this.resumeMusic();
+                        // CHỈ bỏ lắng nghe khi đã phát được thật sự; nếu chưa (player chưa kịp sẵn sàng)
+                        // thì giữ lại để lần chạm sau vẫn có cơ hội mở tiếng - đây là điểm bản cũ làm sai.
+                        if (!ok) return;
                         document.removeEventListener('pointerdown', handler, true);
                         document.removeEventListener('touchstart', handler, true);
                         document.removeEventListener('click', handler, true);
@@ -2615,6 +2683,23 @@
                     document.addEventListener('pointerdown', handler, true);
                     document.addEventListener('touchstart', handler, true);
                     document.addEventListener('click', handler, true);
+                },
+                // Bộ canh nhạc: mỗi 5 giây kiểm tra, nếu đang BẬT nhạc + app đang hiển thị mà nhạc không
+                // chạy (bị trình duyệt chặn, bị quảng cáo/SmartLink làm dừng, iframe bị treo) thì phát lại.
+                startMusicWatchdog() {
+                    if (this._musicWatchdog) return;
+                    this._musicWatchdog = setInterval(() => {
+                        if (!this.musicOn || document.hidden) return;
+                        const player = this._ytPlayer;
+                        if (!player || typeof player.getPlayerState !== 'function') {
+                            this.resumeMusic();
+                            return;
+                        }
+                        let state = -1;
+                        try { state = player.getPlayerState(); } catch (e) { state = -1; }
+                        const playing = state === 1 || state === 3; // PLAYING hoặc BUFFERING
+                        if (!playing) this.resumeMusic();
+                    }, 5000);
                 },
                 maybeInitMusicPlayer() {
                     if (this.musicOn) this.armMusicOnFirstTouch();
@@ -2797,6 +2882,6 @@
             };
         }
     </script>
-<div id="yt-bg-player" style="position:fixed;width:1px;height:1px;left:-10000px;top:-10000px;opacity:0;pointer-events:none"></div>
+<div id="yt-bg-player" style="position:fixed;width:2px;height:2px;left:0;bottom:0;opacity:.01;pointer-events:none;z-index:-1"></div>
 </body>
 </html>
