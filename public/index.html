@@ -218,15 +218,52 @@
         /* Số lượt quiz đếm ngược dạng "thùng hàng" */
         .quiz-slot { width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); animation: fadeInUp 0.3s ease-out; }
         .quiz-slot.used { opacity: 0.35; filter: grayscale(1); }
-    </style>
+            /* ==================== GIAO DIỆN 3D (nhẹ - chỉ dùng transform nên không giật máy yếu) ====================
+           Nguyên tắc để KHÔNG LAG: chỉ animate transform/opacity (do GPU xử lý), không animate box-shadow
+           hay filter, không thêm backdrop-filter mới, và tự tắt hiệu ứng nếu máy bật chế độ giảm chuyển động. */
+        body { perspective: 1400px; perspective-origin: 50% 0%; }
+        .glass, .task-card { transform: perspective(1200px) rotateX(1.2deg) translateZ(0); backface-visibility: hidden; }
+        .glass:active, .task-card:active { transform: perspective(900px) rotateX(5deg) scale(0.985); }
+        button:active { transform: perspective(700px) rotateX(7deg) scale(0.96); filter: brightness(0.95); }
+        .gold-glow { box-shadow: 0 10px 0 rgba(180, 83, 9, 0.55), 0 14px 26px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.3); }
+        .neon-blue { box-shadow: 0 8px 0 rgba(30, 58, 138, 0.7), 0 12px 22px rgba(37, 99, 235, 0.3); }
+        .truck-idle { display: inline-block; animation: truck3d 3.2s ease-in-out infinite; }
+        @keyframes truck3d { 0%, 100% { transform: perspective(500px) rotateY(-8deg) translateY(0); } 50% { transform: perspective(500px) rotateY(8deg) translateY(-3px); } }
+        /* Khối hàng 3D quay ở màn hình chờ */
+        .cube-scene { perspective: 520px; width: 78px; height: 78px; }
+        .cube-3d { position: relative; width: 78px; height: 78px; transform-style: preserve-3d; animation: cubeSpin 4.5s linear infinite; }
+        .cube-3d span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 30px;
+            background: linear-gradient(145deg, rgba(37,99,235,0.9), rgba(30,58,138,0.7)); border: 1px solid rgba(255,255,255,0.18);
+            border-radius: 14px; box-shadow: inset 0 0 20px rgba(59,130,246,0.35); }
+        .cube-3d .f1 { transform: translateZ(39px); }
+        .cube-3d .f2 { transform: rotateY(180deg) translateZ(39px); }
+        .cube-3d .f3 { transform: rotateY(90deg) translateZ(39px); }
+        .cube-3d .f4 { transform: rotateY(-90deg) translateZ(39px); }
+        .cube-3d .f5 { transform: rotateX(90deg) translateZ(39px); }
+        .cube-3d .f6 { transform: rotateX(-90deg) translateZ(39px); }
+        @keyframes cubeSpin { from { transform: rotateX(-20deg) rotateY(0deg); } to { transform: rotateX(-20deg) rotateY(360deg); } }
+        .loading-plate { transform: perspective(700px) rotateX(28deg); width: 130px; height: 22px; border-radius: 50%;
+            background: radial-gradient(ellipse at center, rgba(59,130,246,0.35), transparent 70%); animation: platePulse 2.2s ease-in-out infinite; }
+        @keyframes platePulse { 0%, 100% { opacity: .45; transform: perspective(700px) rotateX(28deg) scale(1); } 50% { opacity: .8; transform: perspective(700px) rotateX(28deg) scale(1.12); } }
+        @media (prefers-reduced-motion: reduce) {
+            .cube-3d, .loading-plate, .truck-idle { animation: none !important; }
+            .glass, .task-card, button { transition: none !important; }
+        }
+</style>
 </head>
 <body x-data="app()" x-init="initApp()">
 
     <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user) -->
     <div x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 z-[10001] bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
         <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
-        <div class="relative w-16 h-16 neon-blue rounded-2xl flex items-center justify-center text-3xl mb-5 loading-box-bounce">📦</div>
-        <div class="relative flex gap-2 text-2xl mb-4 loading-dots">
+        <div class="relative cube-scene mb-3">
+            <div class="cube-3d">
+                <span class="f1">📦</span><span class="f2">🚚</span><span class="f3">🏭</span>
+                <span class="f4">🚛</span><span class="f5">🪙</span><span class="f6">📦</span>
+            </div>
+        </div>
+        <div class="relative loading-plate mb-4"></div>
+        <div class="relative flex gap-2 text-xl mb-3 loading-dots">
             <span>🚚</span><span>📦</span><span>🏭</span>
         </div>
         <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1">Kho Hàng Kiếm Tiền</h2>
@@ -379,7 +416,7 @@
                     <div class="absolute -right-4 -bottom-4 text-[80px] opacity-10 group-hover:rotate-12 transition-all duration-700"></div>
                 </div>
                 <div class="glass p-3 rounded-[20px] flex justify-between items-center card-padding">
-                    <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + ' - ' + truckName"></p></div>
+                    <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + '/' + maxTruckLevel + ' - ' + truckName"></p></div>
                     <div class="text-right"><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.products"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
                 </div>
                 
@@ -402,12 +439,12 @@
                         <span x-text="texts.deliver"></span>
                         <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
                     </button>
-                    <button @click="upgradeTruck()" :disabled="truckLevel >= 10 || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= 10 || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
+                    <button @click="upgradeTruck()" :disabled="truckLevel >= maxTruckLevel || coins < upgradeCost" class="w-full py-3 glass rounded-[25px] font-bold text-sm uppercase italic tracking-widest border-2 border-white/5 flex justify-between items-center px-4 transition btn-text" :class="truckLevel >= maxTruckLevel || coins < upgradeCost ? 'text-slate-400' : 'hover:bg-slate-800 text-yellow-400 border-yellow-400'">
                         <div class="flex items-center gap-2">
                             <span>🛠️</span>
                             <span x-text="texts.upgrade"></span>
                         </div>
-                        <span class="flex items-center gap-1"><span x-show="truckLevel < 10" class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span><span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span></span>
+                        <span class="flex items-center gap-1"><span x-show="truckLevel < maxTruckLevel" class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span><span x-text="upgradeCost > 0 ? formatNumber(upgradeCost) + ' 💰' : 'MAX'"></span></span>
                     </button>
                     <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
                 </div>
@@ -680,7 +717,7 @@
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 50.000'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 5'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 2'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 15'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
@@ -1058,7 +1095,7 @@
                     { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 350, rewardOrders: 25, rewardSpins: 0, done: false, claimable: false, meta: {} },
                     { id: 'invite5', name: '👥 Mời 5 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, meta: {} },
-                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần (ở lại 5s/lần)', icon: '🔗', reward: 500, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần · mỗi lần 🪙50 + 📦50', icon: '🔗', reward: 0, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -1098,28 +1135,50 @@
                     { friends: 100, reward: '20,000 Đơn Hàng + 10 Lượt Mở Rương', coins: 0, orders: 20000, spins: 10, claimed: false }
                 ],
                 
+                // ===== HỆ THỐNG CẤP XE 1 -> 500 (công thức GIỐNG HỆT server.js) =====
+                maxTruckLevel: 500,
+                levelStatsFor(level) {
+                    const max = this.maxTruckLevel;
+                    const lv = Math.max(1, Math.min(max, parseInt(level) || 1));
+                    // 30 phút ở cấp 1, giảm đều xuống đúng 2 phút ở cấp 500
+                    const minutes = lv >= max ? 2 : Math.max(2, 30 * Math.pow(2 / 30, (lv - 1) / (max - 1)));
+                    const amount = 100 + (lv - 1) * 30;
+                    return {
+                        interval: Math.round(minutes * 60 * 1000),
+                        amount,
+                        max: amount,
+                        cost: lv < max ? 300 + (lv - 1) * 300 : 0
+                    };
+                },
                 get truckName() {
-                    const names = ['', '🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh', '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
-                    return names[this.truckLevel] || '🚛 Xe';
+                    const names = ['🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh',
+                        '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
+                    const tier = Math.min(names.length - 1, Math.floor((this.truckLevel - 1) / 50));
+                    return names[tier] || '🚛 Xe';
                 },
                 get truckIcon() {
-                    const icons = ['', '🛵', '🛺', '🚐', '🚚', '🚛', '🚛', '🚛', '🚛', '🚛', '🏆'];
-                    return icons[this.truckLevel] || '🚛';
+                    const icons = ['🛵', '🛺', '🚐', '🚚', '🚛', '🚛', '🚛', '🚛', '🚛', '🏆'];
+                    const tier = Math.min(icons.length - 1, Math.floor((this.truckLevel - 1) / 50));
+                    return icons[tier] || '🚛';
                 },
                 get upgradeCost() {
-                    const costs = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000, 15000, 20000];
-                    return this.truckLevel < 10 ? costs[this.truckLevel] : 0;
+                    return this.levelStatsFor(this.truckLevel).cost;
                 },
                 get withdrawProgress() {
                     const orderProgress = Math.min(this.orders / 50000, 1) * 0.7;
-                    const adProgress = Math.min(this.adsToday / 10, 1) * 0.15;
-                    const linkProgress = Math.min(this.smartlinksToday / 5, 1) * 0.15;
+                    const adProgress = Math.min(this.adsToday / 5, 1) * 0.15;
+                    const linkProgress = Math.min(this.smartlinksToday / 15, 1) * 0.15;
                     return Math.min((orderProgress + adProgress + linkProgress) * 100, 100);
                 },
                 // Điều kiện THẬT để được rút tiền (trước đây withdrawProgress chỉ là thanh hiển thị trang trí,
                 // không hề chặn nút rút). Giờ dùng chung điều kiện này để chặn nút + kiểm tra khi bấm rút.
                 get withdrawEligible() {
-                    return this.orders >= 50000 && (this.adsToday || 0) >= 10 && (this.smartlinksToday || 0) >= 5;
+                    // Điều kiện: ≥50.000 Đơn Hàng, xem ≥5 QC hôm nay, bấm ≥15 SmartLink hôm nay,
+                    // và mỗi ngày chỉ được rút 1 lần (withdrawRemain do server quản lý).
+                    return this.orders >= 50000
+                        && (this.adsToday || 0) >= 5
+                        && (this.smartlinksToday || 0) >= 15
+                        && (this.withdrawRemain || 0) > 0;
                 },
                 // Tỉ lệ quy đổi: 50.000 Đơn Hàng = 5.000 VNĐ (mức tối thiểu) => 1 Đơn Hàng = 0,1 VNĐ
                 get withdrawVndAmount() {
@@ -1376,6 +1435,7 @@
                     } catch (e) { console.error("Lỗi lưu IP:", e); }
                     
                     if (!this.rankList || this.rankList.length === 0) this.initRankList();
+                    this.applyLevelStats(); // Đồng bộ thời gian sản xuất / sản lượng / kho theo cấp xe hiện tại
                     this.resetDailyIfNeeded();
                     this.checkTaskProgress('invite');
                     this.checkWeeklyRewards();
@@ -1437,10 +1497,12 @@
                     // nên nếu lần trước đang BẬT thì giờ cũng chỉ đánh dấu "đang bật" và tự chơi ngay khi có
                     // thao tác chạm đầu tiên (nút nhạc hoặc bất kỳ cú click nào) - đây chính là cách sửa
                     // lỗi "đã bật nhạc nhưng không có tiếng".
-                    this.musicOn = localStorage.getItem('shipper_music') === '1';
+                    // Mặc định BẬT nhạc ngay khi vào Mini App (chỉ tắt nếu người dùng đã tự tắt trước đó).
+                    this.musicOn = localStorage.getItem('shipper_music') !== '0';
                     this.loadQuizLocal();
-                    // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
-                    this.ensureYouTubePlayer().catch(() => {});
+                    // Phát ngay lập tức ở chế độ tắt tiếng (mọi trình duyệt đều cho phép), rồi tự mở tiếng
+                    // ở thao tác chạm đầu tiên - nhờ vậy không còn cảnh "bật nhạc mà đợi mãi không có".
+                    this.ensureYouTubePlayer().then(() => { if (this.musicOn) this.resumeMusic(); }).catch(() => {});
                     if (this.musicOn) {
                         this.armMusicOnFirstTouch();
                         this.startMusicWatchdog();
@@ -1608,9 +1670,11 @@
                     return d.toISOString().slice(0,10);
                 },
                 resetDailyIfNeeded() {
-                    const today = new Date().toDateString();
+                    const today = this.vietnamDayKey();
                     if (this.lastResetDate !== today) {
-                        this.spinFree = 1; 
+                        // Giữ nguyên lượt mở rương đang có, chỉ đảm bảo mỗi ngày có tối thiểu 1 lượt
+                        // miễn phí (trước đây gán thẳng = 1 nên ai còn dư lượt là bị mất sạch).
+                        this.spinFree = Math.max(this.spinFree || 0, 1);
                         this.spinAdCount = 0; 
                         this.spinAdProgress = 0;
                         this.adsToday = 0; 
@@ -1714,7 +1778,7 @@
                     this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(delivered) + ' Đơn hàng');
                 },
                 upgradeTruck() {
-                    if (this.truckLevel >= 10) return;
+                    if (this.truckLevel >= this.maxTruckLevel) return;
                     if (this.coins < this.upgradeCost) {
                         this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
                         return;
@@ -1727,29 +1791,20 @@
                     this.playRewardedAd(() => this.completeTruckUpgrade());
                 },
                 completeTruckUpgrade() {
-                    if (this.truckLevel >= 10 || this.coins < this.upgradeCost) return;
+                    if (this.truckLevel >= this.maxTruckLevel || this.coins < this.upgradeCost) return;
                     this.coins -= this.upgradeCost;
                     this.truckLevel++;
-                    const config = [
-                        { interval: 30*60*1000, amount: 100, max: 100 },
-                        { interval: 28*60*1000, amount: 120, max: 120 },
-                        { interval: 26*60*1000, amount: 145, max: 145 },
-                        { interval: 24*60*1000, amount: 175, max: 175 },
-                        { interval: 22*60*1000, amount: 210, max: 210 },
-                        { interval: 20*60*1000, amount: 250, max: 250 },
-                        { interval: 18*60*1000, amount: 300, max: 300 },
-                        { interval: 16*60*1000, amount: 360, max: 360 },
-                        { interval: 14*60*1000, amount: 430, max: 430 },
-                        { interval: 12*60*1000, amount: 500, max: 500 }
-                    ];
-                    const idx = this.truckLevel - 1; // truckLevel 1 maps to config[0]
-                    if (idx < config.length) {
-                        this.productionInterval = config[idx].interval;
-                        this.productionAmount = config[idx].amount;
-                        this.maxProducts = config[idx].max;
-                    }
+                    this.applyLevelStats();
                     this.saveState();
-                    this.showNotification('⬆️ Nâng cấp thành công! Xe: ' + this.truckName);
+                    this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
+                },
+                // Áp lại thông số theo cấp hiện tại (gọi cả lúc mở app để dữ liệu cũ khớp công thức mới)
+                applyLevelStats() {
+                    const stats = this.levelStatsFor(this.truckLevel);
+                    this.productionInterval = stats.interval;
+                    this.productionAmount = stats.amount;
+                    this.maxProducts = stats.max;
+                    if (this.currentProducts > this.maxProducts) this.currentProducts = this.maxProducts;
                 },
                 scheduleCoinBox() {
                     const delay = 30000 + Math.random() * 90000; // Random between 30s and 120s
@@ -2047,44 +2102,53 @@
                 // Xử lý dùng chung khi user quay lại app sau khi mở SmartLink (gọi từ visibilitychange, focus,
                 // và bộ đếm dự phòng bên dưới). Tự reset smartlinkStartTime NGAY khi xử lý để nếu nhiều nguồn
                 // cùng gọi (vd cả focus lẫn bộ đếm dự phòng cùng lúc) thì chỉ tính 1 lần duy nhất.
-                handleSmartlinkReturn() {
+                async handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink30');
-                    if (!task || this.smartlinkStartTime <= 0) return;
-                    // FIX LỖI "ĐÃ ĐỦ 15 LẦN SMARTLINK VẪN CHO LÀM TIẾP VÀ NHẬN THÊM 500 COIN": chốt chặn CỨNG
-                    // ngay tại đây - nếu vì bất kỳ lý do gì (dữ liệu cũ chưa đồng bộ, task.done bị lệch...) mà
-                    // smartlinkCount đã >= 30 nhưng task.done vẫn chưa được đánh dấu true, dừng lại NGAY LẬP TỨC,
-                    // ép cờ done/claimable về đúng trạng thái đã hoàn thành và KHÔNG cộng thêm bất kỳ phần
-                    // thưởng nào nữa, thay vì chỉ dựa duy nhất vào việc kiểm tra "task.done" như code cũ.
-                    if ((this.smartlinkCount || 0) >= 30) {
-                        task.done = true;
-                        task.claimable = false;
-                        this.smartlinkStartTime = 0;
-                        this.dailyTasks = [...this.dailyTasks];
-                        this.saveState();
+                    if (!task || this.smartlinkStartTime <= 0 || this._smartlinkSaving) return;
+                    const timeSpent = Date.now() - this.smartlinkStartTime;
+                    if (timeSpent < 5000) {
+                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 5 giây để được tính!');
                         return;
                     }
-                    if (task.done) { this.smartlinkStartTime = 0; return; }
-                    const timeSpent = Date.now() - this.smartlinkStartTime;
-                    this.smartlinkStartTime = 0; // Reset ngay để chống tính trùng
-                    if (timeSpent >= 5000) { // 5 giây (giảm từ 10s theo yêu cầu)
-                        this.smartlinkCount = Math.min((this.smartlinkCount || 0) + 1, 30); // Không bao giờ vượt quá 15
-                        this.smartlinksToday = (this.smartlinksToday || 0) + 1;
-                        this.lifetimeSmartlinks = (this.lifetimeSmartlinks || 0) + 1; // Đếm trọn đời, không reset theo ngày - dùng cho điều kiện mời bạn thành công
-                        this.onSmartlinkWatched();
-                        this.saveState();
-                        if (this.smartlinkCount >= 30) {
-                            task.done = true;
-                            task.claimable = false; // Thưởng được cộng NGAY tại đây, không cần "claim" thêm lần nữa (tránh 1 nguồn thưởng thứ 2)
-                            this.coins += 500;
-                            this.spinFree += 2;
-                            this.dailyTasks = [...this.dailyTasks];
-                            this.saveState();
-                            this.showNotification('✅ Hoàn thành 30 SmartLink! Nhận thưởng 500 💰');
-                        } else {
-                            this.showNotification(`✅ Đã hoàn thành ${this.smartlinkCount}/30 SmartLink!`);
+                    this.smartlinkStartTime = 0; // Reset ngay để không bị tính trùng
+                    this._smartlinkSaving = true;
+                    try {
+                        // Phần thưởng do SERVER cộng và lưu vào Supabase: mỗi SmartLink = +50 Coin +50 Đơn hàng
+                        let response, result;
+                        for (let attempt = 0; attempt < 2; attempt++) {
+                            response = await fetch(`${API_URL}/api/smartlink/complete`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: this.user.id })
+                            });
+                            result = await response.json().catch(() => ({}));
+                            if (response.status !== 409 || !result.retry) break;
+                            await new Promise(r => setTimeout(r, 600));
                         }
-                    } else {
-                        this.showNotification('⚠️ Bạn phải ở lại trang SmartLink ít nhất 5 giây để được tính!');
+                        if (!response.ok || !result.success) throw new Error(result.error || 'Không lưu được SmartLink');
+
+                        this.smartlinkCount = Number(result.smartlinkCount || 0);
+                        this.smartlinksToday = Number(result.smartlinksToday || 0);
+                        this.lifetimeSmartlinks = Number(result.lifetimeSmartlinks || 0);
+                        this.coins = Number(result.coins ?? this.coins);
+                        this.orders = Number(result.orders ?? this.orders);
+                        this.walletSyncedAt = result.walletUpdatedAt || this.walletSyncedAt;
+                        task.done = this.smartlinkCount >= 30;
+                        task.claimable = false;
+                        this.dailyTasks = [...this.dailyTasks];
+                        this.onSmartlinkWatched();
+                        await this.saveState();
+                        if (result.alreadyComplete) {
+                            this.showNotification('✅ Hôm nay bạn đã hoàn thành đủ 30 SmartLink.');
+                        } else {
+                            this.showNotification(`✅ SmartLink ${this.smartlinkCount}/30 · 🪙 +50 · 📦 +50`);
+                        }
+                    } catch (e) {
+                        console.error('SmartLink:', e);
+                        this.showNotification('⚠️ Chưa lưu được SmartLink, vui lòng thử lại sau vài giây.');
+                        await this.syncLatestUser();
+                    } finally {
+                        this._smartlinkSaving = false;
                     }
                 },
                 async completeTask(idx) {
@@ -2149,7 +2213,7 @@
                         return;
                     }
                     if (!this.withdrawEligible) {
-                        this.showNotification(`❌ Chưa đủ điều kiện rút tiền! Cần: ≥50.000 Đơn Hàng (hiện có ${this.formatNumber(this.orders)}), xem ≥10 QC hôm nay (${this.adsToday||0}/10), bấm ≥5 SmartLink hôm nay (${this.smartlinksToday||0}/5).`);
+                        this.showNotification(`❌ Chưa đủ điều kiện rút tiền! Cần: ≥50.000 Đơn Hàng (hiện có ${this.formatNumber(this.orders)}), xem ≥5 QC hôm nay (${this.adsToday||0}/5), bấm ≥15 SmartLink hôm nay (${this.smartlinksToday||0}/15), và mỗi ngày chỉ rút 1 lần.`);
                         return;
                     }
                     if (!this.withdrawOrdersAmount || this.withdrawOrdersAmount < 50000) {
@@ -2350,7 +2414,13 @@
                 },
 
                 // ==================== QUIZ ====================
-                quizTodayKey() { return new Date().toDateString(); },
+                // Mốc ngày dùng chung với server: 0h00 giờ Việt Nam (không phụ thuộc giờ điện thoại)
+                vietnamDayKey() {
+                    return new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit'
+                    }).format(new Date());
+                },
+                quizTodayKey() { return this.vietnamDayKey(); },
                 ensureQuizDay() {
                     const today = this.quizTodayKey();
                     if (this.quizDate !== today) {
@@ -2375,7 +2445,15 @@
                     if (!available.length) return null;
                     return available[Math.floor(Math.random() * available.length)];
                 },
-                showQuizQuestion() {
+                async showQuizQuestion() {
+                    // Lấy trạng thái mới nhất từ Supabase trước khi mở câu hỏi: tải lại app hay tắt/mở
+                    // bot đều không thể có thêm lượt ngoài 5 câu/ngày.
+                    await this.syncLatestUser();
+                    this.ensureQuizDay();
+                    if (this.quizSlotsUsed() > 5 || (this.quizUsedIds || []).length >= 5) {
+                        this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
+                        return;
+                    }
                     const picked = this.nextQuizQuestion();
                     if (!picked) {
                         this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
@@ -2386,13 +2464,17 @@
                     this.quizIsCorrect = false;
                     this.quizModalShow = true;
                 },
-                openQuizFree() {
+                async openQuizFree() {
+                    await this.syncLatestUser();
                     this.ensureQuizDay();
-                    if (this.quizFreeUsed) return;
+                    if (this.quizFreeUsed) {
+                        this.showNotification('✅ Hôm nay bạn đã dùng câu miễn phí rồi.');
+                        return;
+                    }
                     this.quizFreeUsed = true;
                     this.saveQuizLocal();
-                    this.showQuizQuestion();
-                    this.saveState();
+                    await this.saveState(); // Lưu lên Supabase TRƯỚC khi hiện câu hỏi để không bị lách lượt
+                    await this.showQuizQuestion();
                 },
                 async preloadRewardedAd() {
                     if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
@@ -2407,12 +2489,17 @@
                     }
                 },
                 async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
-                    let token = null;
+                    // FIX LỖI "PHẢI ĐỢI HẾT 15S RỒI BẤM X MỚI ĐƯỢC NHẬN THƯỞNG":
+                    // trước đây phần thưởng chỉ được trao khi Promise của SDK kết thúc (tức là sau khi
+                    // người dùng bấm nút X đóng quảng cáo). Nay chỉ cần người dùng đã rời app xem QC và
+                    // QUAY LẠI Mini App, đủ tối thiểu 5 giây là được nhận thưởng ngay.
+                    if (this._rewardedRunning) return false;
+                    this._rewardedRunning = true;
+                    const startedAt = Date.now();
+                    const MIN_AD_SECONDS = 5000;
                     try {
                         if (typeof show_11457064 !== 'function') throw new Error('Rewarded SDK chưa sẵn sàng');
 
-                        // Server tracking chỉ dùng để ghi nhận lượt QC/BXH. Không được phép chặn phần thưởng:
-                        // Promise của Rewarded Interstitial resolve sau khi người dùng xem/xong quảng cáo.
                         const sessionPromise = fetch(`${API_URL}/api/ad/session/start`, {
                             method: 'POST',
                             headers: {'Content-Type':'application/json'},
@@ -2422,15 +2509,53 @@
                             return r.ok ? (d.token || null) : null;
                         }).catch(() => null);
 
-                        await Promise.resolve(show_11457064({ ymid: String(this.user.id || '') }));
+                        // Theo dõi việc người dùng rời app (xem QC) rồi quay lại
+                        let leftApp = false;
+                        let finishReturn = null;
+                        const returnedPromise = new Promise(resolve => {
+                            let settled = false;
+                            const done = (value) => {
+                                if (settled) return;
+                                settled = true;
+                                cleanup();
+                                resolve(value);
+                            };
+                            finishReturn = () => done(false);
+                            const markLeft = () => { leftApp = true; };
+                            const checkBack = () => {
+                                if (!leftApp || document.hidden) return;
+                                const wait = Math.max(0, MIN_AD_SECONDS - (Date.now() - startedAt));
+                                setTimeout(() => done(true), wait);
+                            };
+                            const onVisibility = () => { document.hidden ? markLeft() : checkBack(); };
+                            const cleanup = () => {
+                                document.removeEventListener('visibilitychange', onVisibility);
+                                window.removeEventListener('blur', markLeft);
+                                window.removeEventListener('focus', checkBack);
+                            };
+                            document.addEventListener('visibilitychange', onVisibility);
+                            window.addEventListener('blur', markLeft);
+                            window.addEventListener('focus', checkBack);
+                            setTimeout(() => done(false), 120000); // Bỏ cuộc sau 2 phút để không kẹt
+                        });
 
-                        // Trao thưởng NGAY sau khi SDK xác nhận đã xem xong; không chờ server tracking.
+                        const sdkPromise = Promise.resolve(show_11457064({ ymid: String(this.user.id || '') }))
+                            .then(() => true).catch(() => false);
+
+                        // Ai xong trước thì tính: SDK báo xong, HOẶC người dùng quay lại app
+                        const completed = await Promise.race([sdkPromise, returnedPromise]);
+                        if (typeof finishReturn === 'function') finishReturn();
+                        if (!completed) throw new Error('Quảng cáo chưa hoàn tất');
+
+                        // Bắt buộc tối thiểu 5 giây kể từ lúc mở quảng cáo mới được tính thưởng
+                        const remaining = MIN_AD_SECONDS - (Date.now() - startedAt);
+                        if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
+
                         this.onAdWatched('rewarded');
                         await Promise.resolve(onDone());
                         await this.saveState();
 
-                        // Tracking chạy sau. Lỗi mạng/server ở đây tuyệt đối không làm mất phần thưởng.
-                        token = await sessionPromise;
+                        const token = await sessionPromise;
                         if (token) {
                             fetch(`${API_URL}/api/ad/session/complete`, {
                                 method:'POST',
@@ -2440,12 +2565,10 @@
                                 const d = await r.json().catch(() => ({}));
                                 if (r.ok && d.success && Number.isFinite(Number(d.weeklyAdsCount))) {
                                     this.weeklyAdsCount = Number(d.weeklyAdsCount);
-                                    await this.saveState();
                                 }
                             }).catch(() => {});
                         }
 
-                        // Preload lượt kế tiếp để giảm độ trễ khi bấm xem QC lần sau.
                         this._rewardedPreloadStarted = false;
                         this._rewardedPreloaded = false;
                         this.preloadRewardedAd().catch(() => {});
@@ -2454,6 +2577,9 @@
                         console.error('Rewarded ad:', e);
                         this.showNotification(failMessage);
                         return false;
+                    } finally {
+                        this._rewardedRunning = false;
+                        if (this.musicOn) this.resumeMusic();
                     }
                 },
                 addQuizWithAd() {
@@ -2466,11 +2592,11 @@
                         this.showNotification('✅ Bạn đã mở đủ 4 câu bằng quảng cáo hôm nay.');
                         return;
                     }
-                    this.playRewardedAd(() => {
-                        this.quizAdUnlocked++;
+                    this.playRewardedAd(async () => {
+                        this.quizAdUnlocked = Math.min(4, (this.quizAdUnlocked || 0) + 1);
                         this.saveQuizLocal();
-                        this.saveState();
-                        this.showQuizQuestion();
+                        await this.saveState();
+                        await this.showQuizQuestion();
                     });
                 },
                 answerQuiz(index) {
@@ -2739,6 +2865,13 @@
                             this.chestOpensTotal = d.chestOpensTotal ?? this.chestOpensTotal;
                             this.chestOpensToday = d.chestOpensToday ?? this.chestOpensToday;
                             this.dailyTasks = Array.isArray(d.dailyTasks) ? d.dailyTasks : this.dailyTasks;
+                            this.quizDate = d.quizDate || this.quizDate;
+                            this.quizFreeUsed = !!d.quizFreeUsed;
+                            this.quizAdUnlocked = Math.min(4, Number(d.quizAdUnlocked || 0));
+                            this.quizUsedIds = Array.isArray(d.quizUsedIds) ? d.quizUsedIds.map(Number).filter(Number.isFinite).slice(0, 5) : [];
+                            this.lastResetDate = d.lastResetDate || this.lastResetDate;
+                            this.withdrawRemain = d.withdrawRemain ?? this.withdrawRemain;
+                            this.saveQuizLocal();
                             this.walletSyncedAt = d.walletUpdatedAt;
                         }
                     } catch (e) {}
