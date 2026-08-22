@@ -459,7 +459,6 @@ bot.start(async (ctx) => {
                 referrerCounted: false, // Thêm trường này để kiểm soát việc đã đếm hợp lệ cho người mời hay chưa
                 lifetimeAdsWatched: 0, // Tổng số QC đã xem trọn đời (không reset theo ngày) - điều kiện xét mời bạn hợp lệ
                 bonusAdsToday: 0, // Số lượt QC Rewarded nhiệm vụ hôm nay
-                weeklyAdsCount: 0,
                 quizDate: '',
                 quizFreeUsed: false,
                 quizAdUnlocked: 0,
@@ -815,7 +814,6 @@ function fullResetFields() {
         spinAdCount: 0,
         spinAdProgress: 0,
         bonusAdsToday: 0,
-        weeklyAdsCount: 0,
         quizDate: '',
         quizFreeUsed: false,
         quizAdUnlocked: 0,
@@ -1399,6 +1397,31 @@ const WEEKLY_TOP_REWARDS = [
     { rank: 3, orders: 25000, spins: 3, label: '🥉 Hạng 3' }
 ];
 
+const WEEKLY_ADS_KEY = 'weekly_ads_counts';
+let weeklyAdsWriteQueue = Promise.resolve();
+async function getWeeklyAdsCounts() {
+    const { data, error } = await supabase.from('app_settings').select('value').eq('key', WEEKLY_ADS_KEY).maybeSingle();
+    if (error) throw error;
+    const value = data?.value;
+    if (!value) return {};
+    if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
+    return typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+async function saveWeeklyAdsCounts(counts) {
+    const { error } = await supabase.from('app_settings').upsert({ key:WEEKLY_ADS_KEY, value:counts }, { onConflict:'key' });
+    if (error) throw error;
+}
+function incrementWeeklyAds(userId) {
+    const run = weeklyAdsWriteQueue.then(async () => {
+        const counts = await getWeeklyAdsCounts();
+        counts[String(userId)] = Number(counts[String(userId)] || 0) + 1;
+        await saveWeeklyAdsCounts(counts);
+        return counts[String(userId)];
+    });
+    weeklyAdsWriteQueue = run.catch(() => {});
+    return run;
+}
+
 async function weeklyLeaderboardReset() {
     try {
         const currentWeek = getWeekIdentifier(new Date());
@@ -1432,13 +1455,18 @@ async function weeklyLeaderboardReset() {
         // ===== BXH XEM QC =====
         const { data: adsState } = await supabase.from('weekly_state').select('*').eq('id', 2).single();
         if (!adsState || adsState.lastWeekKey !== currentWeek) {
-            const { data: topAds, error: adsError } = await supabase.from('users')
-                .select('id, name, weeklyAdsCount').gt('weeklyAdsCount', 0)
-                .order('weeklyAdsCount', { ascending: false }).limit(3);
+            const counts = await getWeeklyAdsCounts();
+            const topIds = Object.entries(counts).filter(([,count]) => Number(count)>0)
+                .sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,3).map(([id])=>id);
+            const { data: adUsers, error: adsError } = topIds.length
+                ? await supabase.from('users').select('id,name').in('id',topIds)
+                : { data:[], error:null };
+            const names = Object.fromEntries((adUsers||[]).map(u=>[String(u.id),u.name]));
+            const topAds = topIds.map(id=>({id,name:names[id]||('User '+id),weeklyAdsCount:Number(counts[id]||0)}));
             if (adsError) {
                 console.error('Lỗi lấy top BXH Xem QC tuần:', adsError);
             } else {
-                for (let i = 0; i < (topAds || []).length; i++) {
+                for (let i = 0; i < topAds.length; i++) {
                     const u = topAds[i], prize = WEEKLY_TOP_REWARDS[i];
                     if (!prize) break;
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
@@ -1450,7 +1478,7 @@ async function weeklyLeaderboardReset() {
                     );
                     logActivity(`📺 ${maskName(u.name)} đạt ${prize.label} BXH Xem QC tuần này`);
                 }
-                await supabase.from('users').update({ weeklyAdsCount: 0 }).gt('weeklyAdsCount', -1);
+                await saveWeeklyAdsCounts({});
                 await supabase.from('weekly_state').upsert({ id: 2, lastWeekKey: currentWeek });
             }
         }
@@ -1602,8 +1630,7 @@ app.get('/api/user/:id', async (req, res) => {
     }
     // Parse referralMilestones if stored as JSON string
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
-        try { data.referralMilestones = JSON.parse(data.referralMilestones); }
-        catch (e) { console.error('referralMilestones không hợp lệ của user', req.params.id); data.referralMilestones = []; }
+        data.referralMilestones = JSON.parse(data.referralMilestones);
     }
     
     // Thêm level stats vào response
@@ -1611,22 +1638,6 @@ app.get('/api/user/:id', async (req, res) => {
     
     res.json({ ...data, levelStats });
 });
-
-async function updateUserSchemaSafe(userId, values) {
-    const clean = { ...values };
-    for (let attempt=0; attempt<30; attempt++) {
-        const result = await supabase.from('users').update(clean).eq('id',userId);
-        if (!result.error) return { error:null, saved:clean };
-        const text = `${result.error.message||''} ${result.error.details||''}`;
-        const match = text.match(/(?:column|field) ["']?([A-Za-z_][A-Za-z0-9_]*)["']?/i)
-            || text.match(/["']([A-Za-z_][A-Za-z0-9_]*)["'] column/i);
-        const missing = match?.[1];
-        if (!missing || !(missing in clean)) return { error:result.error, saved:null };
-        console.warn(`Bỏ qua cột chưa có trong schema users: ${missing}`);
-        delete clean[missing];
-    }
-    return { error:{message:'Quá nhiều cột không khớp schema users'}, saved:null };
-}
 
 // API cập nhật user. QUAN TRỌNG: các field "ví" (coins/orders/spins/truckLevel/isBanned) được đối chiếu
 // qua walletUpdatedAt để KHÔNG cho phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ) ghi đè
@@ -1675,12 +1686,11 @@ app.post('/api/user/:id', async (req, res) => {
             updateData.walletUpdatedAt = new Date().toISOString();
         }
 
-        const { error, saved } = await updateUserSchemaSafe(userId, updateData);
+        const { error } = await supabase.from('users').update(updateData).eq('id', userId);
         if (error) {
             console.error(`Lỗi cập nhật user ${userId}:`, error);
-            return res.status(500).json({ success:false, error:error.message });
+            return res.status(500).json({ success: false, error: error.message });
         }
-        updateData = saved;
 
         if (walletOverridden) {
             // Trả về giá trị mới nhất từ DB cho TOÀN BỘ field được bảo vệ để client tự đồng bộ lại, tránh mất thay đổi của admin
@@ -1702,51 +1712,6 @@ app.post('/api/user/:id', async (req, res) => {
         console.error("Lỗi API cập nhật user:", e);
         res.status(500).json({ success: false, error: e.message });
     }
-});
-
-// Xác nhận SmartLink tại server: Supabase là nguồn dữ liệu duy nhất, mỗi lượt +50 Coin +50 Đơn hàng.
-const smartlinkProcessing = new Set();
-app.post('/api/smartlink/complete', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
-    if (smartlinkProcessing.has(userId)) return res.status(409).json({ success:false, retry:true, error:'Lượt SmartLink đang được xử lý.' });
-    smartlinkProcessing.add(userId);
-    try {
-        let { data:user, error:readError } = await supabase.from('users')
-            .select('id,isBanned,coins,orders,smartlinkCount,smartlinksToday,lifetimeSmartlinks,walletUpdatedAt')
-            .eq('id', userId).single();
-        let hasLifetimeColumn = !readError;
-        if (readError && /lifetimeSmartlinks/i.test(readError.message||'')) {
-            ({data:user,error:readError}=await supabase.from('users')
-                .select('id,isBanned,coins,orders,smartlinkCount,smartlinksToday,walletUpdatedAt').eq('id',userId).single());
-            hasLifetimeColumn=false;
-        }
-        if (readError || !user) return res.status(404).json({ success:false, error:readError?.message || 'Không tìm thấy user.' });
-        if (user.isBanned) return res.status(403).json({ success:false, isBanned:true, error:'Tài khoản đã bị khóa.' });
-        const currentCount = Number(user.smartlinkCount || 0);
-        if (currentCount >= 30) return res.json({ success:true, alreadyComplete:true, smartlinkCount:30,
-            smartlinksToday:Number(user.smartlinksToday||0), lifetimeSmartlinks:Number(user.lifetimeSmartlinks||0),
-            coins:Number(user.coins||0), orders:Number(user.orders||0), walletUpdatedAt:user.walletUpdatedAt });
-        const update = {
-            coins:Number(user.coins||0)+50, orders:Number(user.orders||0)+50,
-            smartlinkCount:currentCount+1, smartlinksToday:Number(user.smartlinksToday||0)+1,
-            walletUpdatedAt:new Date().toISOString()
-        };
-        if (hasLifetimeColumn) update.lifetimeSmartlinks=Number(user.lifetimeSmartlinks||0)+1;
-        const returnFields=hasLifetimeColumn
-            ? 'coins,orders,smartlinkCount,smartlinksToday,lifetimeSmartlinks,walletUpdatedAt'
-            : 'coins,orders,smartlinkCount,smartlinksToday,walletUpdatedAt';
-        const { data:saved, error:saveError } = await supabase.from('users').update(update)
-            .eq('id',userId).select(returnFields).single();
-        if (saveError) return res.status(500).json({ success:false, error:saveError.message });
-        if (!saved) return res.status(409).json({ success:false, retry:true, error:'Dữ liệu vừa thay đổi, vui lòng thử lại.' });
-        logTransaction(userId,'coin',50,'Hoàn thành 1 SmartLink');
-        logTransaction(userId,'orders',50,'Hoàn thành 1 SmartLink');
-        res.json({ success:true, rewardCoins:50, rewardOrders:50, ...saved });
-    } catch (e) {
-        console.error('Lỗi hoàn tất SmartLink:',e);
-        res.status(500).json({ success:false, error:e.message });
-    } finally { smartlinkProcessing.delete(userId); }
 });
 
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
@@ -1828,7 +1793,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const elapsed = Date.now() - s.startedAt;
         if (elapsed < 5000) return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
         adSessions.delete(token);
-        const next = await atomicIncrement(String(userId), 'weeklyAdsCount', 1, 8);
+        const next = await incrementWeeklyAds(String(userId));
         if (next === null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
         res.json({success:true, weeklyAdsCount:next, elapsed});
     } catch (e) { res.status(500).json({success:false,error:e.message}); }
@@ -1841,8 +1806,8 @@ app.post('/api/ad/watched', async (req, res) => {
     try {
         const { userId, adType } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Chỉ Rewarded/In-App Interstitial được tính BXH.'});
-        const { data } = await supabase.from('users').select('weeklyAdsCount').eq('id', String(userId)).single();
-        res.json({ success:true, weeklyAdsCount: data?.weeklyAdsCount || 0, countingEndpoint:'/api/ad/session/complete' });
+        const counts = await getWeeklyAdsCounts();
+        res.json({ success:true, weeklyAdsCount:Number(counts[String(userId)]||0), countingEndpoint:'/api/ad/session/complete' });
     } catch (e) { console.error('Lỗi kiểm tra BXH Xem QC:',e); res.status(500).json({success:false,error:e.message}); }
 });
 
@@ -1997,19 +1962,19 @@ app.get('/api/withdrawals/:userId', async (req, res) => {
 
 // API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
 app.get('/api/leaderboard-ads', async (req, res) => {
-    // BXH Xem QC hàng tuần
-    const { data, error } = await supabase
-        .from('users')
-        .select('id, name, weeklyAdsCount')
-        .order('weeklyAdsCount', { ascending: false })
-        .limit(10);
-    
-    if (error) { 
-        console.error('Lỗi lấy BXH QC:', error); 
-        res.status(500).json({ leaderboard: [] }); 
-        return; 
+    try {
+        const counts = await getWeeklyAdsCounts();
+        const ids = Object.entries(counts).filter(([,count])=>Number(count)>0)
+            .sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,10).map(([id])=>id);
+        if (!ids.length) return res.json({ leaderboard:[] });
+        const { data, error } = await supabase.from('users').select('id,name').in('id',ids);
+        if (error) throw error;
+        const names = Object.fromEntries((data||[]).map(u=>[String(u.id),u.name]));
+        res.json({ leaderboard:ids.map(id=>({id,name:names[id]||('User '+id),adsCount:Number(counts[id]||0)})) });
+    } catch (error) {
+        console.error('Lỗi lấy BXH QC:',error);
+        res.status(500).json({leaderboard:[]});
     }
-    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, adsCount: u.weeklyAdsCount || 0 })) });
 });
 
 app.get('/api/leaderboard', async (req, res) => {
