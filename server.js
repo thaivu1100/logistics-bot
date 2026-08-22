@@ -51,6 +51,46 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANO
 // CÁCH SỬA: lúc chạy, đọc danh sách cột THẬT của bảng users; cột nào có thật thì ghi thẳng vào users,
 // cột nào chưa có thì lưu an toàn vào bảng app_settings (khóa user_extra_state) và ghép lại khi đọc user.
 // Nhờ vậy KHÔNG mất bất kỳ dữ liệu nào và KHÔNG cần chạy migration SQL nào trên Supabase.
+// ==================== MỐC NGÀY THEO GIỜ VIỆT NAM (0h00) ====================
+// Mọi giới hạn theo ngày (nhiệm vụ, câu hỏi, SmartLink, rút tiền) đều tính theo 0h00 giờ Việt Nam,
+// KHÔNG phụ thuộc giờ máy chủ hay giờ điện thoại (trước đây dùng giờ thiết bị nên chỉnh giờ máy
+// hoặc tải lại app là có thêm lượt).
+function vietnamDayKey(date = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(date);
+}
+function isCurrentVietnamDay(value) {
+    if (!value) return false;
+    const today = vietnamDayKey();
+    if (value === today) return true;
+    const parsed = new Date(value);
+    return !Number.isNaN(parsed.getTime()) && vietnamDayKey(parsed) === today;
+}
+function vietnamDayStartIso(date = new Date()) {
+    return `${vietnamDayKey(date)}T00:00:00+07:00`;
+}
+function vietnamTimeText(date = new Date()) {
+    const dayPart = new Intl.DateTimeFormat('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric'
+    }).format(date);
+    const timePart = new Intl.DateTimeFormat('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false
+    }).format(date);
+    return `${dayPart} ${timePart}`;
+}
+// Các field được đưa về 0 khi sang ngày mới (0h00 giờ Việt Nam)
+function dailyResetFields() {
+    return {
+        adsToday: 0, smartlinksToday: 0, bonusAdsToday: 0,
+        deliveryCount: 0, smartlinkCount: 0, usedSmartlinks: [],
+        spinAdCount: 0, spinAdProgress: 0, chestOpensToday: 0,
+        quizDate: vietnamDayKey(), quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
+        dailyTasks: null, allTasksClaimed: false, withdrawRemain: 1,
+        lastResetDate: vietnamDayKey()
+    };
+}
+
 const USER_EXTRA_KEY = 'user_extra_state';
 const CORE_USER_COLUMNS = ['id', 'name', 'coins', 'orders', 'spins', 'truckLevel', 'isBanned', 'walletUpdatedAt'];
 let userColumnsCache = null;
@@ -127,6 +167,17 @@ async function saveUserExtraAll(all) {
     userExtraDirty = true;
     return flushUserExtra();
 }
+// Nếu một field đã được ghi vào cột thật thì xoá bản sao cũ trong kho lưu tạm, tránh trường hợp
+// sau này thêm cột vào Supabase mà vẫn đọc nhầm giá trị cũ.
+async function pruneUserExtra(userId, keys) {
+    if (!keys || keys.length === 0) return;
+    const all = await getUserExtraAll();
+    const entry = all[String(userId)];
+    if (!entry) return;
+    let changed = false;
+    keys.forEach(k => { if (k in entry) { delete entry[k]; changed = true; } });
+    if (changed) { userExtraDirty = true; scheduleUserExtraFlush(); }
+}
 async function clearUserExtra(userId) {
     if (userId === null) return saveUserExtraAll({});
     const all = await getUserExtraAll();
@@ -179,6 +230,7 @@ async function saveUserFields(userId, values = {}) {
                 : null;
         }
         if (error) return { error };
+        await pruneUserExtra(userId, Object.keys(known));
     }
     if (Object.keys(extra).length > 0) await saveUserExtra(userId, extra);
     return { error: null };
@@ -201,29 +253,36 @@ const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onren
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// ==================== HỆ THỐNG CẤP ĐỘ VÀ CÔNG THỨC (LEVEL 1-999) ====================
+// ==================== HỆ THỐNG CẤP ĐỘ VÀ CÔNG THỨC (LEVEL 1-500) ====================
 /**
  * Tính toán tất cả thống kê xe theo cấp độ (công thức LOCKED)
- * Level 1-999 tuân theo công thức chính xác:
- * - Thời gian: max(2, 30 / (1 + (level-1)*0.02)) phút
- * - Sản phẩm/lần: 100 + (level-1)*3
- * - Kho max: 100 + (level-1)*5
- * - Chi phí nâng cấp: min(400 + (level-1)*200, 200000) coin
+ * Level 1-500 tuân theo công thức chính xác:
+ * - Thời gian: 30 phút ở cấp 1, giảm đều xuống đúng 2 phút ở cấp 500
+ * - Sản phẩm/lần: 100 + (level-1)*30 (cấp 500 = 15.070 đơn)
+ * - Kho max: bằng đúng 1 mẻ hàng
+ * - Chi phí nâng cấp: 300 + (level-1)*300 coin (tổng ~37,4 triệu coin để đạt cấp 500)
  * - Lần giao/ngày: floor(1440 / thời gian)
  * - Đơn hàng/ngày: lần_giao * sản_phẩm
  */
+const MAX_TRUCK_LEVEL = 500;
 function calculateLevelStats(level) {
-    level = Math.max(1, Math.min(999, parseInt(level) || 1));
-    
-    const productionMinutes = Math.max(2, 30 / (1 + (level - 1) * 0.02));
-    const productsPerDelivery = 100 + (level - 1) * 3;
-    const maxWarehouse = 100 + (level - 1) * 5;
-    const upgradeCost = level < 999 ? 400 + (level - 1) * 200 : 200000;
+    level = Math.max(1, Math.min(MAX_TRUCK_LEVEL, parseInt(level) || 1));
+
+    // Thời gian sản xuất giảm đều từ 30 phút (cấp 1) xuống ĐÚNG 2 phút ở cấp 500, không thấp hơn 2 phút.
+    const productionMinutes = level >= MAX_TRUCK_LEVEL
+        ? 2
+        : Math.max(2, 30 * Math.pow(2 / 30, (level - 1) / (MAX_TRUCK_LEVEL - 1)));
+    const productsPerDelivery = 100 + (level - 1) * 30;   // Cấp 500: 15.070 đơn mỗi lần giao
+    const maxWarehouse = productsPerDelivery;             // Kho chứa đúng 1 mẻ hàng
+    // Chi phí nâng cấp tăng đều: cấp 1->2 hết 300 coin, cấp 499->500 hết 149.700 coin
+    // (tổng ~37 triệu coin) -> lên cấp 500 khá khó, phải chơi lâu dài chứ không đạt trong vài ngày.
+    const upgradeCost = level < MAX_TRUCK_LEVEL ? 300 + (level - 1) * 300 : 0;
     const deliveriesPerDay = Math.floor(1440 / productionMinutes);
     const ordersPerDay = deliveriesPerDay * productsPerDelivery;
     
     return {
         level,
+        maxLevel: MAX_TRUCK_LEVEL,
         productionTime: Math.round(productionMinutes * 100) / 100,
         productionMs: Math.round(productionMinutes * 60 * 1000),
         productsPerDelivery,
@@ -928,7 +987,7 @@ bot.command('setlevel', async (ctx) => {
     if (parts.length < 3) return ctx.reply("❌ Sử dụng: /setlevel <userId> <cấp_độ>");
     const targetId = parts[1];
     const level = parseInt(parts[2]);
-    if (level < 1 || level > 10) return ctx.reply("❌ Cấp độ phải từ 1-10");
+    if (level < 1 || level > MAX_TRUCK_LEVEL) return ctx.reply(`❌ Cấp độ phải từ 1-${MAX_TRUCK_LEVEL}`);
     await touchWallet(targetId, { truckLevel: level });
     ctx.reply(`✅ Đã đặt cấp độ xe của ${targetId} lên ${level}`);
 });
@@ -1807,7 +1866,15 @@ app.post('/api/save-ip/:id', async (req, res) => {
 
 // API lấy user (kèm level stats)
 app.get('/api/user/:id', async (req, res) => {
-    const { data, error } = await readUserRow(req.params.id);
+    let { data, error } = await readUserRow(req.params.id);
+    // Sang ngày mới (0h00 giờ VN) thì SERVER tự reset, nên tải lại app hay tắt/mở bot đều KHÔNG
+    // tạo thêm lượt câu hỏi / SmartLink / nhiệm vụ như trước.
+    if (data && !isCurrentVietnamDay(data.lastResetDate)) {
+        const { error: resetError } = await saveUserFields(req.params.id, {
+            ...dailyResetFields(), walletUpdatedAt: new Date().toISOString()
+        });
+        if (!resetError) ({ data } = await readUserRow(req.params.id));
+    }
     if (!data) {
         if (!error || error.code === 'PGRST116') { // Not Found
             return res.status(404).json({ error: "User not found" });
@@ -1907,6 +1974,75 @@ app.post('/api/user/:id', async (req, res) => {
     } catch (e) {
         console.error("Lỗi API cập nhật user:", e);
         res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ==================== SMARTLINK ====================
+// Mỗi lần bấm SmartLink hợp lệ được +50 Coin và +50 Đơn hàng, do SERVER cộng và lưu thẳng vào
+// Supabase (không tính ở máy người dùng) nên tải lại app hay tắt/mở bot đều không đổi số lượt.
+const smartlinkProcessing = new Set();
+const SMARTLINK_DAILY_LIMIT = 30;
+const SMARTLINK_REWARD_COINS = 50;
+const SMARTLINK_REWARD_ORDERS = 50;
+app.post('/api/smartlink/complete', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!userId) return res.status(400).json({ success: false, error: 'Thiếu userId.' });
+    if (smartlinkProcessing.has(userId)) {
+        return res.status(409).json({ success: false, retry: true, error: 'Lượt SmartLink đang được xử lý.' });
+    }
+    smartlinkProcessing.add(userId);
+    try {
+        let { data: user } = await readUserRow(userId);
+        if (!user) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
+        if (user.isBanned) return res.status(403).json({ success: false, isBanned: true, error: 'Tài khoản đã bị khóa.' });
+
+        // Sang ngày mới thì đưa bộ đếm về 0 trước khi cộng, để mốc reset luôn là 0h00 giờ VN
+        const newDay = !isCurrentVietnamDay(user.lastResetDate);
+        if (newDay) {
+            await saveUserFields(userId, { ...dailyResetFields(), walletUpdatedAt: new Date().toISOString() });
+            ({ data: user } = await readUserRow(userId));
+            if (!user) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
+        }
+
+        const currentCount = Number(user.smartlinkCount || 0);
+        if (currentCount >= SMARTLINK_DAILY_LIMIT) {
+            return res.json({
+                success: true, alreadyComplete: true, smartlinkCount: SMARTLINK_DAILY_LIMIT,
+                smartlinksToday: Number(user.smartlinksToday || 0),
+                lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0),
+                coins: Number(user.coins || 0), orders: Number(user.orders || 0),
+                walletUpdatedAt: user.walletUpdatedAt
+            });
+        }
+
+        const walletUpdatedAt = new Date().toISOString();
+        const update = {
+            coins: Number(user.coins || 0) + SMARTLINK_REWARD_COINS,
+            orders: Number(user.orders || 0) + SMARTLINK_REWARD_ORDERS,
+            smartlinkCount: currentCount + 1,
+            smartlinksToday: Number(user.smartlinksToday || 0) + 1,
+            lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0) + 1,
+            lastSmartlinkTime: Date.now(),
+            lastResetDate: vietnamDayKey(),
+            walletUpdatedAt
+        };
+        const { error: saveError } = await saveUserFields(userId, update);
+        if (saveError) return res.status(500).json({ success: false, error: saveError.message });
+        logTransaction(userId, 'coin', SMARTLINK_REWARD_COINS, 'Hoàn thành 1 SmartLink');
+        logTransaction(userId, 'orders', SMARTLINK_REWARD_ORDERS, 'Hoàn thành 1 SmartLink');
+
+        res.json({
+            success: true,
+            rewardCoins: SMARTLINK_REWARD_COINS, rewardOrders: SMARTLINK_REWARD_ORDERS,
+            smartlinkCount: update.smartlinkCount, smartlinksToday: update.smartlinksToday,
+            lifetimeSmartlinks: update.lifetimeSmartlinks,
+            coins: update.coins, orders: update.orders, walletUpdatedAt
+        });
+    } catch (e) {
+        console.error('Lỗi hoàn tất SmartLink:', e);
+        res.status(500).json({ success: false, error: e.message });
+    } finally {
+        smartlinkProcessing.delete(userId);
     }
 });
 
@@ -2055,30 +2191,53 @@ app.post('/api/check-referral/:id', async (req, res) => {
 // (bankName, accountName, accountNumber cho ngân hàng; accountNumber = SĐT cho Momo/ZaloPay)
 // LƯU Ý SCHEMA: bảng "withdrawals" trên Supabase cần có thêm các cột:
 // ordersAmount (int8), bankName (text), accountName (text), accountNumber (text), txCode (int8)
+const WITHDRAW_MIN_ORDERS = 50000;      // Tối thiểu 50.000 Đơn Hàng
+const WITHDRAW_MIN_ADS = 5;             // Xem tối thiểu 5 QC trong ngày
+const WITHDRAW_MIN_SMARTLINKS = 15;     // Bấm tối thiểu 15 SmartLink trong ngày
+const WITHDRAW_PER_USER_PER_DAY = 1;    // Mỗi người 1 đơn rút/ngày
+const WITHDRAW_DAILY_QUOTA = 20;        // Toàn Mini App nhận tối đa 20 đơn rút/ngày
+// Nhóm nhận thông báo rút tiền: https://t.me/khohangchatkiemtien
+const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
 app.post('/api/withdraw', async (req, res) => {
     const { userId, method, bankName, accountName, accountNumber, ordersAmount } = req.body;
 
     if (!userId || !method || !accountNumber || !ordersAmount) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ thông tin rút tiền." });
     }
-    if (ordersAmount < 50000) { // Mức rút tối thiểu: 50.000 Đơn Hàng (5.000 VNĐ)
+    if (ordersAmount < WITHDRAW_MIN_ORDERS) { // Mức rút tối thiểu: 50.000 Đơn Hàng (5.000 VNĐ)
         return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 50.000 Đơn Hàng (5.000 VNĐ)." });
     }
     if (method === 'bank' && (!bankName || !accountName)) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ tên ngân hàng và tên chủ tài khoản." });
     }
 
-    const { data: userData, error: userFetchError } = await supabase.from('users').select('orders, isBanned, name, adsToday, smartlinksToday').eq('id', userId).single();
-    if (userFetchError || !userData) {
-        console.error("Lỗi lấy user khi rút tiền:", userFetchError);
+    const { data: userData } = await readUserRow(userId);
+    if (!userData) {
         return res.status(404).json({ error: "User not found or database error." });
     }
     if (userData.isBanned) {
         return res.status(403).json({ error: "Tài khoản đã bị khóa." });
     }
-    // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận
-    if ((userData.adsToday || 0) < 10 || (userData.smartlinksToday || 0) < 5) {
-        return res.status(400).json({ error: `Chưa đủ điều kiện: cần xem ≥10 QC hôm nay (hiện ${userData.adsToday || 0}/10) và bấm ≥5 SmartLink hôm nay (hiện ${userData.smartlinksToday || 0}/5).` });
+    // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận.
+    // Yêu cầu: ≥50.000 Đơn Hàng, xem ≥5 QC hôm nay, bấm ≥15 SmartLink hôm nay.
+    const adsTodayCount = Number(userData.adsToday || 0);
+    const smartlinksTodayCount = Number(userData.smartlinksToday || 0);
+    if (adsTodayCount < WITHDRAW_MIN_ADS || smartlinksTodayCount < WITHDRAW_MIN_SMARTLINKS) {
+        return res.status(400).json({ error: `Chưa đủ điều kiện: cần xem ≥${WITHDRAW_MIN_ADS} QC hôm nay (hiện ${adsTodayCount}/${WITHDRAW_MIN_ADS}) và bấm ≥${WITHDRAW_MIN_SMARTLINKS} SmartLink hôm nay (hiện ${smartlinksTodayCount}/${WITHDRAW_MIN_SMARTLINKS}).` });
+    }
+    // Mỗi người chỉ rút 1 lần/ngày và toàn Mini App chỉ nhận tối đa 20 đơn rút mỗi ngày (0h00 giờ VN)
+    const dayStart = vietnamDayStartIso();
+    const { count: myTodayCount, error: myCountError } = await supabase.from('withdrawals')
+        .select('*', { count: 'exact', head: true }).eq('userId', userId).gte('createdAt', dayStart);
+    if (myCountError) console.error('Lỗi đếm đơn rút của user:', myCountError.message);
+    if ((myTodayCount || 0) >= WITHDRAW_PER_USER_PER_DAY) {
+        return res.status(429).json({ error: `Mỗi ngày chỉ được rút ${WITHDRAW_PER_USER_PER_DAY} lần. Vui lòng quay lại sau 0h00.` });
+    }
+    const { count: allTodayCount, error: allCountError } = await supabase.from('withdrawals')
+        .select('*', { count: 'exact', head: true }).gte('createdAt', dayStart);
+    if (allCountError) console.error('Lỗi đếm đơn rút trong ngày:', allCountError.message);
+    if ((allTodayCount || 0) >= WITHDRAW_DAILY_QUOTA) {
+        return res.status(429).json({ error: `Hôm nay đã đủ ${WITHDRAW_DAILY_QUOTA} đơn rút của hệ thống. Vui lòng quay lại sau 0h00.` });
     }
     if (userData.orders < ordersAmount) {
         return res.status(400).json({ error: "Không đủ đơn hàng để rút số lượng này." });
@@ -2133,17 +2292,12 @@ app.post('/api/withdraw', async (req, res) => {
         }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
-        // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT và Chủ TK (chỉ hiện 2 ký tự đầu, còn lại che bằng ****)
-        const maskText = (txt) => {
-            const clean = (txt || '').toString().trim();
-            if (!clean) return 'Không có';
-            return clean.length > 2 ? clean.substring(0, 2) + '*'.repeat(Math.max(clean.length - 2, 3)) : clean + '***';
-        };
-        const masked = maskText(accountNumber);
-        const maskedAccountName = maskText(accountName);
-        await safeSendMessage(GROUP_2_ID,
-            `🔔 *Yêu cầu rút tiền mới:*\n🆔 ID: ${userId}\n💳 Phương Thức: ${methodLabel}\n📱 STK/SĐT: ${masked}\n👤 Chủ TK: ${maskedAccountName}\n💰 Số Tiền: ${amountVnd.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersAmount.toLocaleString()}`,
-            { parse_mode: 'Markdown' }
+        // Thông báo rút tiền lên nhóm https://t.me/khohangchatkiemtien
+        // ID chỉ hiện 3 số đầu, phần còn lại che bằng dấu sao để không lộ danh tính người dùng.
+        const idText = String(userId);
+        const maskedId = idText.length > 3 ? idText.slice(0, 3) + '*'.repeat(idText.length - 3) : idText;
+        await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
+            `ID: ${maskedId}\nSố Tiền Rút: ${amountVnd.toLocaleString('vi-VN')} VNĐ\nThời Gian Rút: ${vietnamTimeText()}`
         );
 
         // Trả về ĐÚNG giá trị orders + walletUpdatedAt vừa lưu để client SET trực tiếp (không tự trừ cục bộ nữa)
