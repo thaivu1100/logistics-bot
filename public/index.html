@@ -229,11 +229,11 @@
         .truck-idle { display: inline-block; animation: truck3d 3.2s ease-in-out infinite; }
         @keyframes truck3d { 0%, 100% { transform: perspective(500px) rotateY(-8deg) translateY(0); } 50% { transform: perspective(500px) rotateY(8deg) translateY(-3px); } }
         /* Khối hàng 3D quay ở màn hình chờ */
-        .cube-scene { perspective: 520px; width: 78px; height: 78px; }
-        .cube-3d { position: relative; width: 78px; height: 78px; transform-style: preserve-3d; animation: cubeSpin 4.5s linear infinite; }
+        .cube-scene { -webkit-perspective: 520px; perspective: 520px; width: 78px; height: 78px; }
+        .cube-3d { position: relative; width: 78px; height: 78px; -webkit-transform-style: preserve-3d; transform-style: preserve-3d; animation: cubeSpin 4.5s linear infinite; }
         .cube-3d span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 30px;
             background: linear-gradient(145deg, rgba(37,99,235,0.9), rgba(30,58,138,0.7)); border: 1px solid rgba(255,255,255,0.18);
-            border-radius: 14px; box-shadow: inset 0 0 20px rgba(59,130,246,0.35); }
+            border-radius: 14px; box-shadow: inset 0 0 20px rgba(59,130,246,0.35); -webkit-backface-visibility: hidden; backface-visibility: hidden; }
         .cube-3d .f1 { transform: translateZ(39px); }
         .cube-3d .f2 { transform: rotateY(180deg) translateZ(39px); }
         .cube-3d .f3 { transform: rotateY(90deg) translateZ(39px); }
@@ -1280,16 +1280,6 @@
                     return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
-                    // FIX HOẠT ẢNH LOADING: thanh loading chạy dần tới ~92% trong lúc chờ tải dữ liệu,
-                    // chỉ chạy đầy 100% khi tải xong (hoặc hết giờ chờ) rồi mới chuyển vào giao diện.
-                    this._loadingProgressTimer = setInterval(() => {
-                        this.loadingProgress = Math.min(92, this.loadingProgress + Math.random() * 7 + 3);
-                    }, 220);
-                    // FIX LỖI "MINI APP KẸT MÃI Ở MÀN LOADING KHÔNG VÀO ĐƯỢC GIAO DIỆN": trước đây nếu fetch tới
-                    // server bị treo (mạng chậm/server không phản hồi) thì isAppLoading không bao giờ được tắt.
-                    // Đặt mốc thời gian chờ tối đa, hết giờ vẫn ép chạy đầy thanh loading rồi vào giao diện.
-                    this._loadingFailsafeTimer = setTimeout(() => { this.finishAppLoading(); }, 10000);
-
                     // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
                     // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
                     // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
@@ -1599,12 +1589,34 @@
                 async finishAppLoading() {
                     // Dừng vòng lặp tăng tiến độ + huỷ mốc chờ dự phòng, ép thanh loading chạy đầy 100%
                     // rồi mới ẩn màn loading để vào giao diện (đúng yêu cầu: thanh chạy đầy mới vào app).
+                    if (!this.isAppLoading) return;
                     clearInterval(this._loadingProgressTimer);
                     clearTimeout(this._loadingFailsafeTimer);
-                    if (!this.isAppLoading) return;
                     this.loadingProgress = 100;
                     await new Promise(r => setTimeout(r, 280));
                     this.isAppLoading = false;
+                },
+                // FIX LỖI "VÀO ĐƯỢC GIAO DIỆN RỒI LẠI KẸT Ở MÀN LOADING VÔ HẠN": trước đây thanh tiến độ +
+                // mốc timeout dự phòng chỉ được khởi động 1 lần bên trong initApp(), nên nếu isAppLoading vô
+                // tình bật lại true ở bất kỳ thời điểm nào khác sau khi đã vào giao diện thì không có gì canh
+                // giờ để tự tắt nữa, khiến app đứng im mãi ở màn loading. Alpine tự gọi init() khi khởi tạo
+                // component; dùng $watch để theo dõi isAppLoading XUYÊN SUỐT vòng đời app (không riêng lần đầu),
+                // hễ isAppLoading bật true là tự chạy thanh loading và ép tắt sau tối đa 10 giây.
+                init() {
+                    const armLoadingWatchdog = () => {
+                        clearInterval(this._loadingProgressTimer);
+                        clearTimeout(this._loadingFailsafeTimer);
+                        this.loadingProgress = 0;
+                        this._loadingProgressTimer = setInterval(() => {
+                            this.loadingProgress = Math.min(92, this.loadingProgress + Math.random() * 7 + 3);
+                        }, 220);
+                        this._loadingFailsafeTimer = setTimeout(() => { this.finishAppLoading(); }, 10000);
+                    };
+                    this.$watch('isAppLoading', (val) => {
+                        if (val) armLoadingWatchdog();
+                        else { clearInterval(this._loadingProgressTimer); clearTimeout(this._loadingFailsafeTimer); }
+                    });
+                    if (this.isAppLoading) armLoadingWatchdog();
                 },
 
                 async checkMaintenanceLock() {
