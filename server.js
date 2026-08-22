@@ -258,7 +258,7 @@ const bot = new Telegraf(BOT_TOKEN);
  * Tính toán tất cả thống kê xe theo cấp độ (công thức LOCKED)
  * Level 1-500 tuân theo công thức chính xác:
  * - Thời gian: 30 phút ở cấp 1, giảm đều xuống đúng 2 phút ở cấp 500
- * - Sản phẩm/lần: 100 + (level-1)*30 (cấp 500 = 15.070 đơn)
+ * - Sản phẩm/lần: tăng đều từ 100, tối đa đúng 5.000 đơn ở cấp 500
  * - Kho max: bằng đúng 1 mẻ hàng
  * - Chi phí nâng cấp: 300 + (level-1)*300 coin (tổng ~37,4 triệu coin để đạt cấp 500)
  * - Lần giao/ngày: floor(1440 / thời gian)
@@ -272,7 +272,7 @@ function calculateLevelStats(level) {
     const productionMinutes = level >= MAX_TRUCK_LEVEL
         ? 2
         : Math.max(2, 30 * Math.pow(2 / 30, (level - 1) / (MAX_TRUCK_LEVEL - 1)));
-    const productsPerDelivery = 100 + (level - 1) * 30;   // Cấp 500: 15.070 đơn mỗi lần giao
+    const productsPerDelivery = Math.round(100 + (level - 1) * (4900 / (MAX_TRUCK_LEVEL - 1))); // Cấp 500: đúng 5.000 đơn
     const maxWarehouse = productsPerDelivery;             // Kho chứa đúng 1 mẻ hàng
     // Chi phí nâng cấp tăng đều: cấp 1->2 hết 300 coin, cấp 499->500 hết 149.700 coin
     // (tổng ~37 triệu coin) -> lên cấp 500 khá khó, phải chơi lâu dài chứ không đạt trong vài ngày.
@@ -2046,29 +2046,124 @@ app.post('/api/smartlink/complete', async (req, res) => {
     }
 });
 
+// ==================== QUIZ: SERVER CẤP LƯỢT, RELOAD KHÔNG THỂ NHẬN LẠI ====================
+const QUIZ_DAILY_LIMIT = 5;
+const QUIZ_AD_LIMIT = 4;
+const quizProcessing = new Set();
+async function loadCurrentDailyUser(userId) {
+    let { data: user } = await readUserRow(userId);
+    if (!user) return null;
+    if (!isCurrentVietnamDay(user.lastResetDate)) {
+        // Chỉ sang ngày mới thật sự mới reset toàn bộ nhiệm vụ/QC/SmartLink/giao hàng.
+        await saveUserFields(userId, { ...dailyResetFields(), walletUpdatedAt:new Date().toISOString() });
+        ({ data:user } = await readUserRow(userId));
+    } else if (user.quizDate !== vietnamDayKey()) {
+        // Nếu riêng dữ liệu quiz cũ/thiếu thì chỉ reset quiz, tuyệt đối không xóa tiến độ khác trong ngày.
+        await saveUserFields(userId, {
+            quizDate:vietnamDayKey(), quizFreeUsed:false, quizAdUnlocked:0, quizUsedIds:[]
+        });
+        ({ data:user } = await readUserRow(userId));
+    }
+    return user;
+}
+function quizState(user) {
+    const quizFreeUsed = !!user?.quizFreeUsed;
+    const quizAdUnlocked = Math.min(QUIZ_AD_LIMIT, Math.max(0, Number(user?.quizAdUnlocked || 0)));
+    const slotsUsed = (quizFreeUsed ? 1 : 0) + quizAdUnlocked;
+    return {
+        quizDate: vietnamDayKey(), quizFreeUsed, quizAdUnlocked,
+        quizUsedIds: Array.isArray(user?.quizUsedIds) ? user.quizUsedIds.slice(0, QUIZ_DAILY_LIMIT) : [],
+        slotsUsed, remaining: Math.max(0, QUIZ_DAILY_LIMIT - slotsUsed)
+    };
+}
+app.get('/api/quiz/status/:id', async (req, res) => {
+    try {
+        const user = await loadCurrentDailyUser(String(req.params.id));
+        if (!user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
+        res.json({ success:true, ...quizState(user) });
+    } catch (e) {
+        console.error('Lỗi lấy trạng thái câu hỏi:', e);
+        res.status(500).json({ success:false, error:e.message });
+    }
+});
+app.post('/api/quiz/claim-slot', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    const kind = req.body?.kind === 'ad' ? 'ad' : 'free';
+    if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
+    if (quizProcessing.has(userId)) return res.status(409).json({ success:false, retry:true, error:'Đang xử lý lượt câu hỏi.' });
+    quizProcessing.add(userId);
+    try {
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
+        const state = quizState(user);
+        if (state.slotsUsed >= QUIZ_DAILY_LIMIT) {
+            return res.status(429).json({ success:false, limitReached:true, error:'Bạn đã dùng đủ 5 câu hỏi hôm nay.', ...state });
+        }
+        const update = { quizDate:vietnamDayKey(), lastResetDate:vietnamDayKey(), walletUpdatedAt:new Date().toISOString() };
+        if (kind === 'free') {
+            if (state.quizFreeUsed) return res.status(409).json({ success:false, error:'Câu miễn phí hôm nay đã được dùng.', ...state });
+            update.quizFreeUsed = true;
+        } else {
+            if (!state.quizFreeUsed) return res.status(400).json({ success:false, error:'Hãy dùng câu miễn phí trước.' });
+            if (state.quizAdUnlocked >= QUIZ_AD_LIMIT) return res.status(429).json({ success:false, limitReached:true, error:'Đã mở đủ 4 câu bằng quảng cáo.' });
+            update.quizAdUnlocked = state.quizAdUnlocked + 1;
+        }
+        const { error } = await saveUserFields(userId, update);
+        if (error) throw error;
+        res.json({ success:true, kind, walletUpdatedAt:update.walletUpdatedAt, ...quizState({ ...user, ...update }) });
+    } catch (e) {
+        console.error('Lỗi cấp lượt câu hỏi:', e);
+        res.status(500).json({ success:false, error:e.message });
+    } finally { quizProcessing.delete(userId); }
+});
+
+// ==================== GIAO HÀNG: TỐI ĐA 20 LẦN/NGÀY ====================
+const DELIVERY_DAILY_LIMIT = 20;
+const deliveryProcessing = new Set();
+app.post('/api/delivery/claim', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
+    if (deliveryProcessing.has(userId)) return res.status(409).json({ success:false, retry:true, error:'Đang xử lý lượt giao hàng.' });
+    deliveryProcessing.add(userId);
+    try {
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
+        const current = Math.max(0, Number(user.deliveryCount || 0));
+        if (current >= DELIVERY_DAILY_LIMIT) {
+            return res.status(429).json({ success:false, limitReached:true, deliveryCount:current, limit:DELIVERY_DAILY_LIMIT, error:'Hôm nay bạn đã giao đủ 20 lần.' });
+        }
+        const deliveryCount = current + 1;
+        const walletUpdatedAt=new Date().toISOString();
+        const { error } = await saveUserFields(userId, { deliveryCount, lastResetDate:vietnamDayKey(), walletUpdatedAt });
+        if (error) throw error;
+        res.json({ success:true, deliveryCount, remaining:DELIVERY_DAILY_LIMIT-deliveryCount, limit:DELIVERY_DAILY_LIMIT, walletUpdatedAt });
+    } catch (e) {
+        console.error('Lỗi cấp lượt giao hàng:', e);
+        res.status(500).json({ success:false, error:e.message });
+    } finally { deliveryProcessing.delete(userId); }
+});
+
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
 
 // API kiểm tra xem delivery này có cần CAPTCHA không (random 1-3 lần đầu tiên)
 app.post('/api/delivery/check-captcha', async (req, res) => {
     try {
         const { userId } = req.body;
-        const { data: user } = await readUserRow(userId);
-        if (!user) return res.status(404).json({ error: 'User không tồn tại' });
-        
-        // Tracking delivery count - random CAPTCHA on 1-3 deliveries
-        const deliveryCount = (user.deliveryCount || 0) + 1;
-        const requiresCaptcha = deliveryCount >= 1 && deliveryCount <= 3 && Math.random() < 0.4;
-        
-        await saveUserFields(userId, { deliveryCount });
-        
+        const user = await loadCurrentDailyUser(String(userId || ''));
+        if (!user) return res.status(404).json({ error:'User không tồn tại' });
+        const current = Math.max(0, Number(user.deliveryCount || 0));
+        if (current >= DELIVERY_DAILY_LIMIT) {
+            return res.status(429).json({ error:'Hôm nay bạn đã giao đủ 20 lần.', deliveryCount:current, limit:DELIVERY_DAILY_LIMIT });
+        }
+        const nextDelivery = current + 1;
+        const requiresCaptcha = nextDelivery <= 3 && Math.random() < 0.4;
         res.json({
-            requiresCaptcha,
-            deliveryCount,
-            captchaCode: requiresCaptcha ? Math.random().toString(36).substring(2, 8).toUpperCase() : null
+            requiresCaptcha, deliveryCount:current, remaining:DELIVERY_DAILY_LIMIT-current,
+            captchaCode: requiresCaptcha ? Math.random().toString(36).substring(2,8).toUpperCase() : null
         });
     } catch (e) {
         console.error('Lỗi check CAPTCHA delivery:', e.message);
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error:e.message });
     }
 });
 
