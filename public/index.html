@@ -245,7 +245,7 @@
             background: radial-gradient(ellipse at center, rgba(59,130,246,0.35), transparent 70%); animation: platePulse 2.2s ease-in-out infinite; }
         @keyframes platePulse { 0%, 100% { opacity: .45; transform: perspective(700px) rotateX(28deg) scale(1); } 50% { opacity: .8; transform: perspective(700px) rotateX(28deg) scale(1.12); } }
         @media (prefers-reduced-motion: reduce) {
-            .cube-3d, .loading-plate, .truck-idle { animation: none !important; }
+            .loading-plate, .truck-idle { animation: none !important; }
             .glass, .task-card, button { transition: none !important; }
         }
         /* ===== TECHNO LOGISTICS UI: nhẹ, rõ, đồng nhất cho mọi nút ===== */
@@ -912,6 +912,14 @@
 
     <script>
         const API_URL = window.location.origin;
+        // FIX LỖI "KẸT Ở MÀN LOADING": bọc fetch với AbortController để tự huỷ request nếu server không
+        // phản hồi kịp (vd Render free tier "ngủ" cần thời gian khởi động lại), thay vì để request treo
+        // vô thời hạn rồi phải chờ tới hạn watchdog mới thoát được màn loading.
+        function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+        }
         const BOT_USERNAME = 'KhoHangKiemtien_Bot';
         // SMARTLINKS đã được cấu hình trong `server.js` hoặc có thể thêm vào đây
         const SMARTLINKS_BASE = [
@@ -1316,7 +1324,7 @@
                     }
 
                     try {
-                        const res = await fetch(`${API_URL}/api/user/${this.user.id}`);
+                        const res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`);
                         if (res.status === 404) { // User not found, create new local state
                             console.log("New user detected or user data not found.");
                             this.user.joinDate = new Date().toLocaleDateString('vi-VN');
@@ -1621,7 +1629,7 @@
 
                 async checkMaintenanceLock() {
                     try {
-                        const res = await fetch(`${API_URL}/api/lock-status`);
+                        const res = await fetchWithTimeout(`${API_URL}/api/lock-status`);
                         if (!res.ok) return;
                         const data = await res.json();
                         this.maintenanceLocked = !!data.locked;
