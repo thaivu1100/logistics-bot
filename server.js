@@ -9,21 +9,6 @@ const path = require('path');
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-
-// Ngày nghiệp vụ cố định theo múi giờ Việt Nam; không phụ thuộc múi giờ máy chủ/trình duyệt.
-function vietnamDayKey(date = new Date()) {
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).format(date);
-}
-function isCurrentVietnamDay(value) {
-    if (!value) return false;
-    const today = vietnamDayKey();
-    if (value === today) return true;
-    const parsed = new Date(value);
-    return !Number.isNaN(parsed.getTime()) && vietnamDayKey(parsed) === today;
-}
-
 // FIX LỖI "1 SỐ USER BỊ KẸT PHIÊN BẢN CŨ/DEMO": trước đây express.static dùng cache mặc định của trình
 // duyệt/Telegram WebView cho file index.html, khiến sau khi deploy bản mới, một số thiết bị vẫn tiếp tục
 // đọc bản HTML/JS đã lưu cache cục bộ trước đó thay vì tải lại. Ép index.html luôn "no-store" (không lưu
@@ -838,7 +823,6 @@ function fullResetFields() {
         chestOpensTotal: 0,
         chestOpensToday: 0,
         lifetimeAdsWatched: 0,
-        lifetimeSmartlinks: 0,
         invitedCount: 0,
         validInvites: 0,
         deliveryCount: 0,
@@ -1616,24 +1600,10 @@ app.get('/api/user/:id', async (req, res) => {
         console.error("Lỗi lấy user:", error);
         return res.status(500).json({ error: "Failed to fetch user data" });
     }
-    // Reset các giới hạn theo ngày ngay trên server. Reload/tắt mở app không thể tạo lại lượt.
-    if (!isCurrentVietnamDay(data.lastResetDate)) {
-        const reset = {
-            adsToday: 0, smartlinksToday: 0, bonusAdsToday: 0,
-            deliveryCount: 0, smartlinkCount: 0, usedSmartlinks: [],
-            spinAdCount: 0, spinAdProgress: 0, chestOpensToday: 0,
-            quizDate: vietnamDayKey(), quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
-            lastResetDate: vietnamDayKey(), walletUpdatedAt: new Date().toISOString()
-        };
-        const { data: resetData, error: resetError } = await supabase.from('users')
-            .update(reset).eq('id', req.params.id).select('*').single();
-        if (resetError) return res.status(500).json({ error: resetError.message });
-        Object.assign(data, resetData || reset);
-    }
-
     // Parse referralMilestones if stored as JSON string
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
-        data.referralMilestones = JSON.parse(data.referralMilestones);
+        try { data.referralMilestones = JSON.parse(data.referralMilestones); }
+        catch (e) { console.error('referralMilestones không hợp lệ của user', req.params.id); data.referralMilestones = []; }
     }
     
     // Thêm level stats vào response
@@ -1641,6 +1611,22 @@ app.get('/api/user/:id', async (req, res) => {
     
     res.json({ ...data, levelStats });
 });
+
+async function updateUserSchemaSafe(userId, values) {
+    const clean = { ...values };
+    for (let attempt=0; attempt<30; attempt++) {
+        const result = await supabase.from('users').update(clean).eq('id',userId);
+        if (!result.error) return { error:null, saved:clean };
+        const text = `${result.error.message||''} ${result.error.details||''}`;
+        const match = text.match(/(?:column|field) ["']?([A-Za-z_][A-Za-z0-9_]*)["']?/i)
+            || text.match(/["']([A-Za-z_][A-Za-z0-9_]*)["'] column/i);
+        const missing = match?.[1];
+        if (!missing || !(missing in clean)) return { error:result.error, saved:null };
+        console.warn(`Bỏ qua cột chưa có trong schema users: ${missing}`);
+        delete clean[missing];
+    }
+    return { error:{message:'Quá nhiều cột không khớp schema users'}, saved:null };
+}
 
 // API cập nhật user. QUAN TRỌNG: các field "ví" (coins/orders/spins/truckLevel/isBanned) được đối chiếu
 // qua walletUpdatedAt để KHÔNG cho phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ) ghi đè
@@ -1689,11 +1675,12 @@ app.post('/api/user/:id', async (req, res) => {
             updateData.walletUpdatedAt = new Date().toISOString();
         }
 
-        const { error } = await supabase.from('users').update(updateData).eq('id', userId);
+        const { error, saved } = await updateUserSchemaSafe(userId, updateData);
         if (error) {
             console.error(`Lỗi cập nhật user ${userId}:`, error);
-            return res.status(500).json({ success: false, error: error.message });
+            return res.status(500).json({ success:false, error:error.message });
         }
+        updateData = saved;
 
         if (walletOverridden) {
             // Trả về giá trị mới nhất từ DB cho TOÀN BỘ field được bảo vệ để client tự đồng bộ lại, tránh mất thay đổi của admin
@@ -1717,49 +1704,49 @@ app.post('/api/user/:id', async (req, res) => {
     }
 });
 
-// Smartlink được xác nhận và thưởng hoàn toàn trên server để reload không đổi số lượt.
-const smartlinkLocks = new Map();
+// Xác nhận SmartLink tại server: Supabase là nguồn dữ liệu duy nhất, mỗi lượt +50 Coin +50 Đơn hàng.
+const smartlinkProcessing = new Set();
 app.post('/api/smartlink/complete', async (req, res) => {
     const userId = String(req.body?.userId || '');
-    if (!userId) return res.status(400).json({ success: false, error: 'Missing userId' });
-    const previous = smartlinkLocks.get(userId) || Promise.resolve();
-    const job = previous.then(async () => {
-        const { data: user, error } = await supabase.from('users').select('*').eq('id', userId).single();
-        if (error || !user) throw new Error(error?.message || 'User not found');
-        if (user.isBanned) return { status: 403, body: { success:false, isBanned:true, error:'Tài khoản đã bị khóa.' } };
-
-        const newDay = !isCurrentVietnamDay(user.lastResetDate);
-        const count = newDay ? 0 : Number(user.smartlinkCount || 0);
-        if (count >= 30) {
-            return { status: 200, body: { success:true, alreadyComplete:true, smartlinkCount:30,
-                smartlinksToday:Number(user.smartlinksToday||0), lifetimeSmartlinks:Number(user.lifetimeSmartlinks||0),
-                coins:Number(user.coins||0), orders:Number(user.orders||0) } };
+    if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
+    if (smartlinkProcessing.has(userId)) return res.status(409).json({ success:false, retry:true, error:'Lượt SmartLink đang được xử lý.' });
+    smartlinkProcessing.add(userId);
+    try {
+        let { data:user, error:readError } = await supabase.from('users')
+            .select('id,isBanned,coins,orders,smartlinkCount,smartlinksToday,lifetimeSmartlinks,walletUpdatedAt')
+            .eq('id', userId).single();
+        let hasLifetimeColumn = !readError;
+        if (readError && /lifetimeSmartlinks/i.test(readError.message||'')) {
+            ({data:user,error:readError}=await supabase.from('users')
+                .select('id,isBanned,coins,orders,smartlinkCount,smartlinksToday,walletUpdatedAt').eq('id',userId).single());
+            hasLifetimeColumn=false;
         }
-        const now = new Date().toISOString();
+        if (readError || !user) return res.status(404).json({ success:false, error:readError?.message || 'Không tìm thấy user.' });
+        if (user.isBanned) return res.status(403).json({ success:false, isBanned:true, error:'Tài khoản đã bị khóa.' });
+        const currentCount = Number(user.smartlinkCount || 0);
+        if (currentCount >= 30) return res.json({ success:true, alreadyComplete:true, smartlinkCount:30,
+            smartlinksToday:Number(user.smartlinksToday||0), lifetimeSmartlinks:Number(user.lifetimeSmartlinks||0),
+            coins:Number(user.coins||0), orders:Number(user.orders||0), walletUpdatedAt:user.walletUpdatedAt });
         const update = {
-            smartlinkCount: count + 1,
-            smartlinksToday: (newDay ? 0 : Number(user.smartlinksToday || 0)) + 1,
-            lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0) + 1,
-            coins: Number(user.coins || 0) + 50,
-            orders: Number(user.orders || 0) + 50,
-            lastSmartlinkTime: Date.now(), lastResetDate: vietnamDayKey(), walletUpdatedAt: now
+            coins:Number(user.coins||0)+50, orders:Number(user.orders||0)+50,
+            smartlinkCount:currentCount+1, smartlinksToday:Number(user.smartlinksToday||0)+1,
+            walletUpdatedAt:new Date().toISOString()
         };
-        if (newDay) Object.assign(update, { adsToday:0, bonusAdsToday:0, deliveryCount:0,
-            usedSmartlinks:[], spinAdCount:0, spinAdProgress:0, chestOpensToday:0,
-            quizDate:vietnamDayKey(), quizFreeUsed:false, quizAdUnlocked:0, quizUsedIds:[] });
-        const { data: saved, error: saveError } = await supabase.from('users').update(update).eq('id', userId).select('*').single();
-        if (saveError) throw new Error(saveError.message);
-        await logTransaction(userId, 'coin', 50, 'Hoàn thành 1 SmartLink');
-        await logTransaction(userId, 'orders', 50, 'Hoàn thành 1 SmartLink');
-        return { status:200, body:{ success:true, rewardCoins:50, rewardOrders:50,
-            smartlinkCount:saved.smartlinkCount, smartlinksToday:saved.smartlinksToday,
-            lifetimeSmartlinks:saved.lifetimeSmartlinks, coins:saved.coins, orders:saved.orders,
-            walletUpdatedAt:saved.walletUpdatedAt } };
-    });
-    smartlinkLocks.set(userId, job);
-    try { const out = await job; res.status(out.status).json(out.body); }
-    catch (e) { console.error('Lỗi SmartLink:', e); res.status(500).json({success:false,error:e.message}); }
-    finally { if (smartlinkLocks.get(userId) === job) smartlinkLocks.delete(userId); }
+        if (hasLifetimeColumn) update.lifetimeSmartlinks=Number(user.lifetimeSmartlinks||0)+1;
+        const returnFields=hasLifetimeColumn
+            ? 'coins,orders,smartlinkCount,smartlinksToday,lifetimeSmartlinks,walletUpdatedAt'
+            : 'coins,orders,smartlinkCount,smartlinksToday,walletUpdatedAt';
+        const { data:saved, error:saveError } = await supabase.from('users').update(update)
+            .eq('id',userId).select(returnFields).single();
+        if (saveError) return res.status(500).json({ success:false, error:saveError.message });
+        if (!saved) return res.status(409).json({ success:false, retry:true, error:'Dữ liệu vừa thay đổi, vui lòng thử lại.' });
+        logTransaction(userId,'coin',50,'Hoàn thành 1 SmartLink');
+        logTransaction(userId,'orders',50,'Hoàn thành 1 SmartLink');
+        res.json({ success:true, rewardCoins:50, rewardOrders:50, ...saved });
+    } catch (e) {
+        console.error('Lỗi hoàn tất SmartLink:',e);
+        res.status(500).json({ success:false, error:e.message });
+    } finally { smartlinkProcessing.delete(userId); }
 });
 
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
@@ -2014,9 +2001,7 @@ app.get('/api/leaderboard-ads', async (req, res) => {
     const { data, error } = await supabase
         .from('users')
         .select('id, name, weeklyAdsCount')
-        .gt('weeklyAdsCount', 0)
-        .order('weeklyAdsCount', { ascending: false, nullsFirst: false })
-        .order('id', { ascending: true })
+        .order('weeklyAdsCount', { ascending: false })
         .limit(10);
     
     if (error) { 
