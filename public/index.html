@@ -228,24 +228,18 @@
         .neon-blue { box-shadow: 0 8px 0 rgba(30, 58, 138, 0.7), 0 12px 22px rgba(37, 99, 235, 0.3); }
         .truck-idle { display: inline-block; animation: truck3d 3.2s ease-in-out infinite; }
         @keyframes truck3d { 0%, 100% { transform: perspective(500px) rotateY(-8deg) translateY(0); } 50% { transform: perspective(500px) rotateY(8deg) translateY(-3px); } }
-        /* Khối hàng 3D quay ở màn hình chờ */
-        .cube-scene { -webkit-perspective: 520px; perspective: 520px; width: 78px; height: 78px; }
-        .cube-3d { position: relative; width: 78px; height: 78px; -webkit-transform-style: preserve-3d; transform-style: preserve-3d; animation: cubeSpin 4.5s linear infinite; }
-        .cube-3d span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 30px;
-            background: linear-gradient(145deg, rgba(37,99,235,0.9), rgba(30,58,138,0.7)); border: 1px solid rgba(255,255,255,0.18);
-            border-radius: 14px; box-shadow: inset 0 0 20px rgba(59,130,246,0.35); -webkit-backface-visibility: hidden; backface-visibility: hidden; }
-        .cube-3d .f1 { transform: translateZ(39px); }
-        .cube-3d .f2 { transform: rotateY(180deg) translateZ(39px); }
-        .cube-3d .f3 { transform: rotateY(90deg) translateZ(39px); }
-        .cube-3d .f4 { transform: rotateY(-90deg) translateZ(39px); }
-        .cube-3d .f5 { transform: rotateX(90deg) translateZ(39px); }
-        .cube-3d .f6 { transform: rotateX(-90deg) translateZ(39px); }
-        @keyframes cubeSpin { from { transform: rotateX(-20deg) rotateY(0deg); } to { transform: rotateX(-20deg) rotateY(360deg); } }
-        .loading-plate { transform: perspective(700px) rotateX(28deg); width: 130px; height: 22px; border-radius: 50%;
-            background: radial-gradient(ellipse at center, rgba(59,130,246,0.35), transparent 70%); animation: platePulse 2.2s ease-in-out infinite; }
-        @keyframes platePulse { 0%, 100% { opacity: .45; transform: perspective(700px) rotateX(28deg) scale(1); } 50% { opacity: .8; transform: perspective(700px) rotateX(28deg) scale(1.12); } }
+        /* FIX LỖI "KẸT Ở MÀN LOADING VÔ HẠN" (nghi do animation 3D nặng làm treo/crash WebView trên máy yếu):
+        bỏ hẳn khối hàng xoay 3D (preserve-3d + nhiều lớp translateZ/rotateY/rotateX chạy liên tục) ở màn
+        loading, thay bằng 1 spinner 2D đơn giản - chỉ dùng transform:rotate() (rẻ, mượt trên mọi thiết bị,
+        không có nguy cơ làm treo WebView) đúng yêu cầu "animation load bình thường, miễn không lỗi". */
+        .simple-spinner {
+            width: 56px; height: 56px; border-radius: 50%;
+            border: 4px solid rgba(59, 130, 246, 0.18); border-top-color: #3b82f6;
+            animation: simpleSpin 0.9s linear infinite;
+        }
+        @keyframes simpleSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) {
-            .loading-plate, .truck-idle { animation: none !important; }
+            .simple-spinner, .truck-idle { animation: none !important; }
             .glass, .task-card, button { transition: none !important; }
         }
         /* ===== TECHNO LOGISTICS UI: nhẹ, rõ, đồng nhất cho mọi nút ===== */
@@ -319,16 +313,12 @@
         }, 15000);
     </script>
 
-    <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user) -->
+    <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user)
+    FIX: đã bỏ khối hàng xoay 3D, chỉ dùng spinner 2D đơn giản + icon nảy nhẹ + thanh tiến độ, nhẹ và
+    không có nguy cơ làm treo/crash WebView trên thiết bị yếu. -->
     <div id="appLoadingScreen" x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="loading-screen-center bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
         <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
-        <div class="relative cube-scene mb-3">
-            <div class="cube-3d">
-                <span class="f1">📦</span><span class="f2">🚚</span><span class="f3">🏭</span>
-                <span class="f4">🚛</span><span class="f5">🪙</span><span class="f6">📦</span>
-            </div>
-        </div>
-        <div class="relative loading-plate mb-4"></div>
+        <div class="relative simple-spinner mb-4"></div>
         <div class="relative flex gap-2 text-xl mb-3 loading-dots">
             <span>🚚</span><span>📦</span><span>🏭</span>
         </div>
