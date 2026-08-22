@@ -324,9 +324,6 @@
         </div>
         <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1">Kho Hàng Kiếm Tiền</h2>
         <p class="relative text-xs text-slate-400" x-text="texts.loadingText || 'Đang tải dữ liệu...'"></p>
-        <div class="relative w-40 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden">
-            <div class="h-full bg-blue-500 loading-bar-anim" :style="`width:${loadingProgress}%`"></div>
-        </div>
     </div>
 
     <div x-show="notification.show" x-transition class="banner-notification" x-text="notification.text" @click="notification.show = false"></div>
@@ -3110,7 +3107,13 @@
                         clientWalletSyncedAt: this.walletSyncedAt, // Mốc ví client biết gần nhất, để server chống ghi đè thay đổi của admin
                     };
                     try {
-                        const res = await fetch(`${API_URL}/api/user/${this.user.id}`, {
+                        // FIX LỖI "VÀO GIAO DIỆN RỒI LẠI KẸT Ở LOADING VÔ HẠN": trước đây saveState() dùng
+                        // fetch() thường (không timeout), trong khi initApp() phải "await this.saveState()"
+                        // cho user mới -> nếu request này bị treo (mạng chờn/server chậm phản hồi), initApp
+                        // không bao giờ chạy tới finishAppLoading() được nữa, kẹt màn loading vĩnh viễn. Đổi
+                        // sang fetchWithTimeout để request luôn tự huỷ sau 10 giây nếu không phản hồi kịp,
+                        // giống mọi request quan trọng khác trong file này.
+                        const res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(data),
@@ -3118,7 +3121,7 @@
                             // NGAY SAU khi hành động vừa xảy ra (vd bấm Tăng Tốc X2 rồi tắt app luôn), tránh
                             // trường hợp trình duyệt/WebView hủy request giữa chừng làm mất bản lưu cuối cùng.
                             keepalive: true
-                        });
+                        }, 10000);
                         if (res.status === 403) {
                             const errData = await res.json().catch(() => ({}));
                             if (errData.isBanned) {
