@@ -1044,7 +1044,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
-                isAppLoading: true, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
+                isAppLoading: true, _dataHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -1058,7 +1058,7 @@
                     { id: 'spin1', name: '🎁 Mở rương 1 lần', icon: '🎁', reward: 100, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                     { id: 'invite1', name: '👥 Mời 1 bạn thành công', icon: '👥', reward: 350, rewardOrders: 25, rewardSpins: 0, done: false, claimable: false, meta: {} },
                     { id: 'invite5', name: '👥 Mời 5 bạn thành công', icon: '👥', reward: 500, rewardOrders: 100, rewardSpins: 1, done: false, claimable: false, meta: {} },
-                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần (mỗi lần +50 Coin +50 Đơn hàng)', icon: '🔗', reward: 0, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
+                    { id: 'smartlink30', name: '🔗 SmartLink 30 lần · 🪙 50 · 📦 50/lần', icon: '🔗', reward: 0, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -1226,6 +1226,7 @@
                             await this.saveState(); 
                         } else if (res.ok) {
                             let data = await res.json();
+                            this._dataHydrated = true;
                             // Nếu snapshot cục bộ đã được server xác nhận ở một mốc mới hơn dữ liệu server hiện tại,
                             // ưu tiên snapshot đó để tránh hiện tượng reload làm lùi coin/đơn hàng/nhiệm vụ/quảng cáo.
                             // Khi server trả dữ liệu thành công, Supabase là nguồn sự thật duy nhất.
@@ -1345,12 +1346,15 @@
                                 this.quizUsedIds = Array.isArray(b.quizUsedIds) ? b.quizUsedIds : this.quizUsedIds;
                                 this.weeklyAdsCount = b.weeklyAdsCount ?? this.weeklyAdsCount;
                                 this.walletSyncedAt = backup.walletUpdatedAt || this.walletSyncedAt;
-                                this.showNotification('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.');
+                                this._dataHydrated = false;
+                                setTimeout(() => this.syncLatestUser(), 3000);
                             } else {
-                                this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
+                                this._dataHydrated = false;
+                                setTimeout(() => this.syncLatestUser(), 3000);
                             }
                         } catch (restoreErr) {
-                            this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
+                            this._dataHydrated = false;
+                            setTimeout(() => this.syncLatestUser(), 3000);
                         }
                     }
                     // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
@@ -1437,7 +1441,7 @@
                     // nên nếu lần trước đang BẬT thì giờ cũng chỉ đánh dấu "đang bật" và tự chơi ngay khi có
                     // thao tác chạm đầu tiên (nút nhạc hoặc bất kỳ cú click nào) - đây chính là cách sửa
                     // lỗi "đã bật nhạc nhưng không có tiếng".
-                    this.musicOn = localStorage.getItem('shipper_music') === '1';
+                    this.musicOn = localStorage.getItem('shipper_music') !== '0';
                     this.loadQuizLocal();
                     // Tạo YouTube player sớm để thao tác BẬT nhạc sau đó gọi playVideo() trực tiếp trong user gesture.
                     this.ensureYouTubePlayer().catch(() => {});
@@ -1602,7 +1606,7 @@
                     return d.toISOString().slice(0,10);
                 },
                 resetDailyIfNeeded() {
-                    const today = new Intl.DateTimeFormat('sv-SE', { timeZone:'Asia/Ho_Chi_Minh' }).format(new Date());
+                    const today = new Date().toDateString();
                     if (this.lastResetDate !== today) {
                         this.spinFree = 1; 
                         this.spinAdCount = 0; 
@@ -2043,19 +2047,25 @@
                 // cùng gọi (vd cả focus lẫn bộ đếm dự phòng cùng lúc) thì chỉ tính 1 lần duy nhất.
                 async handleSmartlinkReturn() {
                     const task = this.dailyTasks.find(t => t.id === 'smartlink30');
-                    if (!task || this.smartlinkStartTime <= 0) return;
-                    const timeSpent = Date.now() - this.smartlinkStartTime;
-                    this.smartlinkStartTime = 0;
-                    if (timeSpent < 5000) {
+                    if (!task || this.smartlinkStartTime <= 0 || this._smartlinkSaving) return;
+                    const elapsed = Date.now() - this.smartlinkStartTime;
+                    if (elapsed < 5000) {
                         this.showNotification('⚠️ Cần ở lại SmartLink ít nhất 5 giây.');
                         return;
                     }
+                    this.smartlinkStartTime = 0;
+                    this._smartlinkSaving = true;
                     try {
-                        const response = await fetch(`${API_URL}/api/smartlink/complete`, {
-                            method:'POST', headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({ userId:this.user.id })
-                        });
-                        const result = await response.json().catch(() => ({}));
+                        let response, result;
+                        for (let attempt=0; attempt<2; attempt++) {
+                            response = await fetch(`${API_URL}/api/smartlink/complete`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id})
+                            });
+                            result = await response.json().catch(() => ({}));
+                            if (response.status !== 409 || !result.retry) break;
+                            await new Promise(r => setTimeout(r, 500));
+                        }
                         if (!response.ok || !result.success) throw new Error(result.error || 'Không lưu được SmartLink');
                         this.smartlinkCount = Number(result.smartlinkCount || 0);
                         this.smartlinksToday = Number(result.smartlinksToday || 0);
@@ -2066,14 +2076,14 @@
                         task.done = this.smartlinkCount >= 30;
                         task.claimable = false;
                         this.dailyTasks = [...this.dailyTasks];
-                        await this.saveState();
-                        if (result.alreadyComplete) this.showNotification('✅ Bạn đã hoàn thành đủ 30 SmartLink hôm nay.');
-                        else this.showNotification(`✅ SmartLink ${this.smartlinkCount}/30: +50 Coin +50 Đơn hàng`);
                         this.onSmartlinkWatched();
+                        await this.saveState();
+                        this.showNotification(result.alreadyComplete ? '✅ Đã đủ 30/30 SmartLink.' : `✅ ${this.smartlinkCount}/30 · 🪙 +50 · 📦 +50`);
                     } catch (e) {
-                        console.error('SmartLink:', e);
-                        this.showNotification('⚠️ Chưa thể đồng bộ SmartLink, vui lòng thử lại.');
-                    }
+                        console.error('SmartLink:',e);
+                        this.showNotification('⚠️ Chưa lưu được SmartLink, vui lòng thử lại sau vài giây.');
+                        await this.syncLatestUser();
+                    } finally { this._smartlinkSaving = false; }
                 },
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
@@ -2338,7 +2348,7 @@
                 },
 
                 // ==================== QUIZ ====================
-                quizTodayKey() { return new Intl.DateTimeFormat('sv-SE', { timeZone:'Asia/Ho_Chi_Minh' }).format(new Date()); },
+                quizTodayKey() { return new Date().toDateString(); },
                 ensureQuizDay() {
                     const today = this.quizTodayKey();
                     if (this.quizDate !== today) {
@@ -2363,13 +2373,7 @@
                     if (!available.length) return null;
                     return available[Math.floor(Math.random() * available.length)];
                 },
-                async showQuizQuestion() {
-                    await this.syncLatestUser();
-                    this.ensureQuizDay();
-                    if ((this.quizUsedIds || []).length >= 5) {
-                        this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
-                        return;
-                    }
+                showQuizQuestion() {
                     const picked = this.nextQuizQuestion();
                     if (!picked) {
                         this.showNotification('✅ Bạn đã hoàn thành đủ 5 câu hỏi hôm nay!');
@@ -2380,13 +2384,13 @@
                     this.quizIsCorrect = false;
                     this.quizModalShow = true;
                 },
-                async openQuizFree() {
+                openQuizFree() {
                     this.ensureQuizDay();
                     if (this.quizFreeUsed) return;
                     this.quizFreeUsed = true;
                     this.saveQuizLocal();
-                    await this.saveState();
-                    await this.showQuizQuestion();
+                    this.showQuizQuestion();
+                    this.saveState();
                 },
                 async preloadRewardedAd() {
                     if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
@@ -2401,54 +2405,63 @@
                     }
                 },
                 async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
+                    if (this._rewardedRunning) return false;
+                    this._rewardedRunning = true;
+                    const startedAt = Date.now();
                     let token = null;
                     try {
                         if (typeof show_11457064 !== 'function') throw new Error('Rewarded SDK chưa sẵn sàng');
+                        token = await fetch(`${API_URL}/api/ad/session/start`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id,adType:'rewarded'})
+                        }).then(r => r.ok ? r.json() : null).then(d => d?.token || null).catch(() => null);
 
-                        // Server tracking chỉ dùng để ghi nhận lượt QC/BXH. Không được phép chặn phần thưởng:
-                        // Promise của Rewarded Interstitial resolve sau khi người dùng xem/xong quảng cáo.
-                        const sessionPromise = fetch(`${API_URL}/api/ad/session/start`, {
-                            method: 'POST',
-                            headers: {'Content-Type':'application/json'},
-                            body: JSON.stringify({ userId: this.user.id, adType: 'rewarded' })
-                        }).then(async r => {
-                            const d = await r.json().catch(() => ({}));
-                            return r.ok ? (d.token || null) : null;
-                        }).catch(() => null);
+                        let leftApp = false;
+                        const returned = new Promise(resolve => {
+                            let done = false;
+                            const finish = value => { if(done)return; done=true; cleanup(); resolve(value); };
+                            const markLeft = () => { leftApp=true; };
+                            const checkReturn = () => {
+                                if (!leftApp || document.hidden) return;
+                                const wait = Math.max(0, 5000-(Date.now()-startedAt));
+                                setTimeout(() => finish(true), wait);
+                            };
+                            const cleanup = () => {
+                                document.removeEventListener('visibilitychange',visibility);
+                                window.removeEventListener('blur',markLeft);
+                                window.removeEventListener('focus',checkReturn);
+                            };
+                            const visibility = () => document.hidden ? markLeft() : checkReturn();
+                            document.addEventListener('visibilitychange',visibility);
+                            window.addEventListener('blur',markLeft);
+                            window.addEventListener('focus',checkReturn);
+                            setTimeout(() => finish(false),90000);
+                        });
+                        const sdkFinished = Promise.resolve(show_11457064({ymid:String(this.user.id||'')}))
+                            .then(() => true).catch(() => false);
+                        const completed = await Promise.race([sdkFinished,returned]);
+                        if (!completed) throw new Error('Quảng cáo chưa hoàn tất');
+                        const remaining = 5000-(Date.now()-startedAt);
+                        if (remaining > 0) await new Promise(r => setTimeout(r,remaining));
 
-                        await Promise.resolve(show_11457064({ ymid: String(this.user.id || '') }));
-
-                        // Trao thưởng NGAY sau khi SDK xác nhận đã xem xong; không chờ server tracking.
                         this.onAdWatched('rewarded');
                         await Promise.resolve(onDone());
                         await this.saveState();
-
-                        // Tracking chạy sau. Lỗi mạng/server ở đây tuyệt đối không làm mất phần thưởng.
-                        token = await sessionPromise;
                         if (token) {
                             fetch(`${API_URL}/api/ad/session/complete`, {
-                                method:'POST',
-                                headers:{'Content-Type':'application/json'},
-                                body: JSON.stringify({ userId:this.user.id, token, adType:'rewarded' })
+                                method:'POST',headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id,token,adType:'rewarded'})
                             }).then(async r => {
-                                const d = await r.json().catch(() => ({}));
-                                if (r.ok && d.success && Number.isFinite(Number(d.weeklyAdsCount))) {
-                                    this.weeklyAdsCount = Number(d.weeklyAdsCount);
-                                    await this.saveState();
-                                }
-                            }).catch(() => {});
+                                const d=await r.json().catch(()=>({}));
+                                if(r.ok&&d.success){this.weeklyAdsCount=Number(d.weeklyAdsCount||0);this.initQcRankList();}
+                            }).catch(()=>{});
                         }
-
-                        // Preload lượt kế tiếp để giảm độ trễ khi bấm xem QC lần sau.
-                        this._rewardedPreloadStarted = false;
-                        this._rewardedPreloaded = false;
-                        this.preloadRewardedAd().catch(() => {});
+                        this._rewardedPreloadStarted=false; this._rewardedPreloaded=false;
+                        this.preloadRewardedAd().catch(()=>{});
                         return true;
-                    } catch (e) {
-                        console.error('Rewarded ad:', e);
-                        this.showNotification(failMessage);
-                        return false;
-                    }
+                    } catch(e) {
+                        console.error('Rewarded ad:',e); this.showNotification(failMessage); return false;
+                    } finally { this._rewardedRunning=false; }
                 },
                 addQuizWithAd() {
                     this.ensureQuizDay();
@@ -2467,7 +2480,7 @@
                         this.showQuizQuestion();
                     });
                 },
-                async answerQuiz(index) {
+                answerQuiz(index) {
                     if (!this.quizCurrent || this.quizChosen !== null) return;
                     const answeredQuestionId = this.quizCurrent.id;
                     this.quizChosen = index;
@@ -2482,7 +2495,7 @@
                         this.showNotification('❌ Sai rồi! Câu này không nhận thưởng.');
                     }
                     this.saveQuizLocal();
-                    await this.saveState();
+                    this.saveState();
                     // Giải phóng câu hiện tại sau khi người dùng đã thấy kết quả, để nhận câu tiếp theo.
                     setTimeout(() => {
                         this.quizModalShow = false;
@@ -2555,73 +2568,61 @@
                 // ==================== NHẠC NỀN ====================
                 musicVideoIds: ['2ShEgpIibzQ','xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
                 async ensureYouTubePlayer() {
-                    if (this._ytPlayer) return this._ytPlayer;
-                    if (!window.YT || !window.YT.Player) {
-                        await new Promise(resolve => {
-                            const timer = setInterval(() => { if (window.YT && window.YT.Player) { clearInterval(timer); resolve(); } }, 100);
-                            setTimeout(() => { clearInterval(timer); resolve(); }, 2500);
+                    if (this._ytReady && this._ytPlayer) return this._ytPlayer;
+                    if (this._ytPlayerPromise) return this._ytPlayerPromise;
+                    this._ytPlayerPromise = (async () => {
+                        const deadline=Date.now()+10000;
+                        while ((!window.YT||!window.YT.Player) && Date.now()<deadline) await new Promise(r=>setTimeout(r,100));
+                        if(!window.YT||!window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
+                        return new Promise((resolve,reject) => {
+                            const timeout=setTimeout(()=>reject(new Error('YouTube player timeout')),10000);
+                            const player=new YT.Player('yt-bg-player',{
+                                height:'2',width:'2',videoId:this.musicVideoIds[this.musicTrack],
+                                playerVars:{autoplay:1,controls:0,playsinline:1,enablejsapi:1,rel:0,
+                                    playlist:this.musicVideoIds.join(','),loop:1,origin:window.location.origin},
+                                events:{
+                                    onReady:()=>{clearTimeout(timeout);this._ytPlayer=player;this._ytReady=true;player.setVolume(70);player.mute();player.playVideo();resolve(player);},
+                                    onStateChange:e=>{if(e.data===YT.PlayerState.ENDED&&this.musicOn){this.musicTrack=(this.musicTrack+1)%this.musicVideoIds.length;player.loadVideoById(this.musicVideoIds[this.musicTrack]);}},
+                                    onError:e=>console.error('YouTube music error:',e.data)
+                                }
+                            });
                         });
-                    }
-                    if (!window.YT || !window.YT.Player) throw new Error('YouTube API chưa sẵn sàng');
-                    if (!document.getElementById('yt-bg-player')) return null;
-                    this._ytPlayer = await new Promise((resolve, reject) => {
-                        const timeout = setTimeout(() => reject(new Error('YouTube player timeout')), 8000);
-                        const player = new YT.Player('yt-bg-player', {
-                            height:'1', width:'1', videoId:this.musicVideoIds[this.musicTrack],
-                            playerVars:{ autoplay:0, controls:0, playsinline:1, rel:0, modestbranding:1,
-                                origin:window.location.origin, playlist:this.musicVideoIds.join(','), loop:1 },
-                            events:{
-                                onReady:() => { clearTimeout(timeout); this._ytReady=true; resolve(player); },
-                                onStateChange:(event) => {
-                                    if (event.data === YT.PlayerState.ENDED && this.musicOn) {
-                                        this.musicTrack = (this.musicTrack + 1) % this.musicVideoIds.length;
-                                        player.loadVideoById(this.musicVideoIds[this.musicTrack]);
-                                    }
-                                },
-                                onError:(event) => console.error('YouTube music error:', event.data)
-                            }
-                        });
-                    });
-                    return this._ytPlayer;
+                    })();
+                    try{return await this._ytPlayerPromise;}catch(e){this._ytPlayerPromise=null;throw e;}
                 },
                 async playMusicTrack(index = this.musicTrack) {
                     if (!this.musicOn) return;
-                    this.musicTrack = index % this.musicVideoIds.length;
+                    this.musicTrack=((index%this.musicVideoIds.length)+this.musicVideoIds.length)%this.musicVideoIds.length;
                     try {
-                        const p = await this.ensureYouTubePlayer();
-                        if (!p) return;
-                        p.loadVideoById(this.musicVideoIds[this.musicTrack]);
-                        p.playVideo();
-                    } catch (e) { console.error('Music:', e); }
+                        const player=await this.ensureYouTubePlayer();
+                        player.loadVideoById(this.musicVideoIds[this.musicTrack]);
+                        player.unMute(); player.setVolume(70); player.playVideo();
+                    } catch(e){console.error('Music:',e);}
                 },
                 stopMusic() {
                     try { this._ytPlayer?.pauseVideo?.(); } catch (e) {}
                 },
-                toggleMusic() {
-                    this.musicOn = !this.musicOn;
-                    localStorage.setItem('shipper_music', this.musicOn ? '1' : '0');
-                    if (this.musicOn) {
-                        // Khi người dùng vừa bấm nút, đây là user gesture hợp lệ để phát tiếng.
-                        if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
-                        else this.playMusicTrack(this.musicTrack);
-                    } else this.stopMusic();
+                async toggleMusic() {
+                    this.musicOn=!this.musicOn;
+                    localStorage.setItem('shipper_music',this.musicOn?'1':'0');
+                    if(this.musicOn) await this.playMusicTrack(this.musicTrack);
+                    else this.stopMusic();
                     this.saveState();
                 },
                 armMusicOnFirstTouch() {
-                    if (this._musicArmed) return;
-                    this._musicArmed = true;
-                    const handler = () => {
-                        if (this.musicOn) {
-                            if (this._ytPlayer?.playVideo) this._ytPlayer.playVideo();
-                            else this.playMusicTrack(this.musicTrack);
+                    if(this._musicArmed)return;
+                    this._musicArmed=true;
+                    const handler=async()=>{
+                        if(this.musicOn){
+                            try{const p=await this.ensureYouTubePlayer();p.unMute();p.setVolume(70);p.playVideo();}catch(e){console.error('Music:',e);}
                         }
-                        document.removeEventListener('pointerdown', handler, true);
-                        document.removeEventListener('touchstart', handler, true);
-                        document.removeEventListener('click', handler, true);
+                        document.removeEventListener('pointerdown',handler,true);
+                        document.removeEventListener('touchstart',handler,true);
+                        document.removeEventListener('click',handler,true);
                     };
-                    document.addEventListener('pointerdown', handler, true);
-                    document.addEventListener('touchstart', handler, true);
-                    document.addEventListener('click', handler, true);
+                    document.addEventListener('pointerdown',handler,true);
+                    document.addEventListener('touchstart',handler,true);
+                    document.addEventListener('click',handler,true);
                 },
                 maybeInitMusicPlayer() {
                     if (this.musicOn) this.armMusicOnFirstTouch();
@@ -2632,9 +2633,10 @@
                         const res = await fetch(`${API_URL}/api/user/${this.user.id}`, { cache: 'no-store' });
                         if (!res.ok) return;
                         const d = await res.json();
+                        this._dataHydrated = true;
                         const serverTime = d.walletUpdatedAt ? new Date(d.walletUpdatedAt).getTime() : 0;
                         const localTime = this.walletSyncedAt ? new Date(this.walletSyncedAt).getTime() : 0;
-                        if (serverTime >= 0) {
+                        if (serverTime > localTime) {
                             this.coins = d.coins ?? this.coins;
                             this.orders = d.orders ?? this.orders;
                             this.spinFree = d.spins ?? this.spinFree;
@@ -2661,11 +2663,6 @@
                             this.chestOpensTotal = d.chestOpensTotal ?? this.chestOpensTotal;
                             this.chestOpensToday = d.chestOpensToday ?? this.chestOpensToday;
                             this.dailyTasks = Array.isArray(d.dailyTasks) ? d.dailyTasks : this.dailyTasks;
-                            this.quizDate = d.quizDate || this.quizDate;
-                            this.quizFreeUsed = !!d.quizFreeUsed;
-                            this.quizAdUnlocked = Math.min(4, Number(d.quizAdUnlocked || 0));
-                            this.quizUsedIds = Array.isArray(d.quizUsedIds) ? d.quizUsedIds.map(Number).filter(Number.isFinite).slice(0,5) : [];
-                            this.lastResetDate = d.lastResetDate || this.lastResetDate;
                             this.walletSyncedAt = d.walletUpdatedAt;
                         }
                     } catch (e) {}
@@ -2680,7 +2677,7 @@
                     return this._saveQueue;
                 },
                 async _doSaveState() {
-                    if (this.maintenanceLocked) return; // Bot đang bảo trì -> không gửi request, tránh lỗi 503 dồn dập
+                    if (this.maintenanceLocked || !this._dataHydrated) return; // Bot đang bảo trì -> không gửi request, tránh lỗi 503 dồn dập
                     const data = {
                         // QUAN TRỌNG: các field phải nằm PHẲNG (top-level) để khớp với tên cột trong bảng
                         // Supabase "users". Trước đây các field này bị lồng trong object "user" khiến
@@ -2810,6 +2807,6 @@
             };
         }
     </script>
-<div id="yt-bg-player" style="position:fixed;width:1px;height:1px;left:-10000px;top:-10000px;opacity:0;pointer-events:none"></div>
+<div id="yt-bg-player" style="position:fixed;width:2px;height:2px;left:0;bottom:0;opacity:.01;pointer-events:none;z-index:-1"></div>
 </body>
 </html>
