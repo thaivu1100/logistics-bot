@@ -43,6 +43,155 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
+// ==================== TƯƠNG THÍCH SCHEMA SUPABASE (CHỐNG MẤT DỮ LIỆU) ====================
+// NGUYÊN NHÂN LỖI 42703 ("column users.quizDate does not exist", "users.weeklyAdsCount does not exist"...):
+// code ghi/đọc một số cột mà bảng "users" trên Supabase thật KHÔNG có. Postgres từ chối TOÀN BỘ câu lệnh
+// đó, nên chỉ cần 1 cột thiếu là mất luôn cả lần lưu coin/đơn hàng/nhiệm vụ -> chính là lỗi "mất dữ liệu".
+// CÁCH SỬA: lúc chạy, đọc danh sách cột THẬT của bảng users; cột nào có thật thì ghi thẳng vào users,
+// cột nào chưa có thì lưu an toàn vào bảng app_settings (khóa user_extra_state) và ghép lại khi đọc user.
+// Nhờ vậy KHÔNG mất bất kỳ dữ liệu nào và KHÔNG cần chạy migration SQL nào trên Supabase.
+const USER_EXTRA_KEY = 'user_extra_state';
+const CORE_USER_COLUMNS = ['id', 'name', 'coins', 'orders', 'spins', 'truckLevel', 'isBanned', 'walletUpdatedAt'];
+let userColumnsCache = null;
+let userColumnsAt = 0;
+async function getUserColumns(forceRefresh = false) {
+    if (!forceRefresh && userColumnsCache && Date.now() - userColumnsAt < 5 * 60 * 1000) return userColumnsCache;
+    try {
+        const { data, error } = await supabase.from('users').select('*').limit(1);
+        if (error) throw error;
+        if (Array.isArray(data) && data.length > 0) {
+            userColumnsCache = new Set(Object.keys(data[0]));
+            userColumnsAt = Date.now();
+            return userColumnsCache;
+        }
+    } catch (e) {
+        console.error('Không đọc được danh sách cột bảng users:', e.message);
+    }
+    if (!userColumnsCache) { userColumnsCache = new Set(CORE_USER_COLUMNS); userColumnsAt = Date.now(); }
+    return userColumnsCache;
+}
+
+// Bộ nhớ đệm cho phần dữ liệu lưu ngoài bảng users: đọc tức thì, ghi gộp mỗi 3 giây để không
+// nặng database và không có 2 request nào ghi đè mất dữ liệu của nhau.
+let userExtraCache = null;
+let userExtraDirty = false;
+let userExtraFlushTimer = null;
+async function loadUserExtraAll() {
+    try {
+        const { data, error } = await supabase.from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
+        if (error) throw error;
+        const value = data?.value;
+        if (!value) return {};
+        if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
+        return (typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    } catch (e) {
+        console.error('Không đọc được user_extra_state:', e.message);
+        return {};
+    }
+}
+async function getUserExtraAll() {
+    if (!userExtraCache) userExtraCache = await loadUserExtraAll();
+    return userExtraCache;
+}
+async function flushUserExtra() {
+    if (!userExtraDirty || !userExtraCache) return;
+    userExtraDirty = false;
+    const { error } = await supabase.from('app_settings')
+        .upsert({ key: USER_EXTRA_KEY, value: userExtraCache }, { onConflict: 'key' });
+    if (error) {
+        userExtraDirty = true; // Giữ lại cờ để lần ghi sau thử lại, không mất dữ liệu
+        console.error('Không lưu được user_extra_state:', error.message);
+    }
+}
+function scheduleUserExtraFlush() {
+    if (userExtraFlushTimer) return;
+    userExtraFlushTimer = setTimeout(() => {
+        userExtraFlushTimer = null;
+        flushUserExtra().catch(() => {});
+    }, 3000);
+}
+async function getUserExtra(userId) {
+    const all = await getUserExtraAll();
+    return all[String(userId)] || {};
+}
+async function saveUserExtra(userId, values) {
+    const all = await getUserExtraAll();
+    const key = String(userId);
+    all[key] = { ...(all[key] || {}), ...values };
+    userExtraDirty = true;
+    scheduleUserExtraFlush();
+}
+async function saveUserExtraAll(all) {
+    userExtraCache = all || {};
+    userExtraDirty = true;
+    return flushUserExtra();
+}
+async function clearUserExtra(userId) {
+    if (userId === null) return saveUserExtraAll({});
+    const all = await getUserExtraAll();
+    delete all[String(userId)];
+    userExtraDirty = true;
+    return flushUserExtra();
+}
+setInterval(() => { flushUserExtra().catch(() => {}); }, 15000);
+// Render gửi SIGTERM trước khi tắt instance cũ -> ghi nốt dữ liệu còn trong bộ đệm để không mất.
+process.on('SIGTERM', () => { flushUserExtra().catch(() => {}); });
+
+// Lấy tên cột bị thiếu từ thông báo lỗi của Postgres/PostgREST (42703 hoặc PGRST204)
+function extractMissingColumn(error) {
+    const text = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`;
+    const m = text.match(/find the ['"]([A-Za-z_][A-Za-z0-9_]*)['"] column/i)
+        || text.match(/column ['"]?(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-Za-z0-9_]*)['"]? (?:of|does)/i);
+    return m ? m[1] : null;
+}
+// Ghi 1 dòng vào bảng bất kỳ: nếu bảng thật thiếu cột nào thì bỏ cột đó rồi ghi lại, để 1 cột thiếu
+// không làm mất TOÀN BỘ bản ghi (đơn rút tiền, lịch sử giao dịch...).
+async function insertRowSafe(table, row) {
+    const payload = { ...row };
+    for (let i = 0; i < 12; i++) {
+        const { error } = await supabase.from(table).insert(payload);
+        if (!error) return { error: null };
+        const missing = extractMissingColumn(error);
+        if (!missing || !(missing in payload)) return { error };
+        console.warn(`Bảng ${table} chưa có cột "${missing}" -> bỏ qua cột này khi ghi.`);
+        delete payload[missing];
+    }
+    return { error: { message: `Không ghi được dữ liệu vào bảng ${table}` } };
+}
+async function splitUserFields(values = {}) {
+    const cols = await getUserColumns();
+    const known = {}, extra = {};
+    Object.entries(values || {}).forEach(([k, v]) => { (cols.has(k) ? known : extra)[k] = v; });
+    return { known, extra };
+}
+// Lưu dữ liệu user an toàn với mọi schema: cột có thật -> bảng users, cột chưa có -> app_settings.
+async function saveUserFields(userId, values = {}) {
+    let { known, extra } = await splitUserFields(values);
+    if (Object.keys(known).length > 0) {
+        let { error } = await supabase.from('users').update(known).eq('id', userId);
+        if (error && error.code === '42703') {
+            // Schema vừa thay đổi (hoặc cache đã cũ) -> đọc lại danh sách cột rồi thử lại 1 lần
+            await getUserColumns(true);
+            ({ known, extra } = await splitUserFields(values));
+            error = Object.keys(known).length > 0
+                ? (await supabase.from('users').update(known).eq('id', userId)).error
+                : null;
+        }
+        if (error) return { error };
+    }
+    if (Object.keys(extra).length > 0) await saveUserExtra(userId, extra);
+    return { error: null };
+}
+// Đọc user đầy đủ = dữ liệu bảng users + các field đang lưu tạm trong app_settings
+async function readUserRow(userId) {
+    const { data, error } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
+    if (error || !data) return { data: null, error: error || null };
+    const extra = await getUserExtra(userId);
+    return { data: { ...extra, ...data }, error: null };
+}
+getUserColumns().then(cols => console.log(`✅ Đã đọc schema bảng users: ${cols.size} cột`)).catch(() => {});
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GROUP_1_ID = parseInt(process.env.GROUP_1_ID); // Kênh thông báo
 const GROUP_2_ID = parseInt(process.env.GROUP_2_ID); // Nhóm chat
@@ -149,6 +298,14 @@ async function setBotLocked(locked) {
 // WHERE field = giá_trị_vừa_đọc, nếu 0 dòng bị ảnh hưởng (do có lượt ghi khác xen vào) thì đọc lại và thử
 // lại, đảm bảo không lượt tăng nào bị mất dù có nhiều request chạy đồng thời.
 async function atomicIncrement(userId, field, amount = 1, maxRetries = 6) {
+    const cols = await getUserColumns();
+    if (!cols.has(field)) {
+        // Cột này chưa có trong bảng users -> cộng dồn trong app_settings, tuyệt đối không mất lượt
+        const extra = await getUserExtra(userId);
+        const newVal = Number(extra[field] || 0) + amount;
+        await saveUserExtra(userId, { [field]: newVal });
+        return newVal;
+    }
     for (let i = 0; i < maxRetries; i++) {
         const { data: cur, error: readErr } = await supabase.from('users').select(field).eq('id', userId).single();
         if (readErr || !cur) return null;
@@ -212,10 +369,10 @@ async function checkDuplicateIP(userId, ip) {
 
 // Frontend sẽ so sánh mốc này với mốc nó biết để tránh việc tự lưu game đè mất thay đổi của admin.
 async function touchWallet(userId, extraFields = {}) {
-    const { error } = await supabase.from('users').update({
+    const { error } = await saveUserFields(userId, {
         ...extraFields,
         walletUpdatedAt: new Date().toISOString()
-    }).eq('id', userId);
+    });
     if (error) console.error(`Lỗi touchWallet ${userId}:`, error);
     return !error;
 }
@@ -232,7 +389,7 @@ function maskName(name) {
 // (vd bảng activity_log chưa tồn tại trên DB thật do chưa chạy migration cũ).
 async function logActivity(message) {
     try {
-        await supabase.from('activity_log').insert({ message });
+        await insertRowSafe('activity_log', { message });
     } catch (e) {
         console.error('Lỗi ghi activity_log:', e.message);
     }
@@ -245,7 +402,7 @@ async function logActivity(message) {
 // đồng bộ TỔNG số cuối cùng lên server mỗi ~30s, nên server KHÔNG biết chính xác lý do riêng của khoản đó.
 async function logTransaction(userId, type, amount, reason) {
     try {
-        await supabase.from('transactions').insert({ userId, type, amount, reason });
+        await insertRowSafe('transactions', { userId, type, amount, reason });
     } catch (e) {
         console.error('Lỗi ghi transactions:', e.message);
     }
@@ -259,9 +416,7 @@ async function logTransaction(userId, type, amount, reason) {
 // Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
 // không tin tưởng dữ liệu client gửi lên.
 async function tryFinalizeReferral(userId, precomputedIsMember = null) {
-    const { data: userRecord, error: userError } = await supabase.from('users')
-        .select('id, name, referrerId, referrerCounted, lifetimeAdsWatched, lifetimeSmartlinks, isBanned')
-        .eq('id', userId).single();
+    const { data: userRecord, error: userError } = await readUserRow(userId);
     if (userError || !userRecord) return { ok: false, reason: 'user_not_found' };
     if (!userRecord.referrerId || userRecord.referrerId === userId) return { ok: false, reason: 'no_referrer' };
     if (userRecord.referrerCounted) return { ok: false, reason: 'already_counted' };
@@ -296,8 +451,7 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         return { ok: false, reason: 'already_counted' };
     }
 
-    const { data: refUser, error: refError } = await supabase.from('users')
-        .select('validInvites, invitedCount, referralMilestones, coins, orders').eq('id', userRecord.referrerId).single();
+    const { data: refUser, error: refError } = await readUserRow(userRecord.referrerId);
     if (refError || !refUser) {
         // Đã claim (referrerCounted=true) nhưng không cộng thưởng được -> hoàn tác claim để không mất
         // vĩnh viễn lượt hợp lệ này, cho phép hệ thống tự thử lại ở lần gọi tiếp theo.
@@ -322,7 +476,7 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     await atomicIncrement(userRecord.referrerId, 'weeklyValidInvites', 1);
     if (newValid > (refUser.invitedCount || 0)) {
         // Dữ liệu invitedCount cũ (trước khi vá lỗi) có thể vẫn còn thấp hơn thực tế -> tự sửa lại cho khớp
-        await supabase.from('users').update({ invitedCount: newValid }).eq('id', userRecord.referrerId);
+        await saveUserFields(userRecord.referrerId, { invitedCount: newValid });
     }
 
     await touchWallet(userRecord.referrerId, {
@@ -467,12 +621,14 @@ bot.start(async (ctx) => {
                 chestOpensToday: 0, // Số lượt đã mở rương hôm nay - dùng cho /checkID, reset mỗi ngày
                 walletUpdatedAt: new Date().toISOString() // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
             };
-            const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUser).select().single();
+            const { known: newUserRow, extra: newUserExtra } = await splitUserFields(newUser);
+            const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUserRow).select().single();
             if (insertError) {
                 console.error("Lỗi tạo user mới:", insertError);
                 return ctx.reply("⚠️ Có lỗi xảy ra khi tạo tài khoản, vui lòng thử lại sau!");
             }
-            userRecord = insertedUser;
+            if (Object.keys(newUserExtra).length > 0) await saveUserExtra(userId, newUserExtra);
+            userRecord = { ...newUserExtra, ...insertedUser };
             
             // Tăng invitedCount cho người mời (chưa tính hợp lệ)
             // Dùng atomicIncrement thay vì đọc-rồi-ghi để không bị "mất lượt mời" khi nhiều người cùng
@@ -875,6 +1031,7 @@ bot.command('reset', async (ctx) => {
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /reset <userId>");
     const ok = await touchWallet(targetId, fullResetFields());
+    await saveWeeklyAdsCounts({ ...(await getWeeklyAdsCounts()), [String(targetId)]: 0 });
     await resetGiftcodeRedemptions(targetId); // Cho phép user nhập lại các code đã nhập trước khi reset
     if (ok) ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${targetId} về 0 (kể cả lịch sử nhập code).`);
     else ctx.reply(`❌ Lỗi khi reset dữ liệu user ${targetId}.`);
@@ -883,14 +1040,17 @@ bot.command('reset', async (ctx) => {
 // /resetall - Reset TOÀN BỘ dữ liệu của TẤT CẢ user về 0
 bot.command('resetall', async (ctx) => {
     if (!isAdmin(ctx)) return;
-    const { error } = await supabase.from('users').update({
+    const { known: resetRow } = await splitUserFields({
         ...fullResetFields(),
         walletUpdatedAt: new Date().toISOString()
-    }).not('id', 'is', null);
+    });
+    const { error } = await supabase.from('users').update(resetRow).not('id', 'is', null);
     if (error) {
         console.error("Lỗi /resetall:", error);
         return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
     }
+    await clearUserExtra(null); // Xoá luôn phần dữ liệu đang lưu tạm ngoài bảng users
+    await saveWeeklyAdsCounts({}); // Reset cả BXH Xem QC tuần cho khớp ý nghĩa "reset toàn bộ"
     await resetGiftcodeRedemptions(null); // Cho phép TẤT CẢ user nhập lại các code đã nhập trước khi reset
     ctx.reply(`✅ Đã reset toàn bộ dữ liệu của TẤT CẢ user về 0 (kể cả lịch sử nhập code).`);
 });
@@ -1429,13 +1589,31 @@ async function weeklyLeaderboardReset() {
         // ===== BXH MỜI BẠN =====
         const { data: inviteState } = await supabase.from('weekly_state').select('*').eq('id', 1).single();
         if (!inviteState || inviteState.lastWeekKey !== currentWeek) {
-            const { data: topUsers, error: topError } = await supabase.from('users')
-                .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
-                .order('weeklyValidInvites', { ascending: false }).limit(3);
+            const inviteCols = await getUserColumns();
+            const hasWeeklyInviteColumn = inviteCols.has('weeklyValidInvites');
+            let topUsers = [], topError = null;
+            if (hasWeeklyInviteColumn) {
+                const r = await supabase.from('users')
+                    .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
+                    .order('weeklyValidInvites', { ascending: false }).limit(3);
+                topUsers = r.data || []; topError = r.error || null;
+            } else {
+                // Cột chưa có trong bảng users -> xếp hạng theo số đếm đang lưu trong app_settings
+                const all = await getUserExtraAll();
+                const ids = Object.entries(all)
+                    .filter(([, v]) => Number(v?.weeklyValidInvites || 0) > 0)
+                    .sort((a, b) => Number(b[1].weeklyValidInvites) - Number(a[1].weeklyValidInvites))
+                    .slice(0, 3).map(([id]) => id);
+                if (ids.length > 0) {
+                    const { data: rows } = await supabase.from('users').select('id, name').in('id', ids);
+                    const names = Object.fromEntries((rows || []).map(u => [String(u.id), u.name]));
+                    topUsers = ids.map(id => ({ id, name: names[id] || ('User ' + id), weeklyValidInvites: Number(all[id].weeklyValidInvites || 0) }));
+                }
+            }
             if (topError) {
                 console.error('Lỗi lấy top BXH mời bạn tuần:', topError);
             } else {
-                for (let i = 0; i < (topUsers || []).length; i++) {
+                for (let i = 0; i < topUsers.length; i++) {
                     const u = topUsers[i], prize = WEEKLY_TOP_REWARDS[i];
                     if (!prize) break;
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
@@ -1447,7 +1625,13 @@ async function weeklyLeaderboardReset() {
                     );
                     logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này`);
                 }
-                await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
+                if (hasWeeklyInviteColumn) {
+                    await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
+                } else {
+                    const all = await getUserExtraAll();
+                    Object.keys(all).forEach(k => { if (all[k] && all[k].weeklyValidInvites) all[k].weeklyValidInvites = 0; });
+                    await saveUserExtraAll(all);
+                }
                 await supabase.from('weekly_state').upsert({ id: 1, lastWeekKey: currentWeek });
             }
         }
@@ -1503,13 +1687,14 @@ bot.command('ban_ip', async (ctx) => {
     if (!ip) { ctx.reply('❌ Dùng: /ban_ip <IP>'); return; }
     
     // Ban toàn bộ user từ IP này
+    const ipColumn = (await getUserColumns()).has('ip_address') ? 'ip_address' : 'ip';
     const { data: users, error } = await supabase
         .from('users')
         .select('id')
-        .eq('ip_address', ip);
+        .eq(ipColumn, ip);
     
     if (users && users.length > 0) {
-        await supabase.from('users').update({ isBanned: true }).eq('ip_address', ip);
+        await supabase.from('users').update({ isBanned: true }).eq(ipColumn, ip);
         ctx.reply(`✅ Đã ban ${users.length} user từ IP ${ip}`);
     } else {
         ctx.reply(`ℹ️ Không tìm thấy user nào từ IP ${ip}`);
@@ -1586,15 +1771,17 @@ app.post('/api/save-ip/:id', async (req, res) => {
     const { ip } = req.body;
     if (!ip) return res.status(400).json({ success: false, error: "IP is required" });
 
-    const { data: userBeforeUpdate, error: fetchError } = await supabase.from('users').select('ip, name').eq('id', req.params.id).single();
-    if (fetchError || !userBeforeUpdate) {
-        console.error("Lỗi lấy user để lưu IP:", fetchError);
+    const { data: userBeforeUpdate, error: fetchError } = await readUserRow(req.params.id);
+    if (!userBeforeUpdate) {
+        // Chưa có bản ghi user (vd mở Mini App trước khi /start) - KHÔNG phải lỗi hệ thống, chỉ trả 404
+        // và không ghi log nữa để log Render không bị spam như trước.
+        if (fetchError) console.error("Lỗi lấy user để lưu IP:", fetchError.message);
         return res.status(404).json({ success: false, error: "User not found" });
     }
 
     // Chỉ cập nhật IP nếu nó thay đổi
     if (userBeforeUpdate.ip !== ip) {
-        const { error: updateError } = await supabase.from('users').update({ ip }).eq('id', req.params.id);
+        const { error: updateError } = await saveUserFields(req.params.id, { ip });
         if (updateError) {
             console.error("Lỗi cập nhật IP:", updateError);
             return res.status(500).json({ success: false, error: "Failed to update IP" });
@@ -1620,9 +1807,9 @@ app.post('/api/save-ip/:id', async (req, res) => {
 
 // API lấy user (kèm level stats)
 app.get('/api/user/:id', async (req, res) => {
-    const { data, error } = await supabase.from('users').select('*').eq('id', req.params.id).single();
-    if (error || !data) {
-        if (error?.code === 'PGRST116') { // Not Found
+    const { data, error } = await readUserRow(req.params.id);
+    if (!data) {
+        if (!error || error.code === 'PGRST116') { // Not Found
             return res.status(404).json({ error: "User not found" });
         }
         console.error("Lỗi lấy user:", error);
@@ -1663,11 +1850,21 @@ app.post('/api/user/:id', async (req, res) => {
             updateData.referralMilestones = JSON.stringify(updateData.referralMilestones);
         }
 
-        const { data: current, error: currentError } = await supabase.from('users')
-            .select(['walletUpdatedAt', ...WALLET_FIELDS].join(', ')).eq('id', userId).single();
-        if (currentError || !current) {
-            console.error(`Lỗi lấy user hiện tại ${userId}:`, currentError);
-            return res.status(404).json({ success: false, error: "User not found" });
+        let { data: current, error: currentError } = await readUserRow(userId);
+        if (!current) {
+            // Chưa có bản ghi (mở Mini App trước khi /start) -> tạo mới ngay để KHÔNG mất dữ liệu người dùng
+            const { known: seedRow } = await splitUserFields({
+                id: userId,
+                name: body.name || 'Shipper',
+                walletUpdatedAt: new Date().toISOString()
+            });
+            const { error: createError } = await supabase.from('users').insert(seedRow);
+            if (createError) {
+                console.error(`Không tạo được user ${userId}:`, createError.message || currentError?.message);
+                return res.status(404).json({ success: false, error: "User not found" });
+            }
+            ({ data: current } = await readUserRow(userId));
+            if (!current) return res.status(404).json({ success: false, error: "User not found" });
         }
         if (current.isBanned) {
             return res.status(403).json({ success: false, error: "Tài khoản đã bị khóa.", isBanned: true });
@@ -1686,20 +1883,19 @@ app.post('/api/user/:id', async (req, res) => {
             updateData.walletUpdatedAt = new Date().toISOString();
         }
 
-        const { error } = await supabase.from('users').update(updateData).eq('id', userId);
+        const { error } = await saveUserFields(userId, updateData);
         if (error) {
-            console.error(`Lỗi cập nhật user ${userId}:`, error);
+            console.error(`Lỗi cập nhật user ${userId}:`, error.message || error);
             return res.status(500).json({ success: false, error: error.message });
         }
 
         if (walletOverridden) {
             // Trả về giá trị mới nhất từ DB cho TOÀN BỘ field được bảo vệ để client tự đồng bộ lại, tránh mất thay đổi của admin
-            const { data: fresh } = await supabase.from('users')
-                .select([...WALLET_FIELDS, 'walletUpdatedAt'].join(', ')).eq('id', userId).single();
+            const { data: fresh } = await readUserRow(userId);
             if (fresh && fresh.referralMilestones && typeof fresh.referralMilestones === 'string') {
-                fresh.referralMilestones = JSON.parse(fresh.referralMilestones);
+                try { fresh.referralMilestones = JSON.parse(fresh.referralMilestones); } catch (_) { fresh.referralMilestones = []; }
             }
-            const levelStats = calculateLevelStats(fresh.truckLevel || 1);
+            const levelStats = calculateLevelStats(fresh?.truckLevel || 1);
             return res.json({ success: true, walletOverridden: true, wallet: fresh, levelStats });
         }
 
@@ -1720,14 +1916,14 @@ app.post('/api/user/:id', async (req, res) => {
 app.post('/api/delivery/check-captcha', async (req, res) => {
     try {
         const { userId } = req.body;
-        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
+        const { data: user } = await readUserRow(userId);
         if (!user) return res.status(404).json({ error: 'User không tồn tại' });
         
         // Tracking delivery count - random CAPTCHA on 1-3 deliveries
         const deliveryCount = (user.deliveryCount || 0) + 1;
         const requiresCaptcha = deliveryCount >= 1 && deliveryCount <= 3 && Math.random() < 0.4;
         
-        await supabase.from('users').update({ deliveryCount }).eq('id', userId);
+        await saveUserFields(userId, { deliveryCount });
         
         res.json({
             requiresCaptcha,
@@ -1747,7 +1943,7 @@ app.post('/api/withdraw/captcha-verify', async (req, res) => {
         const verified = captchaInput.toUpperCase() === captchaCode;
         
         if (verified) {
-            await supabase.from('users').update({ lastCaptchaAt: new Date().toISOString() }).eq('id', userId);
+            await saveUserFields(userId, { lastCaptchaAt: new Date().toISOString() });
         }
         
         res.json({ verified });
@@ -1832,8 +2028,7 @@ app.post('/api/check-referral/:id', async (req, res) => {
         const clientSmartlinks = parseInt(req.body?.lifetimeSmartlinks);
         const clientWalletSyncedAt = req.body?.clientWalletSyncedAt;
         if ((!isNaN(clientAdsWatched) && clientAdsWatched > 0) || (!isNaN(clientSmartlinks) && clientSmartlinks > 0)) {
-            const { data: cur } = await supabase.from('users')
-                .select('lifetimeAdsWatched, lifetimeSmartlinks, walletUpdatedAt').eq('id', userId).single();
+            const { data: cur } = await readUserRow(userId);
             if (cur) {
                 const dbWalletTime = cur.walletUpdatedAt ? new Date(cur.walletUpdatedAt).getTime() : 0;
                 const clientTime = clientWalletSyncedAt ? new Date(clientWalletSyncedAt).getTime() : 0;
@@ -1842,7 +2037,7 @@ app.post('/api/check-referral/:id', async (req, res) => {
                     if (!isNaN(clientAdsWatched) && clientAdsWatched > (cur.lifetimeAdsWatched || 0)) syncUpdate.lifetimeAdsWatched = clientAdsWatched;
                     if (!isNaN(clientSmartlinks) && clientSmartlinks > (cur.lifetimeSmartlinks || 0)) syncUpdate.lifetimeSmartlinks = clientSmartlinks;
                     if (Object.keys(syncUpdate).length > 0) {
-                        await supabase.from('users').update(syncUpdate).eq('id', userId);
+                        await saveUserFields(userId, syncUpdate);
                     }
                 }
             }
@@ -1914,7 +2109,7 @@ app.post('/api/withdraw', async (req, res) => {
             return res.status(409).json({ error: "Số dư của bạn vừa thay đổi, vui lòng thử lại." });
         }
 
-        const { error: withdrawInsertError } = await supabase.from('withdrawals').insert({
+        const { error: withdrawInsertError } = await insertRowSafe('withdrawals', {
             userId,
             amount: amountVnd,
             ordersAmount,
@@ -1926,7 +2121,16 @@ app.post('/api/withdraw', async (req, res) => {
             status: 'pending',
             txCode
         });
-        if (withdrawInsertError) throw withdrawInsertError;
+        if (withdrawInsertError) {
+            // CHỐNG MẤT ĐƠN HÀNG: đơn hàng đã bị trừ trước khi tạo đơn rút. Nếu tạo đơn rút thất bại
+            // thì hoàn lại đúng số đã trừ, thay vì để người dùng mất trắng số dư như trước.
+            const { data: afterFail } = await readUserRow(userId);
+            await saveUserFields(userId, {
+                orders: Number(afterFail?.orders || 0) + ordersAmount,
+                walletUpdatedAt: new Date().toISOString()
+            });
+            throw withdrawInsertError;
+        }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
         // Thông báo yêu cầu rút tiền mới lên nhóm chat, che bớt STK/SĐT và Chủ TK (chỉ hiện 2 ký tự đầu, còn lại che bằng ****)
