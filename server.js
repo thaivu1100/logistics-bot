@@ -9,6 +9,21 @@ const path = require('path');
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
+
+// Ngày nghiệp vụ cố định theo múi giờ Việt Nam; không phụ thuộc múi giờ máy chủ/trình duyệt.
+function vietnamDayKey(date = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(date);
+}
+function isCurrentVietnamDay(value) {
+    if (!value) return false;
+    const today = vietnamDayKey();
+    if (value === today) return true;
+    const parsed = new Date(value);
+    return !Number.isNaN(parsed.getTime()) && vietnamDayKey(parsed) === today;
+}
+
 // FIX LỖI "1 SỐ USER BỊ KẸT PHIÊN BẢN CŨ/DEMO": trước đây express.static dùng cache mặc định của trình
 // duyệt/Telegram WebView cho file index.html, khiến sau khi deploy bản mới, một số thiết bị vẫn tiếp tục
 // đọc bản HTML/JS đã lưu cache cục bộ trước đó thay vì tải lại. Ép index.html luôn "no-store" (không lưu
@@ -823,6 +838,7 @@ function fullResetFields() {
         chestOpensTotal: 0,
         chestOpensToday: 0,
         lifetimeAdsWatched: 0,
+        lifetimeSmartlinks: 0,
         invitedCount: 0,
         validInvites: 0,
         deliveryCount: 0,
@@ -1600,6 +1616,21 @@ app.get('/api/user/:id', async (req, res) => {
         console.error("Lỗi lấy user:", error);
         return res.status(500).json({ error: "Failed to fetch user data" });
     }
+    // Reset các giới hạn theo ngày ngay trên server. Reload/tắt mở app không thể tạo lại lượt.
+    if (!isCurrentVietnamDay(data.lastResetDate)) {
+        const reset = {
+            adsToday: 0, smartlinksToday: 0, bonusAdsToday: 0,
+            deliveryCount: 0, smartlinkCount: 0, usedSmartlinks: [],
+            spinAdCount: 0, spinAdProgress: 0, chestOpensToday: 0,
+            quizDate: vietnamDayKey(), quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
+            lastResetDate: vietnamDayKey(), walletUpdatedAt: new Date().toISOString()
+        };
+        const { data: resetData, error: resetError } = await supabase.from('users')
+            .update(reset).eq('id', req.params.id).select('*').single();
+        if (resetError) return res.status(500).json({ error: resetError.message });
+        Object.assign(data, resetData || reset);
+    }
+
     // Parse referralMilestones if stored as JSON string
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
         data.referralMilestones = JSON.parse(data.referralMilestones);
@@ -1684,6 +1715,51 @@ app.post('/api/user/:id', async (req, res) => {
         console.error("Lỗi API cập nhật user:", e);
         res.status(500).json({ success: false, error: e.message });
     }
+});
+
+// Smartlink được xác nhận và thưởng hoàn toàn trên server để reload không đổi số lượt.
+const smartlinkLocks = new Map();
+app.post('/api/smartlink/complete', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!userId) return res.status(400).json({ success: false, error: 'Missing userId' });
+    const previous = smartlinkLocks.get(userId) || Promise.resolve();
+    const job = previous.then(async () => {
+        const { data: user, error } = await supabase.from('users').select('*').eq('id', userId).single();
+        if (error || !user) throw new Error(error?.message || 'User not found');
+        if (user.isBanned) return { status: 403, body: { success:false, isBanned:true, error:'Tài khoản đã bị khóa.' } };
+
+        const newDay = !isCurrentVietnamDay(user.lastResetDate);
+        const count = newDay ? 0 : Number(user.smartlinkCount || 0);
+        if (count >= 30) {
+            return { status: 200, body: { success:true, alreadyComplete:true, smartlinkCount:30,
+                smartlinksToday:Number(user.smartlinksToday||0), lifetimeSmartlinks:Number(user.lifetimeSmartlinks||0),
+                coins:Number(user.coins||0), orders:Number(user.orders||0) } };
+        }
+        const now = new Date().toISOString();
+        const update = {
+            smartlinkCount: count + 1,
+            smartlinksToday: (newDay ? 0 : Number(user.smartlinksToday || 0)) + 1,
+            lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0) + 1,
+            coins: Number(user.coins || 0) + 50,
+            orders: Number(user.orders || 0) + 50,
+            lastSmartlinkTime: Date.now(), lastResetDate: vietnamDayKey(), walletUpdatedAt: now
+        };
+        if (newDay) Object.assign(update, { adsToday:0, bonusAdsToday:0, deliveryCount:0,
+            usedSmartlinks:[], spinAdCount:0, spinAdProgress:0, chestOpensToday:0,
+            quizDate:vietnamDayKey(), quizFreeUsed:false, quizAdUnlocked:0, quizUsedIds:[] });
+        const { data: saved, error: saveError } = await supabase.from('users').update(update).eq('id', userId).select('*').single();
+        if (saveError) throw new Error(saveError.message);
+        await logTransaction(userId, 'coin', 50, 'Hoàn thành 1 SmartLink');
+        await logTransaction(userId, 'orders', 50, 'Hoàn thành 1 SmartLink');
+        return { status:200, body:{ success:true, rewardCoins:50, rewardOrders:50,
+            smartlinkCount:saved.smartlinkCount, smartlinksToday:saved.smartlinksToday,
+            lifetimeSmartlinks:saved.lifetimeSmartlinks, coins:saved.coins, orders:saved.orders,
+            walletUpdatedAt:saved.walletUpdatedAt } };
+    });
+    smartlinkLocks.set(userId, job);
+    try { const out = await job; res.status(out.status).json(out.body); }
+    catch (e) { console.error('Lỗi SmartLink:', e); res.status(500).json({success:false,error:e.message}); }
+    finally { if (smartlinkLocks.get(userId) === job) smartlinkLocks.delete(userId); }
 });
 
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
@@ -1938,7 +2014,9 @@ app.get('/api/leaderboard-ads', async (req, res) => {
     const { data, error } = await supabase
         .from('users')
         .select('id, name, weeklyAdsCount')
-        .order('weeklyAdsCount', { ascending: false })
+        .gt('weeklyAdsCount', 0)
+        .order('weeklyAdsCount', { ascending: false, nullsFirst: false })
+        .order('id', { ascending: true })
         .limit(10);
     
     if (error) { 
