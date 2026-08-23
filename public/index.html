@@ -21,7 +21,7 @@
         html { -webkit-text-size-adjust: 100%; }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background: radial-gradient(circle at 15% 0%, #1e293b 0%, #0f172a 45%, #0b1120 100%); background-attachment: fixed; color: white; user-select: none; padding-bottom: env(safe-area-inset-bottom, 0px); padding-top: env(safe-area-inset-top, 0px); }
         /* Đảm bảo icon (FontAwesome + emoji) luôn hiển thị đúng kích thước, không vỡ layout hay tràn ra ngoài trên bất kỳ thiết bị nào */
-        i[class*="fa-"], .icon-safe { display: inline-block; line-height: 1; flex-shrink: 0; }
+        i[class*="fa-"], .icon-safe { display: inline-block; line-height: 1; flex-shrink: 0; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji", sans-serif; font-style: normal; }
         img, svg { max-width: 100%; display: block; }
         * { -webkit-tap-highlight-color: transparent; }
         .glass { background: linear-gradient(160deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.75) 100%); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.25); transition: box-shadow 0.2s ease, transform 0.2s ease; }
@@ -95,21 +95,68 @@
         .join-banner-btns a, .join-banner-btns button { font-size: 10px; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
         
         /* ==================== FIX LAG GRAPHICS MODE ==================== */
-        .low-graphics *, .low-graphics *::before, .low-graphics *::after {
-            animation-duration: 0.01ms !important;
-            animation-iteration-count: 1 !important;
-            transition-duration: 0.05s !important;
+        /* Chỉ giảm PRESENTATION/PERFORMANCE. Không ẩn container nghiệp vụ, wallet, input code hay navigation. */
+        .low-graphics *,
+        .low-graphics *::before,
+        .low-graphics *::after {
+            animation: none !important;
+            transition: none !important;
         }
-        .low-graphics .glass { backdrop-filter: none !important; box-shadow: none !important; }
-        .low-graphics .gold-glow, .low-graphics .neon-blue, .low-graphics .text-neon { box-shadow: none !important; text-shadow: none !important; filter: none !important; }
-        .low-graphics .coin-float, .low-graphics .hero-truck-track, .low-graphics .conveyor-belt-anim .conveyor-goods,
-        .low-graphics .box-on-conveyor, .low-graphics .cta-shine::after, .low-graphics .task-claim-btn::after,
-        .low-graphics .gift-card-glow, .low-graphics header.glass, .low-graphics .nav-pill { animation: none !important; display: none !important; }
-        .low-graphics .delivery-animation .box-on-conveyor, .low-graphics .delivery-truck { transition: none !important; }
-        .low-graphics .task-route-fill, .low-graphics .task-route-truck { transition: none !important; }
-        .low-graphics .quiz-option { box-shadow: none !important; }
-        .low-graphics .confetti-piece { display: none !important; }
-        .low-graphics .music-fab.playing { animation: none !important; box-shadow: none !important; }
+        .low-graphics body {
+            background: #0b1120 !important;
+            background-attachment: scroll !important;
+        }
+        .low-graphics .glass,
+        .low-graphics [class*="backdrop-blur"] {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            box-shadow: none !important;
+        }
+        .low-graphics .gold-glow,
+        .low-graphics .neon-blue,
+        .low-graphics .text-neon,
+        .low-graphics .task-card.task-claimable,
+        .low-graphics .task-route-fill,
+        .low-graphics .task-route-truck,
+        .low-graphics .quiz-option,
+        .low-graphics .music-fab {
+            box-shadow: none !important;
+            text-shadow: none !important;
+            filter: none !important;
+        }
+        .low-graphics .coin-float,
+        .low-graphics .delivery-animation .box-on-conveyor,
+        .low-graphics .delivery-animation .delivery-truck,
+        .low-graphics .conveyor-belt-anim .conveyor-goods,
+        .low-graphics .task-route-fill,
+        .low-graphics .task-route-truck,
+        .low-graphics .float-box,
+        .low-graphics .truck-idle,
+        .low-graphics .tasks-header-truck,
+        .low-graphics .captcha-box span,
+        .low-graphics .confetti-piece,
+        .low-graphics .hero-truck-track,
+        .low-graphics .cta-shine::after,
+        .low-graphics .task-claim-btn::after,
+        .low-graphics .nav-pill,
+        .low-graphics .gift-card-glow,
+        .low-graphics header.glass,
+        .low-graphics .rank-1 {
+            animation: none !important;
+            filter: none !important;
+            box-shadow: none !important;
+            text-shadow: none !important;
+        }
+        /* Chỉ decorative-only nodes được làm invisible; các nghiệp vụ vẫn giữ nguyên DOM/display. */
+        .low-graphics .hero-truck-track,
+        .low-graphics .conveyor-belt-anim .conveyor-goods,
+        .low-graphics .delivery-animation .box-on-conveyor,
+        .low-graphics .nav-pill,
+        .low-graphics .confetti-piece,
+        .low-graphics .cta-shine::after,
+        .low-graphics .task-claim-btn::after {
+            visibility: hidden !important;
+        }
 
         @media (max-width: 480px) {
             .main-container { max-width: 100%; padding: 0; }
@@ -412,7 +459,7 @@
             <div class="modal-content" style="max-width: 340px;">
                 <div class="text-5xl mb-2">🧠</div>
                 <h3 class="text-base font-black text-yellow-400 mb-1">TRẢ LỜI CÂU HỎI</h3>
-                <p class="text-[10px] text-slate-400 mb-3">✅ Trả lời đúng: <span class="text-yellow-400 font-black">+200 💰 +1 🎁</span> · ❌ Sai: không nhận gì</p>
+                <p class="text-[10px] text-slate-400 mb-3">✅ Trả lời đúng: <span class="text-yellow-400 font-black">+150 💰 +1 🎁</span> · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng</p>
                 <p class="text-sm font-black text-white text-left leading-relaxed mb-4" x-text="quizCurrent ? quizCurrent.q : ''"></p>
                 <div class="space-y-2">
                     <template x-for="(opt, i) in (quizCurrent ? quizCurrent.options : [])" :key="i">
@@ -533,7 +580,7 @@
                         <h3 class="text-sm font-black uppercase text-purple-300 flex items-center gap-1.5">🧠 Trả Lời Câu Hỏi</h3>
                         <span class="text-[10px] font-black text-purple-300" x-text="quizSlotsUsed() + '/5 hôm nay'"></span>
                     </div>
-                    <p class="text-[9px] text-slate-400">✅ Đúng hoặc Bỏ qua (xem QC): <span class="text-yellow-400 font-black">+200 💰 +1 🎁</span> · ❌ Sai: không nhận gì</p>
+                    <p class="text-[9px] text-slate-400">✅ Đúng: <span class="text-yellow-400 font-black">+150 💰 +1 🎁</span> · ❌ Sai: không nhận gì · ⏭️ Bỏ qua (sau QC): 0 thưởng</p>
                     <!-- 5 ô lượt: ô 1 miễn phí, 4 ô còn lại mở bằng xem QC -->
                     <div class="flex items-center gap-1.5 justify-center py-1">
                         <span class="quiz-slot" :class="quizFreeUsed ? 'used' : ''" x-text="quizFreeUsed ? '✅' : '🆓'"></span>
@@ -796,8 +843,8 @@
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 50.000'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 5'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 15'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 7'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 20'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
@@ -1185,7 +1232,7 @@
             return {
                 joinedGroups: false, // Mặc định là false để hiển thị banner khi mới vào
                 dismissedJoinBanner: false, dismissedPromoBanner: false,
-                tab: 'home', user: { id: '', name: '', joinDate: '' }, truckLevel: 1, orders: 0, coins: 0,
+                tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
@@ -1223,7 +1270,7 @@
 
                 // ===== TRẢ LỜI CÂU HỎI (Quiz) =====
                 // Mỗi ngày: 1 câu MIỄN PHÍ + 4 câu mở thêm bằng XEM QC. Trả lời ĐÚNG hoặc bấm BỎ QUA (xem QC xong)
-                // = +200 Coin +1 lượt mở rương. Trả lời SAI = không nhận gì (kết thúc câu đó).
+                // = +150 Coin +1 lượt mở rương. Trả lời SAI hoặc BỎ QUA = không nhận gì (kết thúc câu đó).
                 quizDate: '', quizFreeUsed: false, quizAdUnlocked: 0, quizUsedIds: [],
                 quizCurrent: null, quizModalShow: false, quizChosen: null, quizIsCorrect: false, quizPendingReward: false,
                 quizQuestions: [
@@ -1425,6 +1472,7 @@
                             this.user.referrerId = data.referrerId || null;
                             this.user.referrerCounted = data.referrerCounted || false;
                             this.user.joinDate = data.joinDate || '';
+                            this.user.accountCreatedAt = data.accountCreatedAt || this.user.accountCreatedAt || null;
                             this.orders = data.orders || 0;
                             this.coins = data.coins || 0;
                             this.truckLevel = data.truckLevel || 1;
@@ -2228,8 +2276,8 @@
                             .catch(() => {});
                     }
                 },
-                // Nhiệm vụ "Xem QC" lặp lại tối đa 30 lần/ngày, mỗi lần +100 Coin và +50 Đơn Hàng.
-                // Dùng chung loại QC thưởng (rewarded ad) như lúc ấn giao hàng.
+                // Nhiệm vụ "Xem QC" lặp lại tối đa 30 lần/ngày, mỗi lần +50 Coin và +25 Đơn Hàng.
+                // Phần thưởng được SERVER xác nhận sau khi phiên QC hợp lệ hoàn tất.
                 watchBonusAdTask() {
                     const task = this.dailyTasks.find(t => t.id === 'watch5ads');
                     const now = Date.now();
@@ -2243,14 +2291,14 @@
                         this.showNotification('⚠️ Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.');
                         return;
                     }
-                    this.playRewardedAd(() => {
+                    this.playRewardedAd((result = {}) => {
                         if (task) task.meta = { ...(task.meta || {}), lastAdAt: Date.now() };
-                        this.bonusAdsToday = Math.min(30, (this.bonusAdsToday || 0) + 1);
-                        this.coins += 50;
-                        this.orders += 50;
-                        this.showNotification(`📺 +50 Coin +50 Đơn Hàng (${this.bonusAdsToday}/30)`);
+                        this.bonusAdsToday = Number(result.bonusAdsToday ?? this.bonusAdsToday);
+                        this.coins = Number(result.coins ?? this.coins);
+                        this.orders = Number(result.orders ?? this.orders);
+                        this.showNotification(`📺 +50 Coin +25 Đơn Hàng (${this.bonusAdsToday}/30)`);
                         this.saveState();
-                    });
+                    }, undefined, 'bonus-task');
                 },
                 async openSmartlinkAd1() {
                     window.open(THATLOBSTER_SMARTLINK_1, '_blank');
@@ -2409,6 +2457,19 @@
                     if (this.withdrawRemain <= 0) {
                         this.showNotification('❌ Bạn đã hết lượt rút tiền trong ngày!');
                         return;
+                    }
+                    if (this.withdrawHistory.length === 0) {
+                        const createdAt = this.user.accountCreatedAt ? new Date(this.user.accountCreatedAt).getTime() : 0;
+                        if (!Number.isFinite(createdAt) || createdAt <= 0) {
+                            this.showNotification('❌ Chưa xác định được tuổi tài khoản. Vui lòng mở lại Mini App rồi thử lại.');
+                            return;
+                        }
+                        const ageMs = Date.now() - createdAt;
+                        if (ageMs < 24 * 60 * 60 * 1000) {
+                            const remainHours = Math.ceil((24 * 60 * 60 * 1000 - ageMs) / (60 * 60 * 1000));
+                            this.showNotification(`❌ Lần rút đầu tiên chỉ được thực hiện sau khi tài khoản đủ 24 giờ. Còn khoảng ${remainHours} giờ.`);
+                            return;
+                        }
                     }
                     if (!this.withdrawEligible) {
                         this.showNotification(`❌ Chưa đủ điều kiện rút tiền! Cần: ≥50.000 Đơn Hàng (hiện có ${this.formatNumber(this.orders)}), xem ≥7 QC hôm nay (${this.adsToday||0}/7), bấm ≥20 SmartLink hôm nay (${this.smartlinksToday||0}/20), và mỗi ngày chỉ rút 1 lần.`);
@@ -2731,7 +2792,7 @@
                         return false;
                     }
                 },
-                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!') {
+                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', purpose = 'generic') {
                     // FIX LỖI "PHẢI ĐỢI HẾT 15S RỒI BẤM X MỚI ĐƯỢC NHẬN THƯỞNG":
                     // trước đây phần thưởng chỉ được trao khi Promise của SDK kết thúc (tức là sau khi
                     // người dùng bấm nút X đóng quảng cáo). Nay chỉ cần người dùng đã rời app xem QC và
@@ -2746,7 +2807,7 @@
                         const sessionPromise = fetch(`${API_URL}/api/ad/session/start`, {
                             method: 'POST',
                             headers: {'Content-Type':'application/json'},
-                            body: JSON.stringify({ userId: this.user.id, adType: 'rewarded' })
+                            body: JSON.stringify({ userId: this.user.id, adType: 'rewarded', purpose })
                         }).then(async r => {
                             const d = await r.json().catch(() => ({}));
                             return r.ok ? (d.token || null) : null;
@@ -2875,22 +2936,34 @@
                 },
                 async skipQuiz() {
                     if (!this.quizCurrent || this.quizChosen !== null) return;
-                    const questionId = this.quizCurrent.id;
+                    const questionId = Number(this.quizCurrent.id);
                     this.quizChosen = -3;
-                    this.playRewardedAd(() => {
-                        if (!this.quizUsedIds.includes(questionId)) this.quizUsedIds = [...this.quizUsedIds, questionId];
-                        this.showNotification('📺 Đã bỏ qua câu hỏi sau khi xem QC. Không nhận thưởng.');
-                        this.saveQuizLocal();
-                        this.saveState();
-                        setTimeout(() => {
-                            this.quizModalShow = false;
-                            this.quizCurrent = null;
-                            this.quizChosen = null;
+                    this.playRewardedAd(async () => {
+                        try {
+                            const res = await fetch(`${API_URL}/api/quiz/answer`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: this.user.id, questionId, answer: -3 })
+                            });
+                            const result = await res.json().catch(() => ({}));
+                            if (!res.ok || !result.success) throw new Error(result.error || 'Không thể xác minh bỏ qua');
+                            if (Array.isArray(result.quizUsedIds)) this.quizUsedIds = result.quizUsedIds.map(Number);
                             this.quizIsCorrect = false;
+                            this.showNotification('📺 Đã bỏ qua câu hỏi sau khi xem QC. Không nhận thưởng.');
                             this.saveQuizLocal();
-                            this.saveState();
-                        }, 500);
-                    });
+                            setTimeout(() => {
+                                this.quizModalShow = false;
+                                this.quizCurrent = null;
+                                this.quizChosen = null;
+                                this.quizIsCorrect = false;
+                                this.saveQuizLocal();
+                            }, 500);
+                        } catch (e) {
+                            console.error('Quiz skip:', e);
+                            this.quizChosen = null;
+                            this.showNotification('⚠️ Không thể xác minh thao tác bỏ qua, vui lòng thử lại.');
+                        }
+                    }, undefined, 'quiz-skip');
                 },
                 saveQuizLocal() {
                     try {
@@ -3118,6 +3191,7 @@
                             this._quizServerHydrated = true;
                             this.lastResetDate = d.lastResetDate || this.lastResetDate;
                             this.withdrawRemain = d.withdrawRemain ?? this.withdrawRemain;
+                            this.user.accountCreatedAt = d.accountCreatedAt || this.user.accountCreatedAt || null;
                             this.saveQuizLocal();
                             this.walletSyncedAt = d.walletUpdatedAt;
                         }
