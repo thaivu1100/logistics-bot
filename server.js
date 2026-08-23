@@ -2011,7 +2011,9 @@ app.post('/api/user/:id', async (req, res) => {
             'weeklyValidInvites', 'lifetimeAdsWatched', 'lifetimeSmartlinks',
             'adsToday', 'smartlinksToday', 'smartlinkCount', 'deliveryCount',
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
-            'referralMilestones', 'dailyValidInvites'
+            'referralMilestones', 'dailyValidInvites',
+            'bonusAdsToday', 'withdrawRemain',
+            'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds'
         ].forEach(f => { delete updateData[f]; });
 
         // Handle referralMilestones as JSON string
@@ -2081,7 +2083,7 @@ app.post('/api/user/:id', async (req, res) => {
 });
 
 // ==================== SMARTLINK ====================
-// Mỗi lần bấm SmartLink hợp lệ được +50 Coin và +50 Đơn hàng, do SERVER cộng và lưu thẳng vào
+// Mỗi lần bấm SmartLink hợp lệ được +50 Coin và +25 Đơn hàng, do SERVER cộng và lưu thẳng vào
 // Supabase (không tính ở máy người dùng) nên tải lại app hay tắt/mở bot đều không đổi số lượt.
 const smartlinkProcessing = new Set();
 const SMARTLINK_DAILY_LIMIT = 30;
@@ -2371,17 +2373,22 @@ app.post('/api/quiz/answer', async (req,res) => {
         const slots = quizState(user);
         if (slots.slotsUsed <= 0) return res.status(400).json({success:false,error:'Chưa mở lượt câu hỏi.'});
         if (used.length >= QUIZ_DAILY_LIMIT) return res.status(429).json({success:false,error:'Bạn đã dùng đủ 5 câu hỏi hôm nay.'});
-        const correct = answer === Number(quizQuestion.answer);
+        const skipped = answer === -3;
+        if (!skipped && (answer < 0 || answer >= quizQuestion.options.length)) {
+            return res.status(400).json({success:false,error:'Đáp án không hợp lệ.'});
+        }
+        const correct = !skipped && answer === Number(quizQuestion.answer);
         const nextUsed = [...used, questionId].slice(0, QUIZ_DAILY_LIMIT);
         const { data:cur } = await readUserRow(userId);
         if (!cur) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-        const update = { quizUsedIds: nextUsed, walletUpdatedAt:new Date().toISOString() };
+        const update = { quizUsedIds: nextUsed };
         let reward = { coins:0, spins:0 };
         if (correct) {
             reward = { ...QUIZ_REWARD };
             update.coins = Number(cur.coins || 0) + reward.coins;
             update.spins = Number(cur.spins || 0) + reward.spins;
         }
+        update.walletUpdatedAt = new Date().toISOString();
         await saveUserFields(userId, update);
         if (reward.coins) logTransaction(userId,'coin',reward.coins,'Trả lời quiz đúng');
         const { data:fresh } = await readUserRow(userId);
@@ -2559,15 +2566,18 @@ app.post('/api/ad/impression', async (req, res) => {
 
 const adSessions = new Map();
 const completedAdEvents = new Map();
+const adRewardProcessing = new Set();
 function makeAdToken() { return `${Date.now()}_${Math.random().toString(36).slice(2,12)}`; }
 app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     try {
-        const { userId, adType } = req.body || {};
+        const { userId, adType, purpose } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
+        const allowedPurposes = ['generic', 'bonus-task', 'quiz-unlock', 'quiz-skip'];
+        const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const token = makeAdToken();
-        adSessions.set(token, { userId:String(userId), adType, startedAt:Date.now() });
+        adSessions.set(token, { userId:String(userId), adType, purpose:sessionPurpose, startedAt:Date.now() });
         setTimeout(() => adSessions.delete(token), 120000);
         res.json({ success:true, token });
     } catch (e) { res.status(500).json({success:false,error:e.message}); }
@@ -2576,6 +2586,11 @@ app.post('/api/ad/session/start', async (req, res) => {
 app.post('/api/ad/session/complete', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const processingUserId = String(req.body?.userId || '');
+    if (adRewardProcessing.has(processingUserId)) {
+        return res.status(409).json({success:false,retry:true,error:'Lượt quảng cáo đang được xử lý.'});
+    }
+    adRewardProcessing.add(processingUserId);
     try {
         const { userId, token, adType } = req.body || {};
         const s = adSessions.get(token);
@@ -2583,23 +2598,53 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const elapsed = Date.now() - s.startedAt;
         if (elapsed < 5000) return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
         adSessions.delete(token);
-        completedAdEvents.set(String(token), { userId:String(userId), adType, completedAt:Date.now(), used:false });
+        completedAdEvents.set(String(token), { userId:String(userId), adType, purpose:s.purpose || 'generic', completedAt:Date.now(), used:false });
         setTimeout(() => completedAdEvents.delete(String(token)), 120000);
         const user = await loadCurrentDailyUser(String(userId));
         if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         const next = await incrementWeeklyAds(String(userId));
         if (next === null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
+
+        const purpose = s.purpose || 'generic';
+        if (purpose === 'bonus-task' && Number(user.bonusAdsToday || 0) >= 30) {
+            return res.status(429).json({success:false,error:'Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.'});
+        }
+        const rewardCoins = purpose === 'bonus-task' ? 50 : 0;
+        const rewardOrders = purpose === 'bonus-task' ? 25 : 0;
         const update = {
             adsToday: Number(user.adsToday || 0) + 1,
             lifetimeAdsWatched: Number(user.lifetimeAdsWatched || 0) + 1,
             walletUpdatedAt: new Date().toISOString()
         };
-        await saveUserFields(String(userId), update);
+        if (purpose === 'bonus-task') {
+            update.bonusAdsToday = Number(user.bonusAdsToday || 0) + 1;
+            update.coins = Number(user.coins || 0) + rewardCoins;
+            update.orders = Number(user.orders || 0) + rewardOrders;
+        }
+        const { error: saveError } = await saveUserFields(String(userId), update);
+        if (saveError) return res.status(500).json({success:false,error:saveError.message});
+        if (rewardCoins) logTransaction(String(userId), 'coin', rewardCoins, 'Xem 1 QC hợp lệ');
+        if (rewardOrders) logTransaction(String(userId), 'orders', rewardOrders, 'Xem 1 QC hợp lệ');
         const { data:fresh } = await readUserRow(String(userId));
-        // Referral is finalized from trusted counters after the server records the ad event.
         try { await tryFinalizeReferral(String(userId)); } catch (_) {}
-        res.json({success:true, adToken:String(token), weeklyAdsCount:next, adsToday:Number(fresh?.adsToday || 0), lifetimeAdsWatched:Number(fresh?.lifetimeAdsWatched || 0), elapsed});
+        res.json({
+            success:true,
+            adToken:String(token),
+            weeklyAdsCount:next,
+            adsToday:Number(fresh?.adsToday || 0),
+            lifetimeAdsWatched:Number(fresh?.lifetimeAdsWatched || 0),
+            bonusAdsToday:Number(fresh?.bonusAdsToday || 0),
+            rewardCoins,
+            rewardOrders,
+            coins:Number(fresh?.coins || 0),
+            orders:Number(fresh?.orders || 0),
+            walletUpdatedAt:fresh?.walletUpdatedAt || update.walletUpdatedAt,
+            elapsed
+        });
     } catch (e) { res.status(500).json({success:false,error:e.message}); }
+    finally {
+        adRewardProcessing.delete(processingUserId);
+    }
 });
 
 // API cũ giữ tương thích nhưng KHÔNG tự cộng BXH nữa.
@@ -2638,18 +2683,39 @@ app.post('/api/check-referral/:id', async (req, res) => {
 // LƯU Ý SCHEMA: bảng "withdrawals" trên Supabase cần có thêm các cột:
 // ordersAmount (int8), bankName (text), accountName (text), accountNumber (text), txCode (int8)
 const WITHDRAW_MIN_ORDERS = 50000;      // Tối thiểu 50.000 Đơn Hàng
-const WITHDRAW_MIN_ADS = 7;             // Xem tối thiểu 5 QC trong ngày
-const WITHDRAW_MIN_SMARTLINKS = 20;     // Bấm tối thiểu 15 SmartLink trong ngày
+const WITHDRAW_MIN_ADS = 7;             // Xem tối thiểu 7 QC trong ngày
+const WITHDRAW_MIN_SMARTLINKS = 20;     // Bấm tối thiểu 20 SmartLink trong ngày
 const WITHDRAW_PER_USER_PER_DAY = 1;    // Mỗi người 1 đơn rút/ngày
 const WITHDRAW_DAILY_QUOTA = 20;        // Toàn Mini App nhận tối đa 20 đơn rút/ngày
+const withdrawalProcessing = new Set();
+let withdrawalQueue = Promise.resolve();
+async function acquireWithdrawalQueue() {
+    const previous = withdrawalQueue;
+    let release;
+    const current = new Promise(resolve => { release = resolve; });
+    withdrawalQueue = previous.then(() => current);
+    await previous;
+    return release;
+}
 // Nhóm nhận thông báo rút tiền: https://t.me/khohangchatkiemtien
 const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
 app.post('/api/withdraw', async (req, res) => {
     const authUserId = String(req.body?.userId || req.params?.id || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    const { userId, method, bankName, accountName, accountNumber, ordersAmount } = req.body;
+    const releaseWithdrawalQueue = await acquireWithdrawalQueue();
+    let withdrawalUserId = '';
+    try {
+        const { userId, method, bankName, accountName, accountNumber, ordersAmount } = req.body;
+        withdrawalUserId = String(userId || '');
+        if (withdrawalUserId && withdrawalProcessing.has(withdrawalUserId)) {
+            return res.status(409).json({ error: 'Yêu cầu rút tiền đang được xử lý. Vui lòng thử lại sau ít giây.' });
+        }
+        if (withdrawalUserId) {
+            withdrawalProcessing.add(withdrawalUserId);
+            setTimeout(() => withdrawalProcessing.delete(withdrawalUserId), 30000);
+        }
 
-    if (!userId || !method || !accountNumber || !ordersAmount) {
+        if (!userId || !method || !accountNumber || !ordersAmount) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ thông tin rút tiền." });
     }
     if (ordersAmount < WITHDRAW_MIN_ORDERS) { // Mức rút tối thiểu: 50.000 Đơn Hàng (5.000 VNĐ)
@@ -2688,7 +2754,7 @@ app.post('/api/withdraw', async (req, res) => {
         }
     }
     // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận.
-    // Yêu cầu: ≥50.000 Đơn Hàng, xem ≥5 QC hôm nay, bấm ≥15 SmartLink hôm nay.
+    // Yêu cầu: ≥50.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥20 SmartLink hôm nay.
     const adsTodayCount = Number(userData.adsToday || 0);
     const smartlinksTodayCount = Number(userData.smartlinksToday || 0);
     if (adsTodayCount < WITHDRAW_MIN_ADS || smartlinksTodayCount < WITHDRAW_MIN_SMARTLINKS) {
@@ -2771,9 +2837,13 @@ app.post('/api/withdraw', async (req, res) => {
 
         // Trả về ĐÚNG giá trị orders + walletUpdatedAt vừa lưu để client SET trực tiếp (không tự trừ cục bộ nữa)
         res.json({ success: true, txCode, orders: updatedRows[0].orders, walletUpdatedAt: updatedRows[0].walletUpdatedAt });
-    } catch (error) {
-        console.error("Lỗi trong quá trình rút tiền:", error);
-        res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
+        } catch (error) {
+            console.error("Lỗi trong quá trình rút tiền:", error);
+            res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
+        }
+    } finally {
+        if (withdrawalUserId) withdrawalProcessing.delete(withdrawalUserId);
+        releaseWithdrawalQueue();
     }
 });
 
