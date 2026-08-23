@@ -1142,7 +1142,7 @@
                 invitedCount: 0, validInvites: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: 'vi', giftCode: '', redeemHistory: [], bannedScreen: false,
-                isAppLoading: false, loadingProgress: 0, _quizServerHydrated: false, // TẠM BỎ màn loading khi mở app theo yêu cầu - vào thẳng giao diện, không che màn hình nữa
+                isAppLoading: true, loadingProgress: 0, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 spinAdProgress: 0, clickTimestamps: [],
@@ -1656,8 +1656,15 @@
                 async checkGroupMembership(silent = false) {
                     if (this.user?.id === MAIN_ADMIN_ID) { this.joinedGroups = true; this.dismissedJoinBanner = true; return true; }
                     if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
+                    // FIX LỖI "LOAD XONG NHƯNG KHÔNG VÀO ĐƯỢC GIAO DIỆN TRONG": giao diện chính (main-container)
+                    // chỉ hiện khi joinedGroups === true. Trước đây hàm này dùng fetch() THƯỜNG, không có
+                    // timeout -> nếu request /api/verify bị treo (mạng chờn, server chậm phản hồi), await
+                    // này ở initApp() không bao giờ resolve, khiến joinedGroups mãi mãi giữ giá trị false ban
+                    // đầu dù isAppLoading đã tắt từ trước đó -> người dùng thấy màn loading biến mất nhưng
+                    // giao diện trong (main-container) không bao giờ hiện ra. Đổi sang fetchWithTimeout để
+                    // luôn có kết quả (thành công hoặc thất bại) trong tối đa 8 giây, không treo vô thời hạn.
                     try {
-                        const res = await fetch(`${API_URL}/api/verify/${this.user.id}`);
+                        const res = await fetchWithTimeout(`${API_URL}/api/verify/${this.user.id}`);
                         const data = await res.json();
                         if (data.success) {
                             this.joinedGroups = true;
