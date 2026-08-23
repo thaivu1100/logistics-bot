@@ -243,10 +243,19 @@
             .glass, .task-card, button { transition: none !important; }
         }
         /* ===== TECHNO LOGISTICS UI: nhẹ, rõ, đồng nhất cho mọi nút ===== */
+        /* FIX LỖI GỐC "ĐÃ VÀO GIAO DIỆN RỒI NHƯNG MÀN LOADING VẪN HIỆN, KẸT LUÔN": đây mới là nguyên nhân
+        THẬT SỰ xuyên suốt các lần báo lỗi trước - KHÔNG phải do JS bị treo. Alpine ẩn màn loading bằng
+        cách gán "display: none" trực tiếp vào style của phần tử khi isAppLoading = false (cơ chế x-show).
+        Nhưng rule CSS "display: flex !important" bên dưới có độ ưu tiên CAO HƠN cả inline style, nên nó
+        LUÔN LUÔN ĐÈ lên và ép phần tử hiển thị dạng flex vĩnh viễn, bất kể Alpine đã set display:none hay
+        chưa -> toàn bộ logic JS (kể cả watchdog 10s) đều chạy đúng, isAppLoading đúng là đã về false, giao
+        diện chính (main-container) phía dưới ĐÃ render xong xuôi - nhưng lớp phủ loading vẫn đứng nguyên,
+        che kín toàn màn hình vĩnh viễn vì !important thắng. Bỏ "!important" khỏi riêng thuộc tính "display"
+        (các thuộc tính khác giữ nguyên !important, không ảnh hưởng gì) để Alpine có thể ẩn được đúng lúc. */
         .loading-screen-center {
             position: fixed !important; inset: 0 !important; width: 100vw !important;
             min-height: 100vh !important; min-height: 100dvh !important;
-            display: flex !important; align-items: center !important; justify-content: center !important;
+            display: flex; align-items: center !important; justify-content: center !important;
             transform: none !important; perspective: none !important; z-index: 10001 !important;
         }
         body {
