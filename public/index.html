@@ -2124,15 +2124,43 @@
                         return;
                     }
                     // Nâng cấp xe cũng phải xem Rewarded Interstitial, giống nút Giao Hàng.
-                    this.playRewardedAd(() => this.completeTruckUpgrade());
+                    this.playRewardedAd((adResult) => this.completeTruckUpgrade(adResult?.adToken || ''));
                 },
-                completeTruckUpgrade() {
-                    if (this.truckLevel >= this.maxTruckLevel || this.coins < this.upgradeCost) return;
-                    this.coins -= this.upgradeCost;
-                    this.truckLevel++;
-                    this.applyLevelStats();
-                    this.saveState();
-                    this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
+                // FIX LỖI "NÂNG CẤP XE BÁO THÀNH CÔNG NHƯNG KHÔNG TRỪ COIN / KHÔNG TĂNG LEVEL": trước đây
+                // hàm này tự trừ coin + tăng truckLevel NGAY TRÊN CLIENT rồi mới đồng bộ lên server bằng
+                // saveState() (chạy async, có thể lỗi mạng/timeout hoặc bị server loại bỏ do đụng độ với
+                // 1 lần đồng bộ khác) -> thông báo "Nâng cấp thành công" đã hiện ra dù chưa chắc đã lưu
+                // được, tải lại app thấy vẫn ở level cũ. Giờ việc trừ coin + tăng level được server xử lý
+                // và xác nhận TRỌN VẸN (atomic) trước, CHỈ khi server trả về success=true mới cập nhật
+                // giao diện + báo "Nâng cấp thành công".
+                async completeTruckUpgrade(adToken) {
+                    if (!adToken) {
+                        this.showNotification('⚠️ Không xác định được lượt quảng cáo, vui lòng thử lại.');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(`${API_URL}/api/truck/upgrade`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: this.user.id, adToken })
+                        });
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success) {
+                            if (result.maxed) this.showNotification('✅ Xe đã đạt cấp tối đa.');
+                            else if (result.insufficientCoins) this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
+                            else this.showNotification('⚠️ ' + (result.error || 'Nâng cấp xe thất bại, vui lòng thử lại.'));
+                            return;
+                        }
+                        // Chỉ cập nhật giao diện bằng giá trị THẬT mà server đã xác nhận lưu thành công.
+                        this.coins = Number(result.coins ?? this.coins);
+                        this.truckLevel = Number(result.truckLevel ?? this.truckLevel);
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                        this.applyLevelStats();
+                        this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
+                    } catch (e) {
+                        console.error('Nâng cấp xe:', e);
+                        this.showNotification('⚠️ Không kết nối được máy chủ để nâng cấp xe, vui lòng thử lại.');
+                    }
                 },
                 // Áp lại thông số theo cấp hiện tại (gọi cả lúc mở app để dữ liệu cũ khớp công thức mới)
                 applyLevelStats() {
