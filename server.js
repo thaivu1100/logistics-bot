@@ -2634,7 +2634,7 @@ app.post('/api/user/:id', async (req, res) => {
             'adsToday', 'smartlinksToday', 'smartlinkCount', 'deliveryCount',
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
             'referralMilestones', 'dailyValidInvites',
-            'bonusAdsToday', 'withdrawRemain',
+            'bonusAdsToday', 'withdrawRemain', 'spinAdCount',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds'
         ].forEach(f => { delete updateData[f]; });
 
@@ -3387,7 +3387,7 @@ app.post('/api/ad/session/start', async (req, res) => {
     try {
         const { userId, adType, purpose, sessionId } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
-        const allowedPurposes = ['generic', 'bonus-task', 'quiz-unlock', 'quiz-skip'];
+        const allowedPurposes = ['generic', 'bonus-task', 'quiz-unlock', 'quiz-skip', 'chest-spin'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const token = makeAdToken();
         adSessions.set(token, { userId:String(userId), adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), startedAt:Date.now() });
@@ -3448,21 +3448,35 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (purpose === 'bonus-task' && Number(user.bonusAdsToday || 0) >= 30) {
             return res.status(429).json({success:false,error:'Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.'});
         }
+        // NHÓM SỬA LỖI RƯƠNG: trước đây +1 lượt mở rương chỉ được cộng Ở CLIENT (this.spinFree++) rồi mới
+        // gửi kèm trong saveState() snapshot chung -> hay bị chặn/ghi đè bởi cơ chế bảo vệ walletUpdatedAt
+        // (vì chính request /api/ad/session/complete này cũng làm mới walletUpdatedAt), khiến Supabase
+        // không thực sự nhận được +1 dù giao diện đã báo thành công. Nay spins được SERVER cộng trực tiếp
+        // ngay tại đây (giống cách 'bonus-task' cộng coin/orders), atomic cùng 1 lần ghi Supabase, và trả
+        // về đúng giá trị mới nhất để frontend đồng bộ - không còn phụ thuộc vào saveState() sau đó nữa.
+        // Giữ đúng giới hạn hiện có của tính năng này (10 lượt/ngày, field spinAdCount đã có sẵn và đã
+        // được dailyResetFields() tự reset mỗi ngày - không đổi công thức/giới hạn, chỉ xác minh server-side).
+        if (purpose === 'chest-spin' && Number(user.spinAdCount || 0) >= 10) {
+            return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
+        }
 
         const next = await incrementWeeklyAds(String(userId));
         if (next === null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
 
         const rewardCoins = purpose === 'bonus-task' ? 50 : 0;
         const rewardOrders = purpose === 'bonus-task' ? 25 : 0;
+        const rewardSpins = purpose === 'chest-spin' ? 1 : 0;
         const updateFields = {
             adsToday: Number(user.adsToday || 0) + 1,
             lifetimeAdsWatched: Number(user.lifetimeAdsWatched || 0) + 1,
             lastResetDate: vietnamDayKey()
         };
         if (purpose === 'bonus-task') updateFields.bonusAdsToday = Number(user.bonusAdsToday || 0) + 1;
+        if (purpose === 'chest-spin') updateFields.spinAdCount = Number(user.spinAdCount || 0) + 1;
         const mutation = await atomicWalletMutation(String(userId), {
             deltaCoins: rewardCoins,
             deltaOrders: rewardOrders,
+            deltaSpins: rewardSpins,
             setFields: updateFields
         });
         if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
@@ -3470,7 +3484,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const fresh = await readUserRow(String(userId));
         await recordAntiFraudEvent(String(userId), 'ad', {
             reactionTime:elapsed, ip:requestIp(req), rewardEvent:true,
-            coins:rewardCoins, orders:rewardOrders, sessionId
+            coins:rewardCoins, orders:rewardOrders, spins:rewardSpins, sessionId
         });
         if (rewardCoins) logTransaction(String(userId), 'coin', rewardCoins, 'Xem 1 QC hợp lệ');
         if (rewardOrders) logTransaction(String(userId), 'orders', rewardOrders, 'Xem 1 QC hợp lệ');
@@ -3491,8 +3505,11 @@ app.post('/api/ad/session/complete', async (req, res) => {
             bonusAdsToday:Number(fresh.data?.bonusAdsToday || 0),
             rewardCoins,
             rewardOrders,
+            rewardSpins,
             coins:Number(fresh.data?.coins || 0),
             orders:Number(fresh.data?.orders || 0),
+            spins:Number(fresh.data?.spins || 0),
+            spinAdCount:Number(fresh.data?.spinAdCount || 0),
             walletUpdatedAt:fresh.data?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null,
             elapsed,
             riskScore:(await getAntiFraudState(String(userId))).stats.score
