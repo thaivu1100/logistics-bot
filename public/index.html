@@ -424,6 +424,23 @@
 </head>
 <body x-data="app()" x-init="initApp()">
 
+    <!-- ADBLOCK DETECTION (bổ sung): phần tử "mồi" dùng class name phổ biến (adsbox/ad-banner/ads/advertisement)
+    mà các bộ lọc quảng cáo phổ biến (uBlock Origin, AdGuard, trình duyệt có chặn QC sẵn...) thường ẩn đi bằng CSS.
+    Đây CHỈ dùng để PHÁT HIỆN khả năng quảng cáo bị chặn nhằm hiển thị đúng thông báo cho người dùng - KHÔNG dùng
+    làm nguồn duy nhất để quyết định có cộng thưởng hay không (server luôn tự kiểm tra độc lập qua session token
+    ở /api/ad/session/start và /api/ad/session/complete, không tin bất kỳ tín hiệu nào từ frontend). -->
+    <div id="adsbox-bait" class="adsbox ad-banner ads advertisement" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;" aria-hidden="true"></div>
+    <script>
+        window.__adBlockLikely = false;
+        setTimeout(function () {
+            try {
+                var bait = document.getElementById('adsbox-bait');
+                var blocked = !bait || bait.offsetParent === null || bait.offsetHeight === 0 || getComputedStyle(bait).display === 'none';
+                window.__adBlockLikely = !!blocked;
+            } catch (e) { /* Detector lỗi thì không chặn app, cứ để server tự xác minh khi xem QC */ }
+        }, 1500);
+    </script>
+
     <!-- FIX LỖI "VÀO GIAO DIỆN RỒI LẠI KẸT Ở MÀN LOADING VÔ HẠN": các cơ chế watchdog bên dưới (trong
     khối script chính của Alpine) chỉ hoạt động NẾU Alpine.js đã tải và khởi tạo thành công. Trên thực tế, Mini App
     load các script từ nhiều CDN ngoài (unpkg.com cho Alpine, cdn.tailwindcss.com...); nếu 1 trong các CDN
@@ -2908,7 +2925,13 @@
                     const startedAt = Date.now();
                     const MIN_AD_SECONDS = 5000;
                     try {
-                        if (typeof show_11457064 !== 'function') throw new Error('Rewarded SDK chưa sẵn sàng');
+                        // ADBLOCK/SDK CHECK: nếu SDK chưa load được HOẶC detector phát hiện khả năng bị chặn
+                        // quảng cáo, không mở phiên quảng cáo và KHÔNG cộng thưởng, nhưng cũng KHÔNG khoá/ban
+                        // người dùng - chỉ báo họ tắt trình chặn quảng cáo rồi thử lại.
+                        if (typeof show_11457064 !== 'function' || window.__adBlockLikely) {
+                            this.showNotification('🚫 Vui lòng tắt trình chặn quảng cáo để nhận thưởng.');
+                            return false;
+                        }
 
                         const sessionPromise = fetch(`${API_URL}/api/ad/session/start`, {
                             method: 'POST',
