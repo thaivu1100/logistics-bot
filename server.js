@@ -275,6 +275,9 @@ function assertTelegramUser(req, userId) {
 
 const GROUP_1_ID = parseInt(process.env.GROUP_1_ID); // Kênh thông báo
 const GROUP_2_ID = parseInt(process.env.GROUP_2_ID); // Nhóm chat
+// Nhóm dành riêng cho nhiệm vụ "Tham gia nhóm" (mục Nhiệm Vụ) - KHÁC 2 nhóm bắt buộc GROUP_1_ID/GROUP_2_ID
+// ở trên (điều kiện referral/vào Mini App không đổi). Dùng username public nên không cần thêm ID số.
+const TASK_GROUP_USERNAME = process.env.TASK_GROUP_USERNAME || '@sharekeotonghop';
 const ADMIN_ID = 6327666718;
 const ADMIN_PASS = process.env.ADMIN_PASS;
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
@@ -1051,6 +1054,21 @@ async function logTransaction(userId, type, amount, reason) {
     }
 }
 
+// Xây dựng nội dung thông báo "lượt mời chưa thành công" gửi cho người mời, CHỈ liệt kê đúng những điều
+// kiện người được mời CÒN THIẾU tại thời điểm gửi (không hiển thị điều kiện đã hoàn thành) - phản ánh đúng
+// 5 điều kiện thực tế mà tryFinalizeReferral() đang xét ở trên, không tự bịa hay đổi điều kiện referral.
+function buildReferralPendingConditionsText(userRow, isMemberNow) {
+    const missing = [];
+    if (!isMemberNow) missing.push('✅ Tham gia đầy đủ nhóm Telegram bắt buộc');
+    if ((userRow?.lifetimeAdsWatched || 0) < 5) missing.push('✅ Xem ít nhất 5 quảng cáo hợp lệ');
+    if ((userRow?.lifetimeSmartlinks || 0) < 5) missing.push('✅ Hoàn thành ít nhất 5 SmartLink');
+    if ((userRow?.deliveryCountLifetime || 0) < 3) missing.push('✅ Giao hàng ít nhất 3 lần');
+    if (userRow?.isBanned) missing.push('✅ Tài khoản không bị khóa/ban');
+    return missing.length > 0
+        ? missing.join('\n')
+        : '✅ Đã hoàn tất các điều kiện, hệ thống sẽ tự động xác nhận trong ít phút.';
+}
+
 // Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
 // 1) Người được mời đã tham gia đủ nhóm Telegram bắt buộc
 // 2) Người được mời đã xem tối thiểu 5 quảng cáo (lifetimeAdsWatched >= 5)
@@ -1334,10 +1352,13 @@ bot.start(async (ctx) => {
                     // FIX: trước đây thông báo ghi "🎉 Bạn vừa mời thành công" ngay khi bạn bè chỉ mới BẤM
                     // VÀO LINK (chưa tham gia đủ nhóm, chưa xem QC nào) khiến người mời hiểu lầm là đã nhận
                     // thưởng. Đổi thành thông báo trung thực: chỉ báo có người vào bằng link, CHƯA thành
-                    // công, kèm nhắc nhở đúng 2 điều kiện cần hoàn tất. Thưởng + thông báo "thành công" thật
-                    // sự chỉ được gửi trong tryFinalizeReferral() khi bạn bè ĐÃ đủ điều kiện.
+                    // công, kèm nhắc nhở ĐÚNG các điều kiện còn thiếu thực tế (không hiển thị điều kiện đã
+                    // đủ). Thưởng + thông báo "thành công" thật sự chỉ được gửi trong tryFinalizeReferral()
+                    // khi bạn bè ĐÃ đủ điều kiện.
+                    const isMemberAtInvite = await checkUserMembership(userId).catch(() => false);
+                    const conditionsText = buildReferralPendingConditionsText(userRecord, isMemberAtInvite);
                     await safeSendMessage(referrerId, 
-                        `👋 *${userName}* vừa vào Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *CHƯA được tính thành công*.\n📋 Hãy nhắc bạn ấy hoàn tất 2 điều kiện sau để bạn nhận được thưởng mời bạn:\n1️⃣ Tham gia đầy đủ nhóm Telegram bắt buộc\n2️⃣ Xem ít nhất 5 quảng cáo Rewarded/In-App trong Mini App (ngoại trừ SmartLink)\n\n✅ Khi bạn ấy hoàn tất, bot sẽ tự động thông báo cho bạn kèm phần thưởng.`,
+                        `👋 *${userName}* vừa tham gia Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *chưa được tính thành công*.\n\nĐể được tính hợp lệ, bạn ấy cần hoàn tất:\n${conditionsText}\n\n🎁 Khi đủ điều kiện, hệ thống sẽ tự động xác nhận lượt mời và cộng thưởng cho bạn.`,
                         { parse_mode: 'Markdown' }
                     );
                 }
@@ -2640,7 +2661,7 @@ app.post('/api/user/:id', async (req, res) => {
             'adsToday', 'smartlinksToday', 'smartlinkCount', 'deliveryCount',
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
             'referralMilestones', 'dailyValidInvites',
-            'bonusAdsToday', 'withdrawRemain', 'spinAdCount',
+            'bonusAdsToday', 'withdrawRemain', 'spinAdCount', 'groupTaskClaimed',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds'
         ].forEach(f => { delete updateData[f]; });
 
@@ -3026,6 +3047,111 @@ app.post('/api/task/claim', async (req, res) => {
         res.status(500).json({success:false,error:e.message});
     }
 });
+
+// ==================== NHIỆM VỤ "THAM GIA NHÓM" (1 LẦN DUY NHẤT, KHÔNG RESET THEO NGÀY) ====================
+// Khác hẳn TASK_REWARDS/claimServerTask() ở trên (dùng chung "serverTaskClaims" bị XOÁ mỗi khi sang ngày
+// mới - xem dailyResetFields/claims.__date), nhiệm vụ này chỉ được thưởng ĐÚNG 1 LẦN trong toàn bộ vòng
+// đời tài khoản nên PHẢI dùng cờ riêng "groupTaskClaimed", không được lẫn vào object claims theo ngày đó.
+// Ưu tiên CAS (compare-and-swap) trực tiếp trên cột thật của bảng users (an toàn tuyệt đối với 2 request
+// song song, giống hệt cách tryFinalizeReferral() đang khoá referrerCounted). Nếu cột "groupTaskClaimed"
+// CHƯA tồn tại trên Supabase (chưa chạy SQL migration optional bên dưới) thì tự động rơi về kho lưu tạm
+// user_extra_state kèm khoá bộ nhớ theo user - vẫn chống được double-claim ở mức tương đương cách hệ thống
+// đang dùng cho serverReferralMilestones, và sẽ tự chuyển sang dùng cột thật ngay khi migration được chạy.
+//
+// SQL migration TÙY CHỌN (không bắt buộc để tính năng hoạt động):
+//   alter table users add column if not exists "groupTaskClaimed" boolean default false;
+const TASK_GROUP_REWARD = { coins: 500, orders: 500 };
+async function checkTaskGroupMembership(userId) {
+    try {
+        const m = await bot.telegram.getChatMember(TASK_GROUP_USERNAME, userId).catch(() => ({ status: 'left' }));
+        return ['member', 'administrator', 'creator'].includes(m.status);
+    } catch (e) {
+        console.error(`Lỗi check thành viên nhóm nhiệm vụ ${userId}:`, e.message);
+        return false;
+    }
+}
+const groupTaskProcessing = new Set();
+async function claimGroupTask(userId) {
+    const key = String(userId);
+    if (groupTaskProcessing.has(key)) return { ok:false, reason:'processing' };
+    groupTaskProcessing.add(key);
+    try {
+        const fraudGate = await antiFraudRewardGate(userId);
+        if (!fraudGate.allowed) return { ok:false, reason:'fraud_hold', fraudGate };
+
+        const { data:user, error:userErr } = await readUserRow(userId);
+        if (userErr || !user) return { ok:false, reason:'user_not_found' };
+        if (user.isBanned) return { ok:false, reason:'banned' };
+        if (user.groupTaskClaimed === true) return { ok:false, reason:'already_claimed' };
+
+        const isMember = await checkTaskGroupMembership(userId);
+        if (!isMember) return { ok:false, reason:'not_member' };
+
+        // Thử CAS trên cột thật trước (an toàn tuyệt đối với 2 request song song)
+        const { data: claimRows, error: claimError } = await supabase.from('users')
+            .update({ groupTaskClaimed: true })
+            .eq('id', userId)
+            .eq('groupTaskClaimed', false)
+            .select('id');
+        let usedFallbackStore = false;
+        if (claimError) {
+            const missingCol = extractMissingColumn(claimError);
+            if (missingCol !== 'groupTaskClaimed') {
+                console.error('Lỗi claim nhiệm vụ nhóm:', claimError);
+                return { ok:false, reason:'claim_error' };
+            }
+            // Cột chưa tồn tại trên Supabase -> dùng kho lưu tạm với double-check trước khi ghi
+            usedFallbackStore = true;
+            const extra = await getUserExtra(userId);
+            if (extra?.groupTaskClaimed === true) return { ok:false, reason:'already_claimed' };
+            await saveUserExtra(userId, { groupTaskClaimed: true });
+            await flushUserExtra();
+        } else if (!claimRows || claimRows.length === 0) {
+            // Một request khác đã claim xong trong lúc hàm này đang kiểm tra ở trên
+            return { ok:false, reason:'already_claimed' };
+        }
+
+        const mutation = await atomicWalletMutation(userId, {
+            deltaCoins: TASK_GROUP_REWARD.coins,
+            deltaOrders: TASK_GROUP_REWARD.orders
+        });
+        if (mutation.error) {
+            // Ghi ví thất bại -> hoàn tác cờ claim để không mất vĩnh viễn cơ hội nhận thưởng, cho phép
+            // user bấm kiểm tra lại ở lần sau.
+            if (usedFallbackStore) await saveUserExtra(userId, { groupTaskClaimed: false });
+            else await supabase.from('users').update({ groupTaskClaimed: false }).eq('id', userId);
+            return { ok:false, reason:'wallet_update_failed', error:mutation.error };
+        }
+
+        await recordAntiFraudEvent(userId, 'task', { rewardEvent:true, coins:TASK_GROUP_REWARD.coins, orders:TASK_GROUP_REWARD.orders });
+        logTransaction(userId, 'coin', TASK_GROUP_REWARD.coins, 'Nhiệm vụ Tham gia nhóm');
+        logTransaction(userId, 'orders', TASK_GROUP_REWARD.orders, 'Nhiệm vụ Tham gia nhóm');
+        const { data: fresh } = await readUserRow(userId);
+        return { ok:true, reward:TASK_GROUP_REWARD, coins:fresh?.coins||0, orders:fresh?.orders||0, walletUpdatedAt:fresh?.walletUpdatedAt||null };
+    } finally {
+        groupTaskProcessing.delete(key);
+    }
+}
+app.post('/api/task/group/claim', async (req, res) => {
+    const authUserId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    try {
+        const result = await claimGroupTask(authUserId);
+        if (!result.ok) {
+            if (result.reason === 'already_claimed') return res.json({success:true,alreadyClaimed:true});
+            if (result.reason === 'processing') return res.status(409).json({success:false,retry:true,error:'Đang xử lý, vui lòng thử lại.'});
+            if (result.reason === 'not_member') return res.status(400).json({success:false,error:'not_member'});
+            if (result.reason === 'fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
+            return res.status(400).json({success:false,error:result.reason});
+        }
+        res.json({success:true, reward:result.reward, coins:result.coins, orders:result.orders, walletUpdatedAt:result.walletUpdatedAt});
+    } catch (e) {
+        console.error('Lỗi claim nhiệm vụ nhóm:', e);
+        res.status(500).json({success:false,error:e.message});
+    }
+});
+
+
 
 const QUIZ_QUESTIONS = [
     { i: 0, q: 'Hành tinh nào gần Mặt Trời nhất?', options: ['Sao Kim', 'Sao Thủy', 'Trái Đất', 'Sao Hỏa'], answer: 1 },
