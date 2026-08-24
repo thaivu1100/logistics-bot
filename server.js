@@ -3420,6 +3420,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const elapsed = Date.now() - s.startedAt;
         if (elapsed < 5000) {
             await recordAntiFraudEvent(String(userId), 'ad', { reactionTime:elapsed, retry:true, ip:requestIp(req), rewardEvent:false, sessionId });
+            insertRowSafe('ad_events', {
+                user_id: String(userId), ad_type: adType || 'rewarded', status: 'too_fast',
+                ip: requestIp(req), created_at: new Date().toISOString()
+            }).catch(() => {});
             return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
         }
         adSessions.delete(token);
@@ -3471,6 +3475,12 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (rewardCoins) logTransaction(String(userId), 'coin', rewardCoins, 'Xem 1 QC hợp lệ');
         if (rewardOrders) logTransaction(String(userId), 'orders', rewardOrders, 'Xem 1 QC hợp lệ');
         try { await tryFinalizeReferral(String(userId)); } catch (_) {}
+        // Lịch sử QC tối thiểu để tra soát khi cần (không dùng để quyết định reward - đã quyết ở trên).
+        // Ghi "cố gắng tốt nhất": nếu bảng ad_events chưa tồn tại trên Supabase, bỏ qua và không ảnh hưởng reward.
+        insertRowSafe('ad_events', {
+            user_id: String(userId), ad_type: adType, status: 'success',
+            ip: requestIp(req), created_at: new Date().toISOString()
+        }).catch(() => {});
 
         res.json({
             success:true,
