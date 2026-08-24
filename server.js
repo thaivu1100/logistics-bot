@@ -1399,35 +1399,46 @@ bot.start(async (ctx) => {
 });
 
 // Xử lý nút "Xác Nhận Bot Kiểm Tra"
+// FIX LỖI "BẤM NÚT KHÔNG THẤY PHẢN HỒI GÌ": trước đây handler này không có try/catch. Nếu có lỗi xảy ra
+// giữa chừng (Supabase timeout, Telegram API lỗi...) thì ctx.answerCbQuery() ở nhánh thành công không bao
+// giờ được gọi -> nút bấm bị kẹt ở trạng thái "đang tải" (vòng xoay loading) trên Telegram cho tới khi hết
+// hạn, giống hệt hiện tượng "bot không phản hồi". Giờ mọi lỗi đều được bắt và LUÔN trả lời (answerCbQuery)
+// để tắt vòng xoay loading, đồng thời báo lỗi rõ ràng cho người dùng.
 bot.on('callback_query', async (ctx) => {
     if (ctx.callbackQuery.data === 'check_groups') {
         const userId = ctx.from.id.toString();
         const userName = ctx.from.first_name || 'User';
-        
-        await ctx.answerCbQuery("🔍 Đang kiểm tra...");
-        
-        const isMember = await checkUserMembership(userId);
-        
-        if (isMember) {
-            const { data: userRecord, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
-            if (userError) {
-                console.error("Lỗi lấy user trong callback:", userError);
-                return ctx.editMessageText("⚠️ Có lỗi xảy ra, vui lòng thử lại sau!");
-            }
 
-            // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
-            await tryFinalizeReferral(userId, true);
-            
-            await ctx.editMessageText(
-                `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
-                {
-                    reply_markup: { 
-                        inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]] 
-                    }
+        try {
+            await ctx.answerCbQuery("🔍 Đang kiểm tra...");
+
+            const isMember = await checkUserMembership(userId);
+
+            if (isMember) {
+                const { data: userRecord, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
+                if (userError) {
+                    console.error("Lỗi lấy user trong callback:", userError);
+                    return ctx.editMessageText("⚠️ Có lỗi xảy ra, vui lòng thử lại sau!").catch(() => {});
                 }
-            );
-        } else {
-            await ctx.answerCbQuery("❌ Bạn vẫn chưa tham gia đủ 2 nhóm! Vui lòng tham gia cả Kênh và Nhóm Chat rồi nhấn lại.");
+
+                // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
+                await tryFinalizeReferral(userId, true);
+
+                await ctx.editMessageText(
+                    `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
+                    {
+                        reply_markup: {
+                            inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]]
+                        }
+                    }
+                );
+            } else {
+                await ctx.answerCbQuery("❌ Bạn vẫn chưa tham gia đủ 2 nhóm! Vui lòng tham gia cả Kênh và Nhóm Chat rồi nhấn lại.");
+            }
+        } catch (err) {
+            console.error("Lỗi xử lý callback check_groups:", err);
+            // Luôn cố gắng tắt vòng xoay loading trên nút, kể cả khi answerCbQuery ở trên đã lỡ chưa chạy tới
+            await ctx.answerCbQuery("⚠️ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây.").catch(() => {});
         }
     }
 });
@@ -1735,22 +1746,70 @@ bot.command('reset', async (ctx) => {
     else ctx.reply(`❌ Lỗi khi reset dữ liệu user ${targetId}.`);
 });
 
-// /resetall - Reset TOÀN BỘ dữ liệu của TẤT CẢ user về 0
+// /resetall - Reset TOÀN BỘ dữ liệu bot về trạng thái ban đầu. CHỈ Admin CHÍNH (ADMIN_ID) được dùng,
+// Admin phụ KHÔNG được dùng lệnh này (dùng isMainAdmin thay vì isAdmin). Vì đây là thao tác PHÁ HUỶ
+// KHÔNG THỂ HOÀN TÁC (xoá sạch dữ liệu mọi user), bắt buộc phải xác nhận lại bằng /confirmreset trong
+// vòng RESETALL_CONFIRM_TTL_MS trước khi thực sự thực thi, tránh trường hợp admin gõ nhầm lệnh.
+const pendingResetAllConfirm = new Map(); // adminId -> mốc thời gian hết hạn xác nhận
+const RESETALL_CONFIRM_TTL_MS = 60 * 1000;
 bot.command('resetall', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const { known: resetRow } = await splitUserFields({
-        ...fullResetFields(),
-        walletUpdatedAt: new Date().toISOString()
-    });
-    const { error } = await supabase.from('users').update(resetRow).not('id', 'is', null);
-    if (error) {
-        console.error("Lỗi /resetall:", error);
-        return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
+    if (!isMainAdmin(ctx)) return;
+    pendingResetAllConfirm.set(String(ctx.from.id), Date.now() + RESETALL_CONFIRM_TTL_MS);
+    ctx.reply("⚠️ Xác nhận reset toàn bộ dữ liệu? Gõ /confirmreset để tiếp tục.");
+});
+
+// /confirmreset - Bước xác nhận bắt buộc của /resetall. Chỉ thực thi nếu ĐÚNG Admin chính vừa gõ
+// /resetall trước đó và còn trong thời hạn xác nhận, nếu không sẽ không làm gì cả (an toàn).
+bot.command('confirmreset', async (ctx) => {
+    if (!isMainAdmin(ctx)) return;
+    const adminId = String(ctx.from.id);
+    const expireAt = pendingResetAllConfirm.get(adminId);
+    pendingResetAllConfirm.delete(adminId);
+    if (!expireAt || Date.now() > expireAt) {
+        return ctx.reply("⚠️ Chưa có yêu cầu /resetall nào đang chờ xác nhận (hoặc đã hết hạn 60s). Vui lòng gõ /resetall trước.");
     }
-    await clearUserExtra(null); // Xoá luôn phần dữ liệu đang lưu tạm ngoài bảng users
-    await saveWeeklyAdsCounts({}); // Reset cả BXH Xem QC tuần cho khớp ý nghĩa "reset toàn bộ"
-    await resetGiftcodeRedemptions(null); // Cho phép TẤT CẢ user nhập lại các code đã nhập trước khi reset
-    ctx.reply(`✅ Đã reset toàn bộ dữ liệu của TẤT CẢ user về 0 (kể cả lịch sử nhập code).`);
+
+    try {
+        // 1) Users: coin/đơn hàng/lượt mở rương/level xe/nhiệm vụ/QC/ref... về 0, và MỞ BAN toàn bộ user
+        // (yêu cầu "Danh sách ban" cũng phải được reset về trạng thái ban đầu).
+        const { known: resetRow } = await splitUserFields({
+            ...fullResetFields(),
+            isBanned: false,
+            walletUpdatedAt: new Date().toISOString()
+        });
+        const { error } = await supabase.from('users').update(resetRow).not('id', 'is', null);
+        if (error) {
+            console.error("Lỗi /confirmreset:", error);
+            return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
+        }
+
+        // 2) Dữ liệu phụ ngoài bảng users (app_settings: user_extra_state) - gồm cả Anti-fraud/Session per-user
+        await clearUserExtra(null);
+
+        // 3) BXH Xem QC tuần
+        await saveWeeklyAdsCounts({});
+
+        // 4) Lịch sử nhập Giftcode (đồng thời hoàn trả lượt dùng cho từng code)
+        await resetGiftcodeRedemptions(null);
+
+        // 5) Giftcode: xoá sạch các mã đã tạo (KHÔNG xoá cấu trúc bảng, chỉ xoá dữ liệu)
+        const { error: gcError } = await supabase.from('giftcodes').delete().not('code', 'is', null);
+        if (gcError) console.error('Lỗi xoá bảng giftcodes khi /confirmreset:', gcError.message);
+
+        // 6) Lịch sử rút tiền
+        const { error: wdError } = await supabase.from('withdrawals').delete().not('id', 'is', null);
+        if (wdError) console.error('Lỗi xoá bảng withdrawals khi /confirmreset:', wdError.message);
+
+        // 7) Anti-fraud: xoá index thiết bị dùng chung + cache liên quan trong bộ nhớ
+        const { error: afError } = await supabase.from('app_settings').delete().eq('key', antiFraudDeviceIndexKey);
+        if (afError) console.error('Lỗi xoá anti_fraud_device_index khi /confirmreset:', afError.message);
+        antiFraudDeviceIndexCache = {};
+
+        ctx.reply("✅ Đã reset toàn bộ dữ liệu bot về 0.");
+    } catch (e) {
+        console.error("Lỗi /confirmreset:", e);
+        ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + e.message);
+    }
 });
 
 // /deleteuser
@@ -3122,6 +3181,106 @@ app.post('/api/chest/open', async (req,res) => {
         const userId = String(req.body?.userId || '');
         const eventId = String(req.body?.eventId || '');
         chestProcessing.delete(`${userId}:${eventId}`);
+    }
+});
+
+// ==================== NÂNG CẤP XE (SAU KHI XEM REWARDED AD) ====================
+// FIX LỖI "NÂNG CẤP XE BÁO THÀNH CÔNG NHƯNG KHÔNG TRỪ COIN / KHÔNG TĂNG LEVEL": trước đây việc nâng cấp
+// (trừ coin + tăng truckLevel) được xử lý HOÀN TOÀN Ở CLIENT trong index.txt, rồi mới gọi saveState() để
+// đồng bộ toàn bộ trạng thái lên server. Nếu request đồng bộ đó bị lỗi mạng/timeout, hoặc bị server coi là
+// "cũ hơn" một lần đồng bộ khác đang chạy song song (cơ chế chống admin bị ghi đè ở /api/user/:id), thay
+// đổi coin/level bị ÂM THẦM loại bỏ (client tự rollback lại giá trị cũ) dù thông báo "Nâng cấp thành công"
+// đã hiển thị trước đó rồi -> tải lại app thấy vẫn ở level cũ, đúng hiện tượng lỗi được báo cáo.
+// Cách fix: toàn bộ việc nâng cấp giờ xử lý HOÀN TOÀN Ở SERVER trong 1 lệnh update Supabase có điều kiện
+// (optimistic lock/CAS trên đúng coins+truckLevel vừa đọc), CHỈ trả "success" cho client sau khi ĐÃ trừ đủ
+// coin VÀ đã tăng truckLevel thành công trong DB. Nếu update lỗi -> không mất coin, không báo thành công.
+// adToken tái sử dụng đúng cơ chế "1 lượt QC = dùng được đúng 1 lần" đã có sẵn (completedAdEvents) để chống
+// bấm nâng cấp nhiều lần / gửi trùng request cho cùng 1 lượt xem quảng cáo.
+const truckUpgradeProcessing = new Set();
+app.post('/api/truck/upgrade', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({ success: false, error: 'Telegram session không hợp lệ.' });
+    const adToken = String(req.body?.adToken || '');
+    if (!userId || !adToken) return res.status(400).json({ success: false, error: 'Thiếu userId/adToken.' });
+
+    // Chống bấm nâng cấp nhiều lần liên tiếp / gửi trùng request khi 1 request trước đó của CÙNG user
+    // còn đang xử lý (race condition giữa 2 request đồng thời).
+    if (truckUpgradeProcessing.has(userId)) {
+        return res.status(409).json({ success: false, retry: true, error: 'Yêu cầu nâng cấp đang được xử lý.' });
+    }
+    truckUpgradeProcessing.add(userId);
+    try {
+        // 1 lượt QC (token) chỉ được dùng ĐÚNG 1 LẦN, cho ĐÚNG user đã xem -> chống xem QC xong gửi trùng
+        // request nâng cấp, hoặc dùng token của lượt QC khác.
+        const event = completedAdEvents.get(adToken);
+        if (!event || event.used || event.userId !== userId) {
+            return res.status(400).json({ success: false, error: 'Lượt quảng cáo hợp lệ không tồn tại hoặc đã sử dụng.' });
+        }
+        const fraudGate = await antiFraudRewardGate(userId);
+        if (!fraudGate.allowed) return res.status(fraudGate.status).json({ success: false, ...fraudGate, verificationRequired: true });
+        event.used = true; // Đánh dấu dùng NGAY để token này không thể tái sử dụng lần nữa dù bước dưới lỗi
+
+        // CAS loop: đọc coins/truckLevel MỚI NHẤT, tính giá theo ĐÚNG level hiện tại, rồi update có điều
+        // kiện (chỉ thành công nếu coins/truckLevel trên DB CHƯA bị đổi bởi request khác kể từ lúc đọc),
+        // tránh 2 request nâng cấp/admin sửa ví chạy song song làm mất coin hoặc lên sai level.
+        const MAX_RETRIES = 6;
+        let result = null;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const { data: current, error: readError } = await readUserRow(userId);
+            if (readError || !current) { result = { error: readError || new Error('Không tìm thấy user.') }; break; }
+            if (current.isBanned) { result = { error: new Error('Tài khoản đã bị khóa.'), isBanned: true }; break; }
+
+            const level = Number(current.truckLevel || 1);
+            if (level >= MAX_TRUCK_LEVEL) { result = { error: new Error('Xe đã đạt cấp tối đa.'), maxed: true }; break; }
+
+            const cost = calculateLevelStats(level).upgradeCost;
+            const coins = Number(current.coins || 0);
+            if (coins < cost) { result = { error: new Error('Không đủ Coin để nâng cấp xe.'), insufficientCoins: true }; break; }
+
+            const { data: updated, error: updateError } = await supabase.from('users')
+                .update({ coins: coins - cost, truckLevel: level + 1, walletUpdatedAt: new Date().toISOString() })
+                .eq('id', userId)
+                .eq('coins', coins)
+                .eq('truckLevel', level)
+                .select('id,coins,truckLevel,walletUpdatedAt');
+
+            if (updateError) { result = { error: updateError }; break; }
+            if (updated && updated.length > 0) {
+                result = { error: null, data: updated[0], cost, previousLevel: level };
+                break;
+            }
+            // updated.length === 0 -> dữ liệu vừa bị request khác đổi giữa lúc đọc và lúc update -> thử lại vòng sau
+        }
+
+        if (!result) {
+            return res.status(409).json({ success: false, retry: true, error: 'Ví vừa thay đổi đồng thời, vui lòng thử lại.' });
+        }
+        if (result.error) {
+            const status = result.isBanned ? 403 : (result.maxed || result.insufficientCoins ? 400 : 500);
+            return res.status(status).json({
+                success: false,
+                error: result.error.message,
+                maxed: !!result.maxed,
+                insufficientCoins: !!result.insufficientCoins,
+                isBanned: !!result.isBanned
+            });
+        }
+
+        logTransaction(userId, 'coin', -result.cost, `Nâng cấp xe lên cấp ${result.data.truckLevel}`);
+        const levelStats = calculateLevelStats(result.data.truckLevel);
+        return res.json({
+            success: true,
+            truckLevel: result.data.truckLevel,
+            coins: result.data.coins,
+            upgradeCost: result.cost,
+            levelStats,
+            walletUpdatedAt: result.data.walletUpdatedAt
+        });
+    } catch (e) {
+        console.error('Lỗi nâng cấp xe server:', e);
+        res.status(500).json({ success: false, error: e.message });
+    } finally {
+        truckUpgradeProcessing.delete(userId);
     }
 });
 
