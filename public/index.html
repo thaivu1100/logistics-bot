@@ -765,6 +765,39 @@
                         <button x-show="allTasksDone" @click="claimAllTasksReward()" class="cta-shine mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase" x-text="texts.claim"></button>
                     </div>
                 </div>
+                <!-- NHIỆM VỤ THAM GIA NHÓM: KHÁC dailyTasks - chỉ nhận đúng 1 LẦN trong toàn bộ vòng đời
+                     tài khoản, KHÔNG reset mỗi ngày. Server luôn tự kiểm tra membership qua Telegram Bot API
+                     trước khi cộng thưởng, không tin bất kỳ trạng thái nào từ client. -->
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
+                        <span>👥</span> <span x-text="texts.groupTaskTitle"></span>
+                    </h3>
+                    <div class="task-card flex items-center justify-between p-2.5 bg-slate-800/40 rounded-2xl border border-white/5"
+                         :class="{ 'task-done': groupTaskClaimed }">
+                        <div class="flex items-center space-x-2.5 flex-1 min-w-0">
+                            <div class="task-icon-wrap" :class="groupTaskClaimed ? 'icon-done' : ''">
+                                <span class="text-base" x-text="groupTaskClaimed ? '✅' : '👥'"></span>
+                            </div>
+                            <div class="text-left flex-1 min-w-0">
+                                <p class="text-xs font-black flex items-center gap-1 flex-wrap">
+                                    <span x-text="texts.groupTaskName"></span>
+                                    <span class="task-once-badge" x-text="texts.onceOnly"></span>
+                                </p>
+                                <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
+                                    <span>+500 💰</span>
+                                    <span>+500 📦</span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="flex-shrink-0 pl-2">
+                            <span x-show="groupTaskClaimed" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
+                            <div x-show="!groupTaskClaimed" class="flex flex-col items-end gap-1">
+                                <a href="https://t.me/sharekeotonghop" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
+                                <button @click="claimGroupTask()" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.groupTaskCheckBtn"></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
                         <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.watchAdRewardTitle"></h3>
@@ -1149,12 +1182,34 @@
         const SMARTLINKS = [...new Set([...SMARTLINKS_BASE, ...SMARTLINK_ADDED])];
 
         // ===== QUẢNG CÁO NỀN: CHỈ 4 LOẠI THỤ ĐỘNG =====
-        const PASSIVE_AD_COOLDOWN = 3 * 60 * 1000;
+        // GIẢM TẦN SUẤT: các quảng cáo THỤ ĐỘNG này (KHÁC Rewarded Interstitial Giao Hàng và KHÁC tính năng
+        // SmartLink có thưởng/tracking riêng ở trong app) trước đây cooldown cố định 3 phút và có thể tự
+        // hiện bất cứ lúc nào kể cả khi người dùng đang thao tác quan trọng. Nay: (1) cooldown ngẫu nhiên
+        // 3-5 phút mỗi lần thay vì cố định 3 phút, (2) KHÔNG hiện khi đang xem Rewarded Interstitial, đang
+        // mở Quiz/Hộp Coin, hoặc đang ở tab Rương/Rút tiền/Giftcode (những lúc người dùng đang thao tác
+        // quan trọng). Không đổi 4 loại quảng cáo, cách chọn ngẫu nhiên giữa chúng, hay bất kỳ logic Rewarded
+        // Interstitial Giao Hàng / SmartLink nào khác.
+        function nextPassiveAdCooldown() {
+            return (3 + Math.random() * 2) * 60 * 1000; // Ngẫu nhiên 3-5 phút
+        }
+        function isCriticalActionActive() {
+            try {
+                const data = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
+                if (!data) return false;
+                if (data._rewardedRunning) return true; // Đang xem Rewarded Interstitial / xử lý reward QC
+                if (data.quizModalShow || data.showCoinBoxModal) return true; // Đang mở Quiz / Hộp Coin
+                if (['chest', 'withdraw', 'giftcode'].includes(data.tab)) return true; // Đang ở tab quan trọng
+                return false;
+            } catch (e) { return false; }
+        }
+        let passiveAdCooldown = nextPassiveAdCooldown();
         let passiveAdLastShown = 0;
         function showPassiveAdRandom() {
             const now = Date.now();
-            if (now - passiveAdLastShown < PASSIVE_AD_COOLDOWN) return;
+            if (now - passiveAdLastShown < passiveAdCooldown) return;
+            if (isCriticalActionActive()) return; // Hoãn lại, không tiêu hao cooldown - thử lại ở lần trigger sau
             passiveAdLastShown = now;
+            passiveAdCooldown = nextPassiveAdCooldown();
             const type = ['popunder','smartlink','banner','socialbar'][Math.floor(Math.random()*4)];
             try {
                 if (type === 'popunder') {
@@ -1198,6 +1253,7 @@
                 history: 'Lịch sử mở rương', noHistory: 'Chưa có lượt nào',
                 tasksTitle: '📋 Nhiệm vụ', dailyTasks: 'Nhiệm vụ hằng ngày', claimed: '✅ Đã nhận',
                 claim: 'Nhận', monitoring: 'Đang theo dõi...', doNow: 'Làm ngay', completeAll: 'Hoàn thành tất cả', onceOnly: 'MỘT LẦN',
+                groupTaskTitle: '👥 Nhiệm vụ đặc biệt', groupTaskName: '👥 Tham gia nhóm', groupTaskJoinBtn: 'Tham gia nhóm', groupTaskCheckBtn: '✅ Kiểm tra tham gia',
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
@@ -1250,6 +1306,7 @@
                 history: 'Chest history', noHistory: 'No history yet',
                 tasksTitle: '📋 Tasks', dailyTasks: 'Daily tasks', claimed: '✅ Claimed',
                 claim: 'Claim', monitoring: 'Monitoring...', doNow: 'Do now', completeAll: 'Complete all', onceOnly: 'ONE-TIME',
+                groupTaskTitle: '👥 Special task', groupTaskName: '👥 Join group', groupTaskJoinBtn: 'Join group', groupTaskCheckBtn: '✅ Check membership',
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
@@ -1346,6 +1403,7 @@
                     { id: 'smartlink30', name: '🔗 SmartLink 30 lần · mỗi lần 🪙50 + 📦25', icon: '🔗', reward: 0, rewardOrders: 0, rewardSpins: 0, done: false, claimable: false },
                 ],
                 allTasksClaimed: false, deliveryCount: 0, smartlinkCount: 0, lastSmartlinkTime: 0,
+                groupTaskClaimed: false, // Nhiệm vụ "Tham gia nhóm" - 1 lần duy nhất, không reset theo ngày
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
@@ -1611,6 +1669,7 @@
                                 });
                             }
                             this.allTasksClaimed = data.allTasksClaimed || false;
+                            this.groupTaskClaimed = !!data.groupTaskClaimed;
                             this.deliveryCount = data.deliveryCount || 0;
                             this.chestOpensTotal = data.chestOpensTotal || 0;
                             this.chestOpensToday = data.chestOpensToday || 0;
@@ -2188,7 +2247,10 @@
                     if (this.currentProducts > this.maxProducts) this.currentProducts = this.maxProducts;
                 },
                 scheduleCoinBox() {
-                    const delay = 30000 + Math.random() * 90000; // Random between 30s and 120s
+                    // Hộp Coin xuất hiện ở một thời điểm NGẪU NHIÊN trong vòng 30 phút kể từ khi chu kỳ mới
+                    // bắt đầu (0 - 30 phút), thay vì khoảng 30-120 giây quá ngắn/dễ đoán như trước. Không đổi
+                    // thời gian hiển thị (60 giây), vị trí ngẫu nhiên, phần thưởng/xác suất hay luồng xem QC.
+                    const delay = Math.random() * 30 * 60 * 1000; // Random trong khoảng 0-30 phút
                     setTimeout(() => {
                         if (!this.coinBoxVisible) {
                             this.coinBoxX = 10 + Math.random() * 70; // Random X position
@@ -2476,6 +2538,36 @@
                     } catch (e) {
                         console.error('Claim task:',e);
                         this.showNotification('❌ Lỗi kết nối server khi nhận nhiệm vụ.');
+                    }
+                },
+                // Nhiệm vụ "Tham gia nhóm" - KHÁC dailyTasks (không reset theo ngày, chỉ nhận đúng 1 lần
+                // trong toàn bộ vòng đời tài khoản). Server tự kiểm tra membership qua Telegram Bot API,
+                // KHÔNG tin trạng thái client - bấm nút này chỉ để yêu cầu server kiểm tra lại.
+                async claimGroupTask() {
+                    if (this.groupTaskClaimed) return;
+                    try {
+                        const res = await fetch(`${API_URL}/api/task/group/claim`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id})
+                        });
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success) {
+                            if (result.error === 'not_member') {
+                                this.showNotification('❌ Bạn chưa tham gia nhóm. Vui lòng tham gia nhóm rồi bấm kiểm tra lại.');
+                            } else {
+                                this.showNotification('❌ Chưa đủ điều kiện hoặc có lỗi xảy ra, vui lòng thử lại.');
+                            }
+                            return;
+                        }
+                        this.groupTaskClaimed = true;
+                        if (typeof result.coins === 'number') this.coins = result.coins;
+                        if (typeof result.orders === 'number') this.orders = result.orders;
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                        if (!result.alreadyClaimed) this.showNotification('✅ Xác nhận tham gia thành công! +500 💰 +500 📦');
+                        this.saveState();
+                    } catch (e) {
+                        console.error('Claim group task:', e);
+                        this.showNotification('❌ Lỗi kết nối server khi kiểm tra tham gia nhóm.');
                     }
                 },
                 // Xử lý dùng chung khi user quay lại app sau khi mở SmartLink (gọi từ visibilitychange, focus,
