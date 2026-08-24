@@ -2276,13 +2276,23 @@
                         this.showNotification('⚠️ Bạn đã xem đủ QC hôm nay (tối đa ' + this.spinAdLimit + ')');
                         return;
                     }
-                    const grantSpin = () => {
-                        this.spinAdCount++;
-                        this.spinFree++;
+                    // FIX LỖI "RƯƠNG KHÔNG NHẬN LƯỢT DÙ ĐÃ BÁO +1": trước đây hàm này tự cộng
+                    // this.spinFree++ Ở CLIENT rồi mới gửi lên qua saveState() snapshot chung. Nhưng chính
+                    // request xem QC vừa rồi (/api/ad/session/complete) cũng làm mới walletUpdatedAt trên
+                    // Supabase, nên lần saveState() kế tiếp bị cơ chế chống ghi đè ví (walletOverridden) coi
+                    // là "dữ liệu cũ" và ÂM THẦM LOẠI BỎ spins client gửi lên, đồng thời đồng bộ spinFree về
+                    // lại giá trị thật (chưa được cộng) trong Supabase -> đúng hiện tượng "báo +1 nhưng vào
+                    // Rương vẫn = 0". Nay purpose 'chest-spin' được xử lý và cộng +1 TRỰC TIẾP ở server ngay
+                    // trong /api/ad/session/complete (cùng 1 lần ghi Supabase atomic), và client chỉ hiển
+                    // thị đúng số liệu server trả về - không tự cộng số liệu ví ở client nữa.
+                    const grantSpin = (result = {}) => {
+                        if (typeof result.spins === 'number') this.spinFree = result.spins;
+                        if (typeof result.spinAdCount === 'number') this.spinAdCount = result.spinAdCount;
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         this.showNotification('📺 +1 Lượt Mở Rương!');
                         this.saveState();
                     };
-                    this.playRewardedAd(grantSpin);
+                    this.playRewardedAd(grantSpin, 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', 'chest-spin');
                 },
                 buyChestWithOrders() {
                     if (this.orders < 500) {
