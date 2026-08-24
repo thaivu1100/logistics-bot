@@ -2388,6 +2388,9 @@ async function weeklyLeaderboardReset() {
                 for (let i = 0; i < topUsers.length; i++) {
                     const u = topUsers[i], prize = WEEKLY_TOP_REWARDS[i];
                     if (!prize) break;
+                    // Top 1-3 chỉ nhận thưởng BXH Mời Bạn tuần khi có >= 5 ref hợp lệ trong tuần đó.
+                    // Không đủ 5 ref hợp lệ -> vẫn đứng hạng trên BXH nhưng KHÔNG được trao thưởng.
+                    if (Number(u.weeklyValidInvites || 0) < 5) continue;
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
                     await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
                     logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
@@ -2425,6 +2428,9 @@ async function weeklyLeaderboardReset() {
                 for (let i = 0; i < topAds.length; i++) {
                     const u = topAds[i], prize = WEEKLY_TOP_REWARDS[i];
                     if (!prize) break;
+                    // Top 1-3 chỉ nhận thưởng BXH Xem QC tuần khi có >= 20 QC hợp lệ trong tuần đó.
+                    // Không đủ 20 QC -> vẫn đứng hạng trên BXH nhưng KHÔNG được trao thưởng.
+                    if (Number(u.weeklyAdsCount || 0) < 20) continue;
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
                     await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
                     logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH Xem QC tuần`);
@@ -3647,25 +3653,9 @@ app.post('/api/withdraw', async (req, res) => {
     }
 
     // FIRST-WITHDRAW PROTECTION: account must be at least 24 hours old by server time.
-    const { count: priorWithdrawalCount, error: priorWithdrawalError } = await supabase
-        .from('withdrawals').select('*', { count: 'exact', head: true }).eq('userId', userId);
-    if (priorWithdrawalError) console.error('Lỗi kiểm tra lịch sử rút:', priorWithdrawalError.message);
-    if ((priorWithdrawalCount || 0) === 0) {
-        let accountCreatedMs = 0;
-        if (userData.accountCreatedAt) accountCreatedMs = new Date(userData.accountCreatedAt).getTime();
-        if (!accountCreatedMs && userData.joinDate) {
-            const m = String(userData.joinDate).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            if (m) accountCreatedMs = new Date(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T00:00:00+07:00`).getTime();
-        }
-        if (!Number.isFinite(accountCreatedMs) || accountCreatedMs <= 0) {
-            return res.status(400).json({ error: 'Chưa xác định được tuổi tài khoản. Vui lòng mở lại Mini App và thử lại sau.' });
-        }
-        if (Date.now() - accountCreatedMs < 24 * 60 * 60 * 1000) {
-            const remainMs = 24 * 60 * 60 * 1000 - (Date.now() - accountCreatedMs);
-            const remainHours = Math.ceil(remainMs / (60 * 60 * 1000));
-            return res.status(400).json({ error: `Lần rút đầu tiên chỉ được thực hiện sau khi tài khoản đủ 24 giờ. Còn khoảng ${remainHours} giờ.` });
-        }
-    }
+    // (Điều kiện tuổi tài khoản >= 24 giờ cho lần rút đầu tiên đã được YÊU CẦU GỠ BỎ - xem log commit.
+    // Các điều kiện rút tiền khác bên dưới (đơn hàng, QC, SmartLink, giới hạn/ngày, anti-fraud...) giữ nguyên.)
+    
     // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận.
     // Yêu cầu: ≥50.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥20 SmartLink hôm nay.
     const adsTodayCount = Number(userData.adsToday || 0);
