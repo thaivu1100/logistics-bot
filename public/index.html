@@ -2119,8 +2119,28 @@
                         this.showNotification('✅ Đã sẵn sàng, không cần tăng tốc!');
                         return;
                     }
+                    // FIX LỖI "X2 THỈNH THOẢNG KHÔNG GIẢM THỜI GIAN / ĐÔI KHI VỀ 0": trước đây "remaining"
+                    // chỉ được tính 1 LẦN ở đây (trước khi xem QC) rồi applyBoost() dùng lại giá trị CŨ đó
+                    // sau khi QC xong (QC tối thiểu 5 giây, có thể lâu hơn nhiều). Nếu trong lúc xem QC mẻ
+                    // hàng đã tự sản xuất xong (produceLoop hoàn thành mẻ CŨ, chuyển sang mẻ MỚI với
+                    // lastProducedAt/productionInterval khác), applyBoost() vẫn đem trừ remaining/2 của mẻ
+                    // CŨ ra khỏi lastProducedAt của mẻ MỚI -> đẩy lastProducedAt lùi quá xa, khiến thời gian
+                    // còn lại của mẻ MỚI bị tính sai (có thể về 0/âm, coi như xong ngay). Cách sửa: tính lại
+                    // remaining NGAY LÚC ÁP DỤNG (bên trong applyBoost, dùng lastProducedAt/productionInterval
+                    // MỚI NHẤT tại thời điểm đó), và bỏ qua việc áp dụng nếu mẻ hàng đã đầy hoặc đã được
+                    // đánh dấu dùng X2 trong lúc xem quảng cáo, tránh trừ nhầm thời gian của mẻ khác.
                     const applyBoost = () => {
-                        this.lastProducedAt -= Math.floor(remaining / 2);
+                        if (this.currentProducts >= this.maxProducts || this.speedUpUsed) {
+                            this.showNotification('✅ Mẻ hàng đã sẵn sàng trong lúc bạn xem quảng cáo, không cần tăng tốc nữa!');
+                            this.saveState();
+                            return;
+                        }
+                        const remainingNow = this.productionInterval - (Date.now() - this.lastProducedAt);
+                        if (remainingNow <= 0) {
+                            this.saveState();
+                            return;
+                        }
+                        this.lastProducedAt -= Math.floor(remainingNow / 2);
                         this.speedUpUsed = true; // Đánh dấu đã dùng cho mẻ hàng hiện tại
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
                         this.saveState();
@@ -3561,6 +3581,18 @@
                             this.currentProducts = w.currentProducts ?? this.currentProducts;
                             this.lastProducedAt = w.lastProducedAt ?? this.lastProducedAt;
                             this.productionInterval = w.productionInterval ?? this.productionInterval;
+                            this.maxProducts = w.maxProducts ?? this.maxProducts;
+                            this.productionAmount = w.productionAmount ?? this.productionAmount;
+                            // FIX LỖI "XEM QC X2 THÀNH CÔNG NHƯNG THỜI GIAN KHÔNG GIẢM, RỒI BỊ KHOÁ KHÔNG
+                            // DÙNG X2 LẠI ĐƯỢC": trước đây nhánh walletOverridden (server phát hiện dữ liệu
+                            // client cũ hơn DB, thường xảy ra khi vừa bấm X2 xong) đồng bộ lại
+                            // lastProducedAt/productionInterval từ server nhưng LẠI QUÊN đồng bộ speedUpUsed
+                            // theo cùng lúc -> client vẫn giữ speedUpUsed=true (đặt lúc bấm X2) trong khi
+                            // lastProducedAt/productionInterval bị hoàn tác về giá trị CŨ (chưa giảm), khiến
+                            // người dùng thấy "xem QC xong nhưng thời gian không đổi" và không bấm X2 lại
+                            // được nữa cho mẻ đó. Đồng bộ speedUpUsed cùng lúc, giống hệt cách syncLatestUser()
+                            // đã làm, để trạng thái X2 luôn khớp với thời gian sản xuất thực tế trên server.
+                            this.speedUpUsed = w.speedUpUsed ?? this.speedUpUsed;
                             this.adsToday = w.adsToday ?? this.adsToday;
                             this.smartlinksToday = w.smartlinksToday ?? this.smartlinksToday;
                             this.smartlinkCount = w.smartlinkCount ?? this.smartlinkCount;
