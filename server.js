@@ -3432,6 +3432,109 @@ app.post('/api/truck/upgrade', async (req, res) => {
     }
 });
 
+// ==================== TĂNG TỐC X2 SẢN XUẤT (XEM QC GIẢM 1/2 THỜI GIAN CHỜ) ====================
+// FIX TRIỆT ĐỂ LỖI X2: trước đây kết quả X2 chỉ được TÍNH VÀ LƯU HOÀN TOÀN Ở CLIENT (trong index.txt),
+// rồi được gửi lên server qua route đồng bộ chung "/api/user/:id" giống mọi field giao diện khác ->
+// KHÔNG có 1 nguồn sự thật (source of truth) atomic cho riêng hành động X2 trên server, nên mới xảy ra:
+// bấm X2 xong báo "đã giảm 1/2 thời gian" nhưng đồng hồ thực tế không giảm (do 1 lần saveState() khác
+// đang chạy gửi snapshot CŨ ghi đè ngay sau đó, hoặc do 2 request X2/2 tab chạy song song), hoặc
+// speedUpUsed=true trong khi lastProducedAt/productionInterval vẫn là giá trị trước X2 (2 field vốn được
+// client set ở 2 dòng riêng biệt, không cùng 1 giao dịch). Nay chuyển hẳn việc ÁP DỤNG X2 sang 1 API
+// riêng dưới đây, atomic, dùng ĐÚNG cơ chế khoá + xác minh adToken đã có sẵn cho "/api/truck/upgrade":
+//  - Khoá theo userId (speedupProcessing) để 2 request X2 chạy song song / double click chỉ 1 cái được xử lý.
+//  - Bắt buộc đúng 1 adToken hợp lệ, CHƯA dùng, từ /api/ad/session/complete (completedAdEvents) -> 1 lượt
+//    xem QC chỉ áp dụng X2 được đúng 1 lần, không thể replay/gửi trùng request để X2 lần 2.
+//  - Đọc currentProducts/maxProducts/lastProducedAt/productionInterval/speedUpUsed MỚI NHẤT trực tiếp từ
+//    Supabase (readUserRow) NGAY TẠI THỜI ĐIỂM XỬ LÝ - không tin bất kỳ giá trị nào client gửi lên - rồi
+//    tính remainingReal bằng thời gian THỰC vừa trôi qua (kể cả thời gian xem QC), không dùng lại snapshot
+//    "remaining" cũ mà client tính trước khi xem QC.
+//  - Ghi speedUpUsed=true CÙNG LÚC với lastProducedAt/productionInterval trong đúng 1 lần gọi
+//    saveUserFields() (1 giao dịch), nên không bao giờ có tình huống speedUpUsed=true nhưng thời gian
+//    chưa giảm, hay ngược lại. walletUpdatedAt cũng được làm mới trong lần ghi này nên cơ chế
+//    walletOverridden của "/api/user/:id" (đã có sẵn WALLET_FIELDS gồm cả speedUpUsed) sẽ tự động chặn
+//    mọi snapshot cũ hơn (kể cả saveState() đang chạy song song) ghi đè lại kết quả X2 vừa lưu.
+// Client (index.txt) CHỈ được cập nhật đồng hồ + hiển thị "X2 thành công" SAU KHI nhận success=true từ
+// đúng API này, không còn tự tính/tự trừ thời gian ở phía client nữa.
+const speedupProcessing = new Set();
+app.post('/api/production/speedup', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({ success: false, error: 'Telegram session không hợp lệ.' });
+    const adToken = String(req.body?.adToken || '');
+    if (!userId || !adToken) return res.status(400).json({ success: false, error: 'Thiếu userId/adToken.' });
+
+    // Chống double click / 2 request X2 chạy song song cho CÙNG 1 user (race condition).
+    if (speedupProcessing.has(userId)) {
+        return res.status(409).json({ success: false, retry: true, error: 'Yêu cầu Tăng Tốc X2 đang được xử lý.' });
+    }
+    speedupProcessing.add(userId);
+    try {
+        // 1 lượt QC (token) chỉ được dùng ĐÚNG 1 LẦN, cho ĐÚNG user đã xem -> chống gửi trùng request X2
+        // hoặc tái sử dụng token của lượt QC khác/cũ.
+        const event = completedAdEvents.get(adToken);
+        if (!event || event.used || event.userId !== userId) {
+            return res.status(400).json({ success: false, error: 'Lượt quảng cáo hợp lệ không tồn tại hoặc đã sử dụng.' });
+        }
+        const fraudGate = await antiFraudRewardGate(userId);
+        if (!fraudGate.allowed) return res.status(fraudGate.status).json({ success: false, ...fraudGate, verificationRequired: true });
+        event.used = true; // Đánh dấu dùng NGAY để token này không thể tái sử dụng lần nữa dù bước dưới lỗi
+
+        const { data: current, error: readError } = await readUserRow(userId);
+        if (readError || !current) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
+        if (current.isBanned) return res.status(403).json({ success: false, isBanned: true, error: 'Tài khoản đã bị khóa.' });
+
+        // Trạng thái mẻ hàng THẬT SỰ đang lưu trên Supabase - nguồn sự thật duy nhất cho X2.
+        const currentProducts = Number(current.currentProducts || 0);
+        const maxProducts = Number(current.maxProducts || 0);
+        const productionInterval = Number(current.productionInterval || 0);
+        const lastProducedAt = Number(current.lastProducedAt || Date.now());
+        const speedUpUsed = !!current.speedUpUsed;
+
+        if (maxProducts > 0 && currentProducts >= maxProducts) {
+            return res.status(400).json({ success: false, alreadyReady: true, error: 'Mẻ hàng đã sẵn sàng, không cần tăng tốc.' });
+        }
+        if (speedUpUsed) {
+            return res.status(400).json({ success: false, alreadyUsed: true, error: 'Mẻ hàng này đã dùng Tăng Tốc X2 rồi.' });
+        }
+
+        // Tính thời gian còn lại BẰNG THỜI GIAN THỰC ngay tại thời điểm xử lý (sau khi đã xem xong quảng
+        // cáo) - không dùng lại giá trị "remaining" mà client từng tính trước khi xem quảng cáo.
+        const now = Date.now();
+        const remainingReal = productionInterval - (now - lastProducedAt);
+        if (remainingReal <= 0) {
+            // Mẻ hàng đã tự sản xuất xong trong lúc xem quảng cáo -> không còn gì để tăng tốc.
+            return res.status(400).json({ success: false, alreadyReady: true, error: 'Mẻ hàng đã sẵn sàng trong lúc bạn xem quảng cáo.' });
+        }
+        const newLastProducedAt = lastProducedAt - Math.floor(remainingReal / 2);
+
+        const { error: saveError } = await saveUserFields(userId, {
+            lastProducedAt: newLastProducedAt,
+            productionInterval,
+            speedUpUsed: true,
+            walletUpdatedAt: new Date().toISOString()
+        });
+        if (saveError) {
+            console.error('Lỗi lưu Tăng Tốc X2:', saveError.message || saveError);
+            return res.status(500).json({ success: false, error: saveError.message || 'Không lưu được kết quả Tăng Tốc X2.' });
+        }
+
+        const { data: fresh } = await readUserRow(userId);
+        res.json({
+            success: true,
+            lastProducedAt: Number(fresh?.lastProducedAt ?? newLastProducedAt),
+            productionInterval: Number(fresh?.productionInterval ?? productionInterval),
+            speedUpUsed: true,
+            currentProducts: Number(fresh?.currentProducts ?? currentProducts),
+            maxProducts: Number(fresh?.maxProducts ?? maxProducts),
+            walletUpdatedAt: fresh?.walletUpdatedAt || null
+        });
+    } catch (e) {
+        console.error('Lỗi Tăng Tốc X2 server:', e);
+        res.status(500).json({ success: false, error: e.message });
+    } finally {
+        speedupProcessing.delete(userId);
+    }
+});
+
 // ==================== GIAO HÀNG: TỐI ĐA 20 LẦN/NGÀY ====================
 const DELIVERY_DAILY_LIMIT = 20;
 const deliveryProcessing = new Set();
