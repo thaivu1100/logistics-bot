@@ -1060,9 +1060,9 @@ async function logTransaction(userId, type, amount, reason) {
 function buildReferralPendingConditionsText(userRow, isMemberNow) {
     const missing = [];
     if (!isMemberNow) missing.push('✅ Tham gia đầy đủ nhóm Telegram bắt buộc');
-    if ((userRow?.lifetimeAdsWatched || 0) < 5) missing.push('✅ Xem ít nhất 5 quảng cáo hợp lệ');
-    if ((userRow?.lifetimeSmartlinks || 0) < 5) missing.push('✅ Hoàn thành ít nhất 5 SmartLink');
-    if ((userRow?.deliveryCountLifetime || 0) < 3) missing.push('✅ Giao hàng ít nhất 3 lần');
+    if ((userRow?.lifetimeAdsWatched || 0) < 3) missing.push('✅ Xem ít nhất 3 quảng cáo hợp lệ');
+    if ((userRow?.lifetimeSmartlinks || 0) < 2) missing.push('✅ Hoàn thành ít nhất 2 SmartLink');
+    if ((userRow?.deliveryCountLifetime || 0) < 1) missing.push('✅ Giao hàng ít nhất 1 lần');
     if (userRow?.isBanned) missing.push('✅ Tài khoản không bị khóa/ban');
     return missing.length > 0
         ? missing.join('\n')
@@ -1071,8 +1071,9 @@ function buildReferralPendingConditionsText(userRow, isMemberNow) {
 
 // Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
 // 1) Người được mời đã tham gia đủ nhóm Telegram bắt buộc
-// 2) Người được mời đã xem tối thiểu 5 quảng cáo (lifetimeAdsWatched >= 5)
+// 2) Người được mời đã xem tối thiểu 3 quảng cáo (lifetimeAdsWatched >= 3)
 // 3) Người được mời đã bấm tối thiểu 2 SmartLink (lifetimeSmartlinks >= 2)
+// 3b) Người được mời đã giao hàng tối thiểu 1 lần (deliveryCountLifetime >= 1)
 // 4) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
 // Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
 // không tin tưởng dữ liệu client gửi lên.
@@ -1086,9 +1087,9 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     const isMember = precomputedIsMember !== null ? precomputedIsMember : await checkUserMembership(userId);
     if (!isMember) return { ok: false, reason: 'not_member' };
 
-    if ((userRecord.lifetimeAdsWatched || 0) < 5) return { ok: false, reason: 'not_enough_ads' };
-    if ((userRecord.lifetimeSmartlinks || 0) < 5) return { ok: false, reason: 'not_enough_smartlinks' };
-    if ((userRecord.deliveryCountLifetime || 0) < 3) return { ok: false, reason: 'not_enough_delivery' };
+    if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
+    if ((userRecord.lifetimeSmartlinks || 0) < 2) return { ok: false, reason: 'not_enough_smartlinks' };
+    if ((userRecord.deliveryCountLifetime || 0) < 1) return { ok: false, reason: 'not_enough_delivery' };
 
     // FIX LỖI "MỜI 1 BẠN NHƯNG BÁO 2 HỢP LỆ" (race condition): hàm này có thể bị gọi gần như đồng thời từ
     // nhiều nơi (bot /start, nút "Xác Nhận" callback_query, và API /api/check-referral gọi mỗi lần user
@@ -1216,6 +1217,12 @@ bot.use(async (ctx, next) => {
 // bình thường để có thể tự /mokhoabot mở lại). Đặt TRƯỚC mọi lệnh/handler khác để chặn sớm nhất.
 bot.use(async (ctx, next) => {
     if (BOT_LOCKED && !isMainAdmin(ctx)) {
+        const chatType = ctx.chat?.type;
+        const isGroupOrChannel = chatType === 'group' || chatType === 'supergroup' || chatType === 'channel';
+        if (isGroupOrChannel) {
+            // Im lặng hoàn toàn trong group/supergroup/channel khi bot bị khoá - không reply, không cảnh báo.
+            return;
+        }
         if (ctx.callbackQuery) {
             await ctx.answerCbQuery(MAINTENANCE_MESSAGE, { show_alert: true }).catch(() => {});
         }
@@ -2646,7 +2653,16 @@ app.get('/api/user/:id', async (req, res) => {
 // phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ, có thể cũ) ghi đè mất thay đổi của admin.
 // Lấy trực tiếp từ fullResetFields() để danh sách này LUÔN khớp với những gì các lệnh reset thực sự đổi,
 // tránh trường hợp thêm field mới vào fullResetFields() mà quên thêm vào đây.
-const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned'])];
+// FIX LỖI "XEM QC TĂNG TỐC X2 THÀNH CÔNG NHƯNG THỜI GIAN KHÔNG GIẢM": 'speedUpUsed' trước đây KHÔNG nằm
+// trong danh sách WALLET_FIELDS (vì fullResetFields() không có field này), nên khi walletOverridden=true
+// (server phát hiện dữ liệu ví trên DB mới hơn mốc client đã đồng bộ), 'lastProducedAt'/'productionInterval'
+// bị loại khỏi bản lưu (đúng, để không mất thay đổi mới hơn) NHƯNG 'speedUpUsed' vẫn được lưu bình thường
+// -> kết quả: speedUpUsed=true được ghi nhận (đã dùng X2) trong khi lastProducedAt/productionInterval bị
+// hoàn tác về giá trị cũ (thời gian KHÔNG giảm) -> user thấy "xem QC xong nhưng thời gian không đổi" và
+// còn bị khoá không cho dùng X2 lần nữa cho mẻ đó. Thêm 'speedUpUsed' vào WALLET_FIELDS để nó LUÔN được
+// hoàn tác/giữ nguyên ĐỒNG BỘ cùng lastProducedAt/productionInterval trong cùng 1 lần ghi đè, đảm bảo
+// trạng thái X2 và thời gian sản xuất không bao giờ bị lệch nhau.
+const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned', 'speedUpUsed'])];
 app.post('/api/user/:id', async (req, res) => {
     try {
         const userId = req.params.id;
@@ -3715,9 +3731,9 @@ app.post('/api/check-referral/:id', async (req, res) => {
 // (bankName, accountName, accountNumber cho ngân hàng; accountNumber = SĐT cho Momo/ZaloPay)
 // LƯU Ý SCHEMA: bảng "withdrawals" trên Supabase cần có thêm các cột:
 // ordersAmount (int8), bankName (text), accountName (text), accountNumber (text), txCode (int8)
-const WITHDRAW_MIN_ORDERS = 50000;      // Tối thiểu 50.000 Đơn Hàng
+const WITHDRAW_MIN_ORDERS = 30000;      // Tối thiểu 30.000 Đơn Hàng (= 3.000 VNĐ, tỷ giá 1 Order = 0,1 VNĐ giữ nguyên)
 const WITHDRAW_MIN_ADS = 7;             // Xem tối thiểu 7 QC trong ngày
-const WITHDRAW_MIN_SMARTLINKS = 20;     // Bấm tối thiểu 20 SmartLink trong ngày
+const WITHDRAW_MIN_SMARTLINKS = 10;     // Bấm tối thiểu 10 SmartLink trong ngày
 const WITHDRAW_PER_USER_PER_DAY = 1;    // Mỗi người 1 đơn rút/ngày
 const WITHDRAW_DAILY_QUOTA = 20;        // Toàn Mini App nhận tối đa 20 đơn rút/ngày
 const withdrawalProcessing = new Set();
@@ -3751,8 +3767,8 @@ app.post('/api/withdraw', async (req, res) => {
         if (!userId || !method || !accountNumber || !ordersAmount) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ thông tin rút tiền." });
     }
-    if (ordersAmount < WITHDRAW_MIN_ORDERS) { // Mức rút tối thiểu: 50.000 Đơn Hàng (5.000 VNĐ)
-        return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 50.000 Đơn Hàng (5.000 VNĐ)." });
+    if (ordersAmount < WITHDRAW_MIN_ORDERS) { // Mức rút tối thiểu: 30.000 Đơn Hàng (3.000 VNĐ)
+        return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 30.000 Đơn Hàng (3.000 VNĐ)." });
     }
     if (method === 'bank' && (!bankName || !accountName)) {
         return res.status(400).json({ error: "Vui lòng nhập đầy đủ tên ngân hàng và tên chủ tài khoản." });
@@ -3783,7 +3799,7 @@ app.post('/api/withdraw', async (req, res) => {
     // Các điều kiện rút tiền khác bên dưới (đơn hàng, QC, SmartLink, giới hạn/ngày, anti-fraud...) giữ nguyên.)
     
     // Điều kiện rút tiền: đọc TRỰC TIẾP từ DB (không tin dữ liệu client gửi lên) để chống gian lận.
-    // Yêu cầu: ≥50.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥20 SmartLink hôm nay.
+    // Yêu cầu: ≥30.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥10 SmartLink hôm nay.
     const adsTodayCount = Number(userData.adsToday || 0);
     const smartlinksTodayCount = Number(userData.smartlinksToday || 0);
     if (adsTodayCount < WITHDRAW_MIN_ADS || smartlinksTodayCount < WITHDRAW_MIN_SMARTLINKS) {
@@ -3807,7 +3823,7 @@ app.post('/api/withdraw', async (req, res) => {
         return res.status(400).json({ error: "Không đủ đơn hàng để rút số lượng này." });
     }
 
-    // Tỉ lệ quy đổi: 1 Đơn Hàng = 0,1 VNĐ (mức rút tối thiểu: 50.000 Đơn Hàng = 5.000 VNĐ)
+    // Tỉ lệ quy đổi: 1 Đơn Hàng = 0,1 VNĐ (mức rút tối thiểu: 30.000 Đơn Hàng = 3.000 VNĐ)
     const amountVnd = Math.floor(ordersAmount * 0.1);
     const newOrders = userData.orders - ordersAmount;
     const methodLabel = method === 'bank' ? (bankName || 'Ngân hàng') : (method === 'momo' ? 'Momo' : 'ZaloPay');
