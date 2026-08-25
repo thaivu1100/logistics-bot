@@ -1940,7 +1940,16 @@
 
                 async checkMaintenanceLock() {
                     try {
-                        const res = await fetchWithTimeout(`${API_URL}/api/lock-status`);
+                        // FIX YÊU CẦU "/khoabot CHỈ KHOÁ USER THƯỜNG, ADMIN 6327666718 LUÔN BYPASS": trước
+                        // đây gọi /api/lock-status KHÔNG kèm userId, nên server (vốn đã có sẵn cơ chế bypass
+                        // đúng theo ADMIN_ID ở endpoint này) không có cách nào biết ai đang gọi và luôn trả
+                        // về locked=true cho TẤT CẢ mọi người khi BOT_LOCKED, kể cả chính Admin -> Admin cũng
+                        // bị màn hình bảo trì che mất Mini App khi tự /khoabot. Lấy userId từ this.user (nếu
+                        // đã có) hoặc trực tiếp từ Telegram WebApp (vì hàm này được gọi rất sớm trong initApp,
+                        // có thể trước khi this.user.id kịp gán) và gửi kèm để server nhận diện đúng Admin.
+                        const uid = this.user?.id || window.Telegram?.WebApp?.initDataUnsafe?.user?.id || '';
+                        const url = `${API_URL}/api/lock-status` + (uid ? ('?userId=' + encodeURIComponent(uid)) : '');
+                        const res = await fetchWithTimeout(url);
                         if (!res.ok) return;
                         const data = await res.json();
                         this.maintenanceLocked = !!data.locked;
@@ -2279,10 +2288,13 @@
                     if (this.currentProducts > this.maxProducts) this.currentProducts = this.maxProducts;
                 },
                 scheduleCoinBox() {
-                    // Hộp Coin xuất hiện ở một thời điểm NGẪU NHIÊN trong vòng 30 phút kể từ khi chu kỳ mới
-                    // bắt đầu (0 - 30 phút), thay vì khoảng 30-120 giây quá ngắn/dễ đoán như trước. Không đổi
-                    // thời gian hiển thị (60 giây), vị trí ngẫu nhiên, phần thưởng/xác suất hay luồng xem QC.
-                    const delay = Math.random() * 30 * 60 * 1000; // Random trong khoảng 0-30 phút
+                    // FIX YÊU CẦU "HỘP COIN XUẤT HIỆN ĐÚNG 10-15 PHÚT": trước đây random trong khoảng 0-30
+                    // phút (có thể xuất hiện gần như ngay lập tức, hoặc quá lâu tới 30 phút). Đổi lại đúng
+                    // khoảng 10-15 phút: 10 phút cố định + random thêm 0-5 phút. Không đổi thời gian hiển thị
+                    // (60 giây), vị trí ngẫu nhiên, phần thưởng/xác suất hay luồng xem QC.
+                    const MIN_COINBOX_DELAY = 10 * 60 * 1000; // 10 phút
+                    const MAX_COINBOX_EXTRA = 5 * 60 * 1000;  // + tối đa 5 phút -> tổng 10-15 phút
+                    const delay = MIN_COINBOX_DELAY + Math.random() * MAX_COINBOX_EXTRA; // Random trong khoảng 10-15 phút
                     setTimeout(() => {
                         if (!this.coinBoxVisible) {
                             this.coinBoxX = 10 + Math.random() * 70; // Random X position
