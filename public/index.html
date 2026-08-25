@@ -2114,6 +2114,16 @@
                     }
                 },
                 // Xem QC Tăng Tốc x2: giảm 1 nửa thời gian chờ còn lại của mẻ hàng đang sản xuất
+                // FIX TRIỆT ĐỂ LỖI X2 ("báo thành công nhưng đồng hồ không giảm", "dùng được X2 lần 2",
+                // "speedUpUsed=true nhưng thời gian không đổi"...): trước đây hàm này tự tính remaining VÀ
+                // tự trừ lastProducedAt/đặt speedUpUsed=true NGAY TRÊN CLIENT (bên trong applyBoost), rồi
+                // mới gửi lên bằng saveState() (route đồng bộ chung, không atomic, có thể bị 1 lần
+                // saveState() khác gửi snapshot cũ chạy sau đó ghi đè mất). Các bước kiểm tra dưới đây
+                // (kho đầy / đã dùng X2 / mẻ đã xong) CHỈ còn là kiểm tra sơ bộ để tránh xem quảng cáo phí
+                // công; kết quả X2 THẬT SỰ (tính remaining bằng thời gian thực + trừ 1 nửa + đánh dấu
+                // speedUpUsed) nay do SERVER tính và lưu atomic vào Supabase trong 1 giao dịch duy nhất
+                // (xem "/api/production/speedup"), giống hệt cách "/api/truck/upgrade" đang xử lý nâng cấp
+                // xe. Client chỉ cập nhật đồng hồ + báo "X2 thành công" SAU KHI server xác nhận đã lưu.
                 speedUpProduction() {
                     if (this.currentProducts >= this.maxProducts) {
                         this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
@@ -2128,33 +2138,37 @@
                         this.showNotification('✅ Đã sẵn sàng, không cần tăng tốc!');
                         return;
                     }
-                    // FIX LỖI "X2 THỈNH THOẢNG KHÔNG GIẢM THỜI GIAN / ĐÔI KHI VỀ 0": trước đây "remaining"
-                    // chỉ được tính 1 LẦN ở đây (trước khi xem QC) rồi applyBoost() dùng lại giá trị CŨ đó
-                    // sau khi QC xong (QC tối thiểu 5 giây, có thể lâu hơn nhiều). Nếu trong lúc xem QC mẻ
-                    // hàng đã tự sản xuất xong (produceLoop hoàn thành mẻ CŨ, chuyển sang mẻ MỚI với
-                    // lastProducedAt/productionInterval khác), applyBoost() vẫn đem trừ remaining/2 của mẻ
-                    // CŨ ra khỏi lastProducedAt của mẻ MỚI -> đẩy lastProducedAt lùi quá xa, khiến thời gian
-                    // còn lại của mẻ MỚI bị tính sai (có thể về 0/âm, coi như xong ngay). Cách sửa: tính lại
-                    // remaining NGAY LÚC ÁP DỤNG (bên trong applyBoost, dùng lastProducedAt/productionInterval
-                    // MỚI NHẤT tại thời điểm đó), và bỏ qua việc áp dụng nếu mẻ hàng đã đầy hoặc đã được
-                    // đánh dấu dùng X2 trong lúc xem quảng cáo, tránh trừ nhầm thời gian của mẻ khác.
-                    const applyBoost = () => {
-                        if (this.currentProducts >= this.maxProducts || this.speedUpUsed) {
-                            this.showNotification('✅ Mẻ hàng đã sẵn sàng trong lúc bạn xem quảng cáo, không cần tăng tốc nữa!');
-                            this.saveState();
+                    this.playRewardedAd((adResult) => this.completeSpeedUpProduction(adResult?.adToken || ''));
+                },
+                async completeSpeedUpProduction(adToken) {
+                    if (!adToken) {
+                        this.showNotification('⚠️ Không xác định được lượt quảng cáo, vui lòng thử lại.');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(`${API_URL}/api/production/speedup`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: this.user.id, adToken })
+                        });
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success) {
+                            if (result.alreadyUsed) this.showNotification('⚠️ Bạn chỉ được Tăng Tốc X2 1 lần cho mỗi mẻ hàng đang sản xuất!');
+                            else if (result.alreadyReady) this.showNotification('✅ Mẻ hàng đã sẵn sàng, không cần tăng tốc nữa!');
+                            else this.showNotification('⚠️ ' + (result.error || 'Tăng Tốc X2 thất bại, vui lòng thử lại.'));
                             return;
                         }
-                        const remainingNow = this.productionInterval - (Date.now() - this.lastProducedAt);
-                        if (remainingNow <= 0) {
-                            this.saveState();
-                            return;
-                        }
-                        this.lastProducedAt -= Math.floor(remainingNow / 2);
-                        this.speedUpUsed = true; // Đánh dấu đã dùng cho mẻ hàng hiện tại
+                        // Chỉ cập nhật đồng hồ bằng giá trị THẬT mà server đã xác nhận lưu thành công vào
+                        // Supabase - không tự trừ/tự đặt speedUpUsed trên client nữa.
+                        this.lastProducedAt = Number(result.lastProducedAt ?? this.lastProducedAt);
+                        this.productionInterval = Number(result.productionInterval ?? this.productionInterval);
+                        this.speedUpUsed = true;
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
-                        this.saveState();
-                    };
-                    this.playRewardedAd(applyBoost);
+                    } catch (e) {
+                        console.error('Tăng Tốc X2:', e);
+                        this.showNotification('⚠️ Không kết nối được máy chủ để Tăng Tốc X2, vui lòng thử lại.');
+                    }
                 },
                 produceLoop() {
                     setInterval(() => {
