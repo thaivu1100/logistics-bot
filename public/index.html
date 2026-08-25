@@ -957,9 +957,9 @@
                     <p class="text-[9px] text-slate-400" x-text="texts.minWithdrawLine"></p>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 50.000'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📦 <span x-text="texts.ordersTarget"></span></span><span x-text="formatNumber(orders) + ' / 30.000'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">📺 <span x-text="texts.adsTarget"></span></span><span x-text="adsToday + ' / 7'"></span></div>
-                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 20'"></span></div>
+                    <div class="flex justify-between text-xs"><span class="font-bold opacity-60">🔗 <span x-text="texts.smartlinksTarget"></span></span><span x-text="smartlinksToday + ' / 10'"></span></div>
                     <div class="flex justify-between text-xs"><span class="font-bold opacity-60">💸 <span x-text="texts.withdrawsLeft"></span></span><span x-text="withdrawRemain + ' / 1'"></span></div>
                     <div class="w-full h-2 bg-slate-800 rounded-full border border-white/5 overflow-hidden">
                         <div class="h-full bg-blue-600 neon-blue progress-bar" :style="'width: ' + withdrawProgress + '%'"></div>
@@ -994,7 +994,7 @@
                     </div>
 
                     <button @click="requestWithdraw()"
-                        :disabled="withdrawRemain <= 0 || !withdrawEligible || !withdrawOrdersAmount || withdrawOrdersAmount < 50000 || orders < withdrawOrdersAmount || !withdrawAccountNumber || (withdrawMethod === 'bank' && (!withdrawBankName || !withdrawAccountName))"
+                        :disabled="withdrawRemain <= 0 || !withdrawEligible || !withdrawOrdersAmount || withdrawOrdersAmount < 30000 || orders < withdrawOrdersAmount || !withdrawAccountNumber || (withdrawMethod === 'bank' && (!withdrawBankName || !withdrawAccountName))"
                         class="cta-shine w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text">
                         <span x-text="texts.withdraw + ' (' + formatNumber(withdrawOrdersAmount || 0) + ' 📦)'"></span>
                     </button>
@@ -1183,29 +1183,41 @@
 
         // ===== QUẢNG CÁO NỀN: CHỈ 4 LOẠI THỤ ĐỘNG =====
         // GIẢM TẦN SUẤT: các quảng cáo THỤ ĐỘNG này (KHÁC Rewarded Interstitial Giao Hàng và KHÁC tính năng
-        // SmartLink có thưởng/tracking riêng ở trong app) trước đây cooldown cố định 3 phút và có thể tự
+        // SmartLink có thưởng/tracking riêng ở trong app) trước đây cooldown ngẫu nhiên 3-5 phút và có thể tự
         // hiện bất cứ lúc nào kể cả khi người dùng đang thao tác quan trọng. Nay: (1) cooldown ngẫu nhiên
-        // 3-5 phút mỗi lần thay vì cố định 3 phút, (2) KHÔNG hiện khi đang xem Rewarded Interstitial, đang
-        // mở Quiz/Hộp Coin, hoặc đang ở tab Rương/Rút tiền/Giftcode (những lúc người dùng đang thao tác
+        // 8-12 phút mỗi lần thay vì 3-5 phút, (2) 5 phút đầu sau khi mở app tuyệt đối không hiện, (3) KHÔNG
+        // hiện khi đang xem/ vừa xem xong Rewarded Interstitial, đang giao hàng/nâng cấp xe/mở rương (quay
+        // số)/quiz/Hộp Coin, hoặc đang ở tab Rương/Rút tiền/Giftcode (những lúc người dùng đang thao tác
         // quan trọng). Không đổi 4 loại quảng cáo, cách chọn ngẫu nhiên giữa chúng, hay bất kỳ logic Rewarded
-        // Interstitial Giao Hàng / SmartLink nào khác.
+        // Interstitial Giao Hàng / SmartLink nào khác. Dùng chung 1 biến cooldown/trạng thái duy nhất (không
+        // tạo hệ thống timer mới) - đây vẫn là cơ chế event-driven (visibilitychange/focus/click), không dùng
+        // setInterval nên không thể có 2 timer chạy song song.
         function nextPassiveAdCooldown() {
-            return (3 + Math.random() * 2) * 60 * 1000; // Ngẫu nhiên 3-5 phút
+            return (8 + Math.random() * 4) * 60 * 1000; // Ngẫu nhiên 8-12 phút
         }
         function isCriticalActionActive() {
             try {
                 const data = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
                 if (!data) return false;
                 if (data._rewardedRunning) return true; // Đang xem Rewarded Interstitial / xử lý reward QC
+                if (data.isShipping) return true; // Đang giao hàng
+                if (data.isSpinning) return true; // Đang mở rương / quay số
+                if (data.captchaShow) return true; // Đang xử lý CAPTCHA (giao hàng/rút tiền) - hành động quan trọng
                 if (data.quizModalShow || data.showCoinBoxModal) return true; // Đang mở Quiz / Hộp Coin
                 if (['chest', 'withdraw', 'giftcode'].includes(data.tab)) return true; // Đang ở tab quan trọng
                 return false;
             } catch (e) { return false; }
         }
+        const PASSIVE_AD_GRACE_MS = 5 * 60 * 1000; // 5 phút đầu sau khi mở app: tuyệt đối không hiện
+        const passiveAdAppOpenedAt = Date.now();
         let passiveAdCooldown = nextPassiveAdCooldown();
         let passiveAdLastShown = 0;
+        // Gọi khi vừa xem xong Rewarded Ad (bất kể thành công hay không) để đảm bảo passive ad không hiện
+        // NGAY SAU Rewarded Ad và không chồng lên nhau - tận dụng lại đúng cơ chế cooldown hiện có.
+        window.notePassiveAdSuppression = function () { passiveAdLastShown = Date.now(); };
         function showPassiveAdRandom() {
             const now = Date.now();
+            if (now - passiveAdAppOpenedAt < PASSIVE_AD_GRACE_MS) return; // Trong 5 phút đầu sau khi mở app
             if (now - passiveAdLastShown < passiveAdCooldown) return;
             if (isCriticalActionActive()) return; // Hoãn lại, không tiêu hao cooldown - thử lại ở lần trigger sau
             passiveAdLastShown = now;
@@ -1280,14 +1292,14 @@
                 top1: '🏆 Top 1', top2: '🥈 Top 2', top3: '🥉 Top 3',
                 inviteeMustTitle: 'Người được mời phải:', currentProgress: '📊 Tiến độ hiện tại:',
                 totalInvited: 'Tổng đã mời:', validLabel: 'Hợp lệ:', claimBtn: 'NHẬN', claimedBtn: '✅ ĐÃ NHẬN',
-                exchangeRateLine: '💱 Tỉ lệ quy đổi: 50.000 Đơn Hàng = 5.000 VNĐ (1 Đơn Hàng = 0,1 VNĐ)', minWithdrawLine: 'Rút tối thiểu: 5.000 VNĐ (50.000 Đơn Hàng)',
+                exchangeRateLine: '💱 Tỉ lệ quy đổi: 30.000 Đơn Hàng = 3.000 VNĐ (1 Đơn Hàng = 0,1 VNĐ)', minWithdrawLine: 'Rút tối thiểu: 3.000 VNĐ (30.000 Đơn Hàng)',
                 bankLabel: '🏛️ Ngân hàng', momoLabel: '💎 MoMo', zalopayLabel: '🔹 ZaloPay',
                 loadingText: '📦 Đang tải dữ liệu kho hàng...',
                 bankNamePlaceholder: 'Tên ngân hàng (VD: Vietcombank)', accountNamePlaceholder: 'Tên chủ tài khoản', accountNumberPlaceholder: 'Số tài khoản',
-                momoPhonePlaceholder: 'Số điện thoại Momo', zalopayPhonePlaceholder: 'Số điện thoại ZaloPay', ordersAmountPlaceholder: 'Số đơn hàng muốn rút (tối thiểu 50.000)',
+                momoPhonePlaceholder: 'Số điện thoại Momo', zalopayPhonePlaceholder: 'Số điện thoại ZaloPay', ordersAmountPlaceholder: 'Số đơn hàng muốn rút (tối thiểu 30.000)',
                 convertedAmountLabel: '💰 Số tiền quy đổi:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
                 giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 30 lần/ngày.',
-                inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 5 quảng cáo hợp lệ', inviteCond4: 'Hoàn thành ít nhất 5 SmartLink hợp lệ', inviteCond5: 'Có ít nhất 3 lần giao hàng hợp lệ',
+                inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo hợp lệ', inviteCond4: 'Hoàn thành ít nhất 2 SmartLink hợp lệ', inviteCond5: 'Có ít nhất 1 lần giao hàng hợp lệ',
                 milestoneNote: '⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.',
                 instantRewardTitle: '🎁 Phần Thưởng Mời Bạn Thành Công', instantRewardDesc: 'Mỗi bạn bè mời thành công (đủ điều kiện), bạn nhận ngay:', instantRewardValue: '+500 Coin + 1.000 Đơn Hàng',
                 ipWarningNote: '⚠️ Bạn Bè Phải Làm Đúng Điều Kiện Mới Tính Là Thành Công. 1 Người Dùng Chỉ Được Tạo 1 Tài Khoản / 1 IP. Nếu Admin Phát Hiện Sẽ Xử Lí!!! (CÓ Hệ Thống Check IP)',
@@ -1333,14 +1345,14 @@
                 top1: '🏆 Top 1', top2: '🥈 Top 2', top3: '🥉 Top 3',
                 inviteeMustTitle: 'The invited friend must:', currentProgress: '📊 Current progress:',
                 totalInvited: 'Total invited:', validLabel: 'Valid:', claimBtn: 'CLAIM', claimedBtn: '✅ CLAIMED',
-                exchangeRateLine: '💱 Exchange rate: 50,000 Orders = 5,000 VND (1 Order = 0.1 VND)', minWithdrawLine: 'Minimum withdrawal: 5,000 VND (50,000 Orders)',
+                exchangeRateLine: '💱 Exchange rate: 30,000 Orders = 3,000 VND (1 Order = 0.1 VND)', minWithdrawLine: 'Minimum withdrawal: 3,000 VND (30,000 Orders)',
                 bankLabel: '🏛️ Bank', momoLabel: '💎 MoMo', zalopayLabel: '🔹 ZaloPay',
                 loadingText: '📦 Loading warehouse data...',
                 bankNamePlaceholder: 'Bank name (e.g. Vietcombank)', accountNamePlaceholder: 'Account holder name', accountNumberPlaceholder: 'Account number',
-                momoPhonePlaceholder: 'Momo phone number', zalopayPhonePlaceholder: 'ZaloPay phone number', ordersAmountPlaceholder: 'Orders to withdraw (min. 20,000)',
+                momoPhonePlaceholder: 'Momo phone number', zalopayPhonePlaceholder: 'ZaloPay phone number', ordersAmountPlaceholder: 'Orders to withdraw (min. 30,000)',
                 convertedAmountLabel: '💰 Converted amount:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
                 giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 30 times/day.',
-                inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 5 ads', inviteCond4: 'Complete at least 5 valid SmartLinks', inviteCond5: 'Complete at least 3 valid deliveries',
+                inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads', inviteCond4: 'Complete at least 2 valid SmartLinks', inviteCond5: 'Complete at least 1 valid delivery',
                 milestoneNote: '⚠️ Each milestone can only be claimed once. Only valid friends count.',
                 instantRewardTitle: '🎁 Successful Invite Reward', instantRewardDesc: 'For every friend you invite successfully (meets all conditions), you instantly get:', instantRewardValue: '+500 Coin + 1,000 Orders',
                 ipWarningNote: '⚠️ Your friend must fully meet the conditions to count as successful. Only 1 account is allowed per IP. Admins will take action if abuse is detected!!! (IP checking system in place)',
@@ -1471,22 +1483,22 @@
                     return this.levelStatsFor(this.truckLevel).cost;
                 },
                 get withdrawProgress() {
-                    const orderProgress = Math.min(this.orders / 50000, 1) * 0.7;
+                    const orderProgress = Math.min(this.orders / 30000, 1) * 0.7;
                     const adProgress = Math.min(this.adsToday / 7, 1) * 0.15;
-                    const linkProgress = Math.min(this.smartlinksToday / 20, 1) * 0.15;
+                    const linkProgress = Math.min(this.smartlinksToday / 10, 1) * 0.15;
                     return Math.min((orderProgress + adProgress + linkProgress) * 100, 100);
                 },
                 // Điều kiện THẬT để được rút tiền (trước đây withdrawProgress chỉ là thanh hiển thị trang trí,
                 // không hề chặn nút rút). Giờ dùng chung điều kiện này để chặn nút + kiểm tra khi bấm rút.
                 get withdrawEligible() {
-                    // Điều kiện: ≥50.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥20 SmartLink hôm nay,
+                    // Điều kiện: ≥30.000 Đơn Hàng, xem ≥7 QC hôm nay, bấm ≥10 SmartLink hôm nay,
                     // và mỗi ngày chỉ được rút 1 lần (withdrawRemain do server quản lý).
-                    return this.orders >= 50000
+                    return this.orders >= 30000
                         && (this.adsToday || 0) >= 7
-                        && (this.smartlinksToday || 0) >= 20
+                        && (this.smartlinksToday || 0) >= 10
                         && (this.withdrawRemain || 0) > 0;
                 },
-                // Tỉ lệ quy đổi: 50.000 Đơn Hàng = 5.000 VNĐ (mức tối thiểu) => 1 Đơn Hàng = 0,1 VNĐ
+                // Tỉ lệ quy đổi: 30.000 Đơn Hàng = 3.000 VNĐ (mức tối thiểu) => 1 Đơn Hàng = 0,1 VNĐ
                 get withdrawVndAmount() {
                     return Math.floor((this.withdrawOrdersAmount || 0) * 0.1);
                 },
@@ -2684,11 +2696,11 @@
                         return;
                     }
                     if (!this.withdrawEligible) {
-                        this.showNotification(`❌ Chưa đủ điều kiện rút tiền! Cần: ≥50.000 Đơn Hàng (hiện có ${this.formatNumber(this.orders)}), xem ≥7 QC hôm nay (${this.adsToday||0}/7), bấm ≥20 SmartLink hôm nay (${this.smartlinksToday||0}/20), và mỗi ngày chỉ rút 1 lần.`);
+                        this.showNotification(`❌ Chưa đủ điều kiện rút tiền! Cần: ≥30.000 Đơn Hàng (hiện có ${this.formatNumber(this.orders)}), xem ≥7 QC hôm nay (${this.adsToday||0}/7), bấm ≥10 SmartLink hôm nay (${this.smartlinksToday||0}/10), và mỗi ngày chỉ rút 1 lần.`);
                         return;
                     }
-                    if (!this.withdrawOrdersAmount || this.withdrawOrdersAmount < 50000) {
-                        this.showNotification('❌ Số đơn hàng rút tối thiểu là 50.000 Đơn Hàng (5.000 VNĐ).');
+                    if (!this.withdrawOrdersAmount || this.withdrawOrdersAmount < 30000) {
+                        this.showNotification('❌ Số đơn hàng rút tối thiểu là 30.000 Đơn Hàng (3.000 VNĐ).');
                         return;
                     }
                     if (this.orders < this.withdrawOrdersAmount) {
@@ -3098,6 +3110,8 @@
                     } finally {
                         this._rewardedRunning = false;
                         if (this.musicOn) this.resumeMusic();
+                        // Đảm bảo passive ad không hiện ngay sau Rewarded Ad (yêu cầu giảm quảng cáo tự động)
+                        if (typeof window.notePassiveAdSuppression === 'function') window.notePassiveAdSuppression();
                     }
                 },
                 async addQuizWithAd() {
