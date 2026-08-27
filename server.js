@@ -2681,7 +2681,9 @@ app.post('/api/user/:id', async (req, res) => {
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
             'referralMilestones', 'dailyValidInvites',
             'bonusAdsToday','rewardedAdsToday','extraDeliveryAdsToday','extraDeliveryCount','withdrawRemain','spinAdCount','groupTaskClaimed',
-            'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds'
+            'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds',
+            'dailyTasks', 'allTasksClaimed', 'lastResetDate',
+            'weeklyAdsCount', 'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed'
         ].forEach(f => { delete updateData[f]; });
 
         // Handle referralMilestones as JSON string
@@ -3015,7 +3017,15 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
         { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, progress:Math.min(invites,1), eligible:invites>=1 },
         { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, progress:Math.min(invites,5), eligible:invites>=5 },
     ];
-    return defs.map(t => ({ ...t, done: claims[t.id] === today, claimable: claims[t.id] !== today && t.eligible }));
+    return defs.map(t => ({
+        ...t,
+        reward: TASK_REWARDS[t.id]?.coins || 0,
+        rewardOrders: TASK_REWARDS[t.id]?.orders || 0,
+        rewardSpins: TASK_REWARDS[t.id]?.spins || 0,
+        once: t.max === 1,
+        done: claims[t.id] === today,
+        claimable: claims[t.id] !== today && t.eligible
+    }));
 }
 
 const taskClaimProcessing = new Set();
@@ -3064,7 +3074,7 @@ app.get('/api/daily-tasks/status/:id', async (req,res) => {
         const tasks = dailyTaskDefinitions(user,claims,flags);
         const allTasksClaimed = claims.__all === vietnamDayKey();
         const allDone = tasks.every(t => t.done);
-        res.json({ success:true, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:20+Number(user.extraDeliveryCount||0), extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
+        res.json({ success:true, today, lastResetDate:user.lastResetDate||today, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:20+Number(user.extraDeliveryCount||0), extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), smartlinkCount:Number(user.smartlinkCount||0), smartlinksToday:Number(user.smartlinksToday||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
     } catch(e) { res.status(500).json({success:false,error:e.message}); }
 });
 
@@ -3688,6 +3698,7 @@ app.post('/api/ad/impression', async (req, res) => {
 });
 
 const adSessions = new Map();
+const activeAdByUser = new Map();
 const completedAdEvents = new Map();
 const adRewardProcessing = new Set();
 function makeAdToken() { return `${Date.now()}_${Math.random().toString(36).slice(2,12)}`; }
@@ -3699,14 +3710,28 @@ app.post('/api/ad/session/start', async (req, res) => {
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
         const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
+        const normalizedUserId = String(userId);
+        const existingToken = activeAdByUser.get(normalizedUserId);
+        if (existingToken) {
+            const existing = adSessions.get(existingToken);
+            if (existing && Date.now() - existing.startedAt < 120000) {
+                return res.status(409).json({success:false,retry:true,active:true,token:existingToken,error:'Đang có một quảng cáo được xử lý cho tài khoản này.'});
+            }
+            activeAdByUser.delete(normalizedUserId);
+            adSessions.delete(existingToken);
+        }
         const token = makeAdToken();
-        adSessions.set(token, { userId:String(userId), adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), startedAt:Date.now() });
+        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), startedAt:Date.now() });
+        activeAdByUser.set(normalizedUserId, token);
         recordAntiFraudEvent(String(userId), 'ad_start', {
             ip: requestIp(req),
             sessionId: String(sessionId || ''),
             countAction: false
         }).catch(e => console.error('Anti-fraud ad start:', e.message));
-        setTimeout(() => adSessions.delete(token), 120000);
+        setTimeout(() => {
+            adSessions.delete(token);
+            if (activeAdByUser.get(normalizedUserId) === token) activeAdByUser.delete(normalizedUserId);
+        }, 120000);
         res.json({ success:true, token });
     } catch (e) { res.status(500).json({success:false,error:e.message}); }
 });
@@ -3720,6 +3745,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
     adRewardProcessing.add(key);
     try {
         const { userId, token, adType, sessionId } = req.body || {};
+        const existingCompleted = completedAdEvents.get(String(token));
+        if (existingCompleted && existingCompleted.userId === String(userId) && existingCompleted.adType === adType) {
+            if (existingCompleted.completionResult) return res.json({ ...existingCompleted.completionResult, idempotent:true });
+        }
         const s=adSessions.get(token);
         if (!s || s.userId!==String(userId) || s.adType!==adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
         const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
@@ -3729,15 +3758,18 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         const preRisk=await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
         if (purpose!=='passive' && preRisk.blockedReward) return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,riskLevel:preRisk.level,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
-        adSessions.delete(token);
         if (purpose==='passive') {
             insertRowSafe('ad_events',{user_id:String(userId),ad_type:'rewarded',purpose,status:'passive_success',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
-            completedAdEvents.set(String(token),{userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true});
+            const passiveResponse={success:true,adToken:String(token),purpose,passive:true,elapsed};
+            completedAdEvents.set(String(token),{userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true,completionResult:passiveResponse});
+            if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+            adSessions.delete(token);
             setTimeout(()=>completedAdEvents.delete(String(token)),120000);
-            return res.json({success:true,adToken:String(token),purpose,passive:true,elapsed});
+            return res.json(passiveResponse);
         }
         let user=await loadCurrentDailyUser(String(userId)); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if (purpose==='extra-delivery') {
+            if (Number(user.deliveryCount||0)<20) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 20 lượt cơ bản hôm nay.'});
             if (Number(user.extraDeliveryAdsToday||0)>=5) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 5 quảng cáo nhận thêm lượt giao hôm nay.'});
         }
         if (purpose==='chest-spin' && Number(user.spinAdCount||0)>=10) return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
@@ -3747,20 +3779,24 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if(purpose==='bonus-task') updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
         if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
         if(purpose==='extra-delivery'){
-            if(Number(user.deliveryCount||0)<20) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 20 lượt cơ bản hôm nay.'});
             updateFields.extraDeliveryAdsToday=Number(user.extraDeliveryAdsToday||0)+1;
             updateFields.extraDeliveryCount=Math.min(10,Number(user.extraDeliveryCount||0)+2);
         }
         const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
         const fresh=await readUserRow(String(userId));
-        const completed={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null};
-        completedAdEvents.set(String(token),completed); setTimeout(()=>completedAdEvents.delete(String(token)),10*60*1000);
+        const completed={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null};
         await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,spins:rewardSpins,sessionId,purpose});
         if(rewardCoins) logTransaction(String(userId),'coin',rewardCoins,'Xem 1 QC hợp lệ'); if(rewardOrders) logTransaction(String(userId),'orders',rewardOrders,'Xem 1 QC hợp lệ');
         try{await tryFinalizeReferral(String(userId));}catch(_){}
         insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose,ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
-        res.json({success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score});
+        completedAdEvents.set(String(token),completed);
+        const response={success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
+        completed.completionResult=response;
+        adSessions.delete(token);
+        if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+        setTimeout(()=>completedAdEvents.delete(String(token)),10*60*1000);
+        res.json(response);
     } catch(e){res.status(500).json({success:false,error:e.message});} finally{adRewardProcessing.delete(key);}
 });
 
@@ -3834,8 +3870,8 @@ async function getStreakState(userId){ const extra=await getUserExtra(userId); r
 function streakView(state){ const today=vietnamDayKey(); let day=Number(state.day||0), current=0, missed=false; if(state.lastCheckInDate){ const diff=diffVietnamDays(state.lastCheckInDate,today); if(diff===0) current=day||7; else if(diff===1) current=day>=7?1:day+1; else { missed=true; current=day>=7?1:day+1; } } else current=1; return {today,day,currentDay:current,missed,recoveryAvailable:missed||!!state.recoveryAvailable,recoveryDate:state.recoveryDate||null,lastCheckInDate:state.lastCheckInDate||null}; }
 app.get('/api/streak/status/:id',async(req,res)=>{ const userId=String(req.params.id||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); try{ const state=await getStreakState(userId); res.json({success:true,...streakView(state),rewards:STREAK_REWARDS}); }catch(e){res.status(500).json({success:false,error:e.message});} });
 const streakProcessing=new Set();
-app.post('/api/streak/checkin',async(req,res)=>{ const userId=String(req.body?.userId||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý điểm danh.'}); streakProcessing.add(userId); try{ const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'}); const state=await getStreakState(userId); const view=streakView(state); if(state.lastCheckInDate===view.today) return res.json({success:true,alreadyClaimed:true,...view,rewards:STREAK_REWARDS}); if(view.missed) { const recoveryDate=state.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const recoveryAvailable=true; await saveUserExtra(userId,{loginStreakState:{...state,recoveryAvailable,recoveryDate}}); return res.status(409).json({success:false,missed:true,recoveryAvailable:true,recoveryDate,...view,error:'Chuỗi đã bị đứt. Hãy khôi phục bằng Rewarded để nhận lại ngày bị bỏ lỡ.'}); } const day=view.currentDay||1; const reward=STREAK_REWARDS[day-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const nextState={day:day>=7?0:day,lastCheckInDate:view.today,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); if(reward.coins) logTransaction(userId,'coin',reward.coins,`Điểm danh Day ${day}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Điểm danh Day ${day}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day}); const fresh=await readUserRow(userId); res.json({success:true,day,reward,day7:day===7,...streakView(nextState),coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
-app.post('/api/streak/recover',async(req,res)=>{ const userId=String(req.body?.userId||''); const adToken=String(req.body?.adToken||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(!adToken) return res.status(400).json({success:false,error:'Thiếu adToken.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý khôi phục chuỗi.'}); streakProcessing.add(userId); try{ const event=completedAdEvents.get(adToken); if(!event||event.userId!==userId||event.purpose!=='streak-recovery') return res.status(400).json({success:false,error:'Rewarded khôi phục chuỗi không hợp lệ.'}); if(event.used&&event.streakRecoveryResult) return res.json({success:true,...event.streakRecoveryResult,idempotent:true}); const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const state=await getStreakState(userId); const view=streakView(state); if(!view.missed) return res.status(400).json({success:false,error:'Hiện không có ngày bị bỏ lỡ để khôi phục.'}); const recoveryDay=Number(view.currentDay||1); const reward=STREAK_REWARDS[recoveryDay-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const recoveryDate=view.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const nextState={day:recoveryDay,lastCheckInDate:recoveryDate,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); event.used=true; event.streakRecoveryResult={recoveryDay,reward,...streakView(nextState)}; if(reward.coins) logTransaction(userId,'coin',reward.coins,`Khôi phục chuỗi Day ${recoveryDay}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Khôi phục chuỗi Day ${recoveryDay}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,recovery:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day:recoveryDay}); const fresh=await readUserRow(userId); res.json({success:true,...event.streakRecoveryResult,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
+app.post('/api/streak/checkin',async(req,res)=>{ const userId=String(req.body?.userId||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý điểm danh.'}); streakProcessing.add(userId); try{ const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'}); const state=await getStreakState(userId); const view=streakView(state); if(state.lastCheckInDate===view.today) return res.json({success:true,alreadyClaimed:true,...view,rewards:STREAK_REWARDS}); if(view.missed) { const recoveryDate=state.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const recoveryAvailable=true; await saveUserExtra(userId,{loginStreakState:{...state,recoveryAvailable,recoveryDate}}); return res.status(409).json({success:false,missed:true,recoveryAvailable:true,recoveryDate,...view,error:'Chuỗi đã bị đứt. Hãy khôi phục bằng Rewarded để nhận lại ngày bị bỏ lỡ.'}); } const day=view.currentDay||1; const reward=STREAK_REWARDS[day-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const nextState={day:day,lastCheckInDate:view.today,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); if(reward.coins) logTransaction(userId,'coin',reward.coins,`Điểm danh Day ${day}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Điểm danh Day ${day}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day}); const fresh=await readUserRow(userId); res.json({success:true,day,reward,day7:day===7,...streakView(nextState),coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
+app.post('/api/streak/recover',async(req,res)=>{ const userId=String(req.body?.userId||''); const adToken=String(req.body?.adToken||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(!adToken) return res.status(400).json({success:false,error:'Thiếu adToken.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý khôi phục chuỗi.'}); streakProcessing.add(userId); try{ const event=completedAdEvents.get(adToken); if(!event||event.userId!==userId||event.purpose!=='streak-recovery') return res.status(400).json({success:false,error:'Rewarded khôi phục chuỗi không hợp lệ.'}); if(event.used&&event.streakRecoveryResult) return res.json({success:true,...event.streakRecoveryResult,idempotent:true}); const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const state=await getStreakState(userId); const view=streakView(state); if(!view.missed) return res.status(400).json({success:false,error:'Hiện không có ngày bị bỏ lỡ để khôi phục.'}); const recoveryDay=Number(view.currentDay||1); const reward=STREAK_REWARDS[recoveryDay-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const recoveryDate=view.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const nextState={day:recoveryDay,lastCheckInDate:view.today,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); event.used=true; event.streakRecoveryResult={recoveryDay,reward,...streakView(nextState)}; if(reward.coins) logTransaction(userId,'coin',reward.coins,`Khôi phục chuỗi Day ${recoveryDay}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Khôi phục chuỗi Day ${recoveryDay}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,recovery:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day:recoveryDay}); const fresh=await readUserRow(userId); res.json({success:true,...event.streakRecoveryResult,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
 
 // API rút tiền - Hỗ trợ Ngân hàng / Momo / ZaloPay với các trường tách riêng
 // (bankName, accountName, accountNumber cho ngân hàng; accountNumber = SĐT cho Momo/ZaloPay)
