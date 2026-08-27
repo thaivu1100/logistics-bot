@@ -1201,6 +1201,7 @@
                 if (!data) return false;
                 if (data._rewardedRunning) return true; // Đang xem Rewarded Interstitial / xử lý reward QC
                 if (data.isShipping) return true; // Đang giao hàng
+                if (data._pendingDeliveryClaim) return true; // Đang tự động thử cấp lại lượt giao sau QC hợp lệ
                 if (data.isSpinning) return true; // Đang mở rương / quay số
                 if (data.captchaShow) return true; // Đang xử lý CAPTCHA (giao hàng/rút tiền) - hành động quan trọng
                 if (data.quizModalShow || data.showCoinBoxModal) return true; // Đang mở Quiz / Hộp Coin
@@ -1386,6 +1387,10 @@
                 tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
+                // FIX LỖI GIAO HÀNG SAU QC REWARDED: cờ đánh dấu "đã xem QC hợp lệ nhưng chưa cấp được
+                // lượt giao hàng ở server" (do lỗi tạm thời) và cờ khoá chống gọi /api/delivery/claim
+                // trùng lặp. Xem deliverWithAd()/retryDeliveryClaim() để biết luồng xử lý đầy đủ.
+                _pendingDeliveryClaim: false, _deliveryClaimInFlight: false,
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
                 _saveQueue: Promise.resolve(), // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
                 coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
@@ -1855,8 +1860,11 @@
                     // nên nếu lần trước đang BẬT thì giờ cũng chỉ đánh dấu "đang bật" và tự chơi ngay khi có
                     // thao tác chạm đầu tiên (nút nhạc hoặc bất kỳ cú click nào) - đây chính là cách sửa
                     // lỗi "đã bật nhạc nhưng không có tiếng".
-                    // Mặc định BẬT nhạc ngay khi vào Mini App (chỉ tắt nếu người dùng đã tự tắt trước đó).
-                    this.musicOn = localStorage.getItem('shipper_music') !== '0';
+                    // FIX: KHÔNG tự động phát nhạc khi mở Mini App. Mặc định TẮT (musicOn=false) trừ khi
+                    // người dùng đã CHỦ ĐỘNG bật nhạc ở phiên trước (localStorage lưu đúng '1'). Trước đây
+                    // logic này mặc định BẬT trừ khi lưu '0', khiến nhạc tự phát ngay cả với người dùng mới
+                    // chưa từng bấm nút nhạc - nay chỉ bật lại nếu chính người dùng đã từng bấm BẬT.
+                    this.musicOn = localStorage.getItem('shipper_music') === '1';
                     this.loadQuizLocal();
                     this.initSecurityHeartbeat();
                     // Phát ngay lập tức ở chế độ tắt tiếng (mọi trình duyệt đều cho phép), rồi tự mở tiếng
@@ -1867,6 +1875,13 @@
                         this.startMusicWatchdog();
                     }
                     this.preloadRewardedAd().catch(() => {});
+                    // FIX LỖI GIAO HÀNG SAU QC REWARDED: nếu người dùng đóng/mở lại Mini App ngay sau khi
+                    // đã xem QC hợp lệ nhưng /api/delivery/claim chưa kịp thành công, khôi phục trạng thái
+                    // "đang chờ cấp lượt" và tự thử cấp lại NGAY - không bắt xem lại QC hay CAPTCHA.
+                    if (localStorage.getItem('shipper_pending_delivery_claim') === '1') {
+                        this._pendingDeliveryClaim = true;
+                        this.retryDeliveryClaim().catch(() => {});
+                    }
                     // ===== BXH XEM QC: tải ngay lúc mở app =====
                     this.initQcRankList();
 
@@ -2186,6 +2201,15 @@
                 },
                 deliverWithAd() {
                     if (this.isShipping || this.currentProducts <= 0) return;
+                    // FIX LỖI "XEM XONG QC NHƯNG PHẢI BẤM GIAO HÀNG LẠI NHIỀU LẦN": nếu một lượt QC
+                    // Rewarded TRƯỚC ĐÓ đã hợp lệ (server đã ghi nhận) nhưng /api/delivery/claim khi đó
+                    // bị lỗi tạm thời (409/500/mạng chập chờn), ta giữ trạng thái "đang chờ cấp lượt".
+                    // Lần bấm "Giao hàng" tiếp theo phải THỬ LẠI NGAY việc cấp lượt, KHÔNG bắt xem CAPTCHA
+                    // hay xem QC mới - vì QC đã xem là hợp lệ rồi, xem thêm là lãng phí và sai yêu cầu.
+                    if (this._pendingDeliveryClaim) {
+                        this.retryDeliveryClaim();
+                        return;
+                    }
                     if ((this.deliveryCount || 0) >= 20) {
                         this.showNotification('✅ Hôm nay bạn đã giao đủ 20 lần.');
                         return;
@@ -2195,29 +2219,67 @@
                 },
                 async runDeliverAd() {
                     await this.playRewardedAd(async () => {
-                        try {
-                            let r, d;
-                            for (let attempt=0; attempt<2; attempt++) {
+                        // QC vừa được server xác nhận hợp lệ tại đây (playRewardedAd chỉ gọi onDone sau khi
+                        // /api/ad/session/complete trả success:true) -> đánh dấu "đã có 1 lượt QC hợp lệ đang
+                        // chờ cấp lượt giao hàng" TRƯỚC khi gọi API, và lưu vào localStorage để không mất
+                        // trạng thái nếu người dùng đóng/mở lại Mini App trước khi cấp lượt thành công.
+                        this._pendingDeliveryClaim = true;
+                        try { localStorage.setItem('shipper_pending_delivery_claim', '1'); } catch (_) {}
+                        await this.retryDeliveryClaim();
+                    });
+                },
+                // Cấp lượt giao hàng ở SERVER cho 1 lượt QC Rewarded đã được xác nhận hợp lệ.
+                // An toàn khi gọi nhiều lần / đồng thời: dùng cờ khoá _deliveryClaimInFlight để không bao giờ
+                // bắn 2 request /api/delivery/claim song song cho cùng 1 lượt QC (chống cộng trùng lượt giao).
+                // Nếu thất bại tạm thời, tự thử lại với backoff tăng dần; nếu vẫn thất bại sau khi hết số lần
+                // thử tự động, GIỮ NGUYÊN trạng thái pending để lần bấm "Giao hàng" kế tiếp thử lại ngay lập
+                // tức mà không yêu cầu CAPTCHA/QC mới - đúng yêu cầu "không bắt xem lại QC khi QC đã hợp lệ".
+                async retryDeliveryClaim() {
+                    if (this._deliveryClaimInFlight) return false;
+                    this._deliveryClaimInFlight = true;
+                    try {
+                        const maxAttempts = 6;
+                        let lastError = 'Không cấp được lượt giao hàng.';
+                        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                            let r = null, d = {};
+                            try {
                                 r = await fetch(`${API_URL}/api/delivery/claim`, {
-                                    method:'POST', headers:{'Content-Type':'application/json'},
-                                    body:JSON.stringify({ userId:this.user.id })
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ userId: this.user.id })
                                 });
                                 d = await r.json().catch(() => ({}));
-                                if (r.status !== 409 || !d.retry) break;
-                                await new Promise(resolve => setTimeout(resolve,500));
+                            } catch (netErr) {
+                                // Lỗi mạng tạm thời - không phải lỗi logic, thử lại như trường hợp 409/retry
+                                d = { success: false, retry: true, error: 'Mất kết nối tạm thời.' };
                             }
-                            if (!r.ok || !d.success) {
-                                this.showNotification('⚠️ ' + (d.error || 'Không cấp được lượt giao hàng.'));
-                                return;
+                            if (r && r.ok && d.success) {
+                                this._pendingDeliveryClaim = false;
+                                try { localStorage.removeItem('shipper_pending_delivery_claim'); } catch (_) {}
+                                this.deliveryCount = Number(d.deliveryCount ?? this.deliveryCount);
+                                if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
+                                this.startDeliveryAnimation();
+                                return true;
                             }
-                            this.deliveryCount = Number(d.deliveryCount || this.deliveryCount);
-                            if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
-                            this.startDeliveryAnimation();
-                        } catch (e) {
-                            console.error('Delivery claim:',e);
-                            this.showNotification('⚠️ Không lưu được lượt giao hàng, vui lòng thử lại.');
+                            if (d && d.limitReached) {
+                                // Đã đủ 20/20 (ví dụ đạt giới hạn ở tab khác) - không còn gì để cấp, dừng chờ.
+                                this._pendingDeliveryClaim = false;
+                                try { localStorage.removeItem('shipper_pending_delivery_claim'); } catch (_) {}
+                                this.deliveryCount = Number(d.deliveryCount ?? this.deliveryCount);
+                                this.showNotification('✅ Hôm nay bạn đã giao đủ 20 lần.');
+                                return false;
+                            }
+                            lastError = (d && d.error) || lastError;
+                            // 409 (đang xử lý) hoặc lỗi tạm thời khác -> chờ rồi thử lại, KHÔNG bắt xem lại QC.
+                            const wait = Math.min(3000, 350 * Math.pow(2, attempt));
+                            await new Promise(resolve => setTimeout(resolve, wait));
                         }
-                    });
+                        // Hết số lần thử tự động nhưng QC đã hợp lệ rồi -> vẫn giữ pending, chỉ báo người
+                        // dùng bấm lại nút Giao hàng (sẽ thử lại claim ngay, không mở QC mới, xem hàm deliverWithAd()).
+                        this.showNotification('⚠️ ' + lastError + ' QC của bạn đã được ghi nhận hợp lệ - vui lòng bấm "Giao hàng" lại để nhận lượt (không cần xem QC lại).');
+                        return false;
+                    } finally {
+                        this._deliveryClaimInFlight = false;
+                    }
                 },
                 startDeliveryAnimation() {
                     this.showDeliveryAnimation = true;
