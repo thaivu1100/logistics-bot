@@ -83,7 +83,7 @@ function vietnamTimeText(date = new Date()) {
 // Các field được đưa về 0 khi sang ngày mới (0h00 giờ Việt Nam)
 function dailyResetFields() {
     return {
-        adsToday: 0, smartlinksToday: 0, bonusAdsToday: 0,
+        adsToday: 0, smartlinksToday: 0, bonusAdsToday: 0, rewardedAdsToday: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0,
         dailyValidInvites: 0,
         deliveryCount: 0, smartlinkCount: 0, usedSmartlinks: [],
         spinAdCount: 0, spinAdProgress: 0, chestOpensToday: 0,
@@ -1681,7 +1681,7 @@ bot.command('resetdaily', async (ctx) => {
         spinAdCount: 0,
         spinFree: 1,
         chestOpensToday: 0,
-        lastResetDate: new Date(new Date().setDate(new Date().getDate() - 1)).toDateString() // Đặt ngày reset về hôm qua để kích hoạt reset khi mini app load
+        lastResetDate: addVietnamDays(vietnamDayKey(), -1) // Đặt ngày reset về hôm qua để kích hoạt reset khi mini app load
     });
     ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
 });
@@ -1704,6 +1704,9 @@ function fullResetFields() {
         spinAdCount: 0,
         spinAdProgress: 0,
         bonusAdsToday: 0,
+        rewardedAdsToday: 0,
+        extraDeliveryAdsToday: 0,
+        extraDeliveryCount: 0,
         quizDate: '',
         quizFreeUsed: false,
         quizAdUnlocked: 0,
@@ -1726,7 +1729,7 @@ function fullResetFields() {
             { friends: 75, reward: '7,000 Đơn Hàng + 3 Lượt Mở Rương', coins: 0, orders: 7000, spins: 3, claimed: false },
             { friends: 100, reward: '20,000 Đơn Hàng + 7 Lượt Mở Rương', coins: 0, orders: 20000, spins: 7, claimed: false }
         ]),
-        lastResetDate: new Date(new Date().setDate(new Date().getDate() - 1)).toDateString()
+        lastResetDate: addVietnamDays(vietnamDayKey(), -1)
     };
 }
 
@@ -2662,7 +2665,7 @@ app.get('/api/user/:id', async (req, res) => {
 // còn bị khoá không cho dùng X2 lần nữa cho mẻ đó. Thêm 'speedUpUsed' vào WALLET_FIELDS để nó LUÔN được
 // hoàn tác/giữ nguyên ĐỒNG BỘ cùng lastProducedAt/productionInterval trong cùng 1 lần ghi đè, đảm bảo
 // trạng thái X2 và thời gian sản xuất không bao giờ bị lệch nhau.
-const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned', 'speedUpUsed'])];
+const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned', 'speedUpUsed', 'dailyTasks', 'allTasksClaimed'])];
 app.post('/api/user/:id', async (req, res) => {
     try {
         const userId = req.params.id;
@@ -2677,7 +2680,7 @@ app.post('/api/user/:id', async (req, res) => {
             'adsToday', 'smartlinksToday', 'smartlinkCount', 'deliveryCount',
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
             'referralMilestones', 'dailyValidInvites',
-            'bonusAdsToday', 'withdrawRemain', 'spinAdCount', 'groupTaskClaimed',
+            'bonusAdsToday','rewardedAdsToday','extraDeliveryAdsToday','extraDeliveryCount','withdrawRemain','spinAdCount','groupTaskClaimed',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds'
         ].forEach(f => { delete updateData[f]; });
 
@@ -2967,19 +2970,52 @@ app.post('/api/referral/milestone-claim', async (req,res) => {
 
 // ==================== SERVER-AUTHORITATIVE DAILY TASK / QUIZ REWARDS ====================
 const TASK_REWARDS = {
-    login: { coins: 150, orders: 0, spins: 0 },
-    deliver5: { coins: 200, orders: 20, spins: 0 },
-    deliver10: { coins: 400, orders: 40, spins: 0 },
-    deliver15: { coins: 500, orders: 70, spins: 0 },
-    watch5ads: { coins: 500, orders: 0, spins: 0 },
+    deliver5: { coins: 50, orders: 50, spins: 0 },
+    deliver10: { coins: 100, orders: 100, spins: 0 },
+    deliver15: { coins: 200, orders: 200, spins: 0 },
+    deliver20: { coins: 250, orders: 300, spins: 0 },
+    x2Once: { coins: 50, orders: 25, spins: 0 },
+    upgradeOnce: { coins: 100, orders: 50, spins: 0 },
+    watch3rewarded: { coins: 150, orders: 50, spins: 0 },
+    smartlink5: { coins: 75, orders: 75, spins: 0 },
     spin1: { coins: 50, orders: 0, spins: 0 },
     invite1: { coins: 350, orders: 25, spins: 0 },
     invite5: { coins: 500, orders: 100, spins: 1 },
 };
+const DAILY_TASK_IDS = Object.keys(TASK_REWARDS);
+const DAILY_TASK_ALL_REWARD = { coins: 1000, orders: 500, spins: 2 };
 
 async function getServerTaskClaims(userId) {
     const extra = await getUserExtra(userId);
     return (extra?.serverTaskClaims && typeof extra.serverTaskClaims === 'object') ? extra.serverTaskClaims : {};
+}
+async function getDailyActionFlags(userId) {
+    const extra = await getUserExtra(userId);
+    const flags = extra?.dailyActionFlags;
+    if (!flags || flags.__date !== vietnamDayKey()) return { __date: vietnamDayKey() };
+    return { ...flags };
+}
+
+function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
+    const today = vietnamDayKey();
+    const rewardedAds = Number(user.rewardedAdsToday || 0);
+    const delivery = Number(user.deliveryCount || 0);
+    const smartlinks = Number(user.smartlinkCount || 0);
+    const invites = Number(user.dailyValidInvites || 0);
+    const defs = [
+        { id:'deliver5', name:'🚚 Giao hàng 5 lần', icon:'🚚', max:5, progress:Math.min(delivery,5), eligible:delivery>=5 },
+        { id:'deliver10', name:'🚚 Giao hàng 10 lần', icon:'🚚', max:10, progress:Math.min(delivery,10), eligible:delivery>=10 },
+        { id:'deliver15', name:'🚚 Giao hàng 15 lần', icon:'🚚', max:15, progress:Math.min(delivery,15), eligible:delivery>=15 },
+        { id:'deliver20', name:'🚚 Giao hàng 20 lần', icon:'🚚', max:20, progress:Math.min(delivery,20), eligible:delivery>=20 },
+        { id:'x2Once', name:'⚡ Dùng X2 một lần', icon:'⚡', max:1, progress:actionFlags.x2 ? 1 : 0, eligible:actionFlags.x2 === true },
+        { id:'upgradeOnce', name:'⬆️ Nâng cấp xe một lần', icon:'⬆️', max:1, progress:actionFlags.upgrade ? 1 : 0, eligible:actionFlags.upgrade === true },
+        { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, progress:Math.min(rewardedAds,3), eligible:rewardedAds>=3 },
+        { id:'smartlink5', name:'🔗 Hoàn thành 5 SmartLink', icon:'🔗', max:5, progress:Math.min(smartlinks,5), eligible:smartlinks>=5 },
+        { id:'spin1', name:'🎁 Mở rương 1 lần', icon:'🎁', max:1, progress:Number(user.chestOpensToday||0)>=1?1:0, eligible:Number(user.chestOpensToday||0)>=1 },
+        { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, progress:Math.min(invites,1), eligible:invites>=1 },
+        { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, progress:Math.min(invites,5), eligible:invites>=5 },
+    ];
+    return defs.map(t => ({ ...t, done: claims[t.id] === today, claimable: claims[t.id] !== today && t.eligible }));
 }
 
 const taskClaimProcessing = new Set();
@@ -2990,78 +3026,88 @@ async function claimServerTask(userId, taskId) {
     try {
         const fraudGate = await antiFraudRewardGate(userId);
         if (!fraudGate.allowed) return { ok:false, reason:'fraud_hold', fraudGate };
-
         const user = await loadCurrentDailyUser(userId);
         if (!user) return { ok:false, reason:'user_not_found' };
         if (user.isBanned) return { ok:false, reason:'banned' };
-        const reward = TASK_REWARDS[taskId];
-        if (!reward) return { ok:false, reason:'unsupported_task' };
+        if (!TASK_REWARDS[taskId]) return { ok:false, reason:'unsupported_task' };
         const today = vietnamDayKey();
-        const extra = await getUserExtra(userId);
-        const claims = (extra?.serverTaskClaims && typeof extra.serverTaskClaims === 'object')
-            ? { ...extra.serverTaskClaims }
-            : {};
-        const previousClaimsDate = claims.__date;
-        if (previousClaimsDate && previousClaimsDate !== today) {
-            Object.keys(claims).forEach(k => { if (k !== '__date') delete claims[k]; });
-        }
+        const claims = { ...(await getServerTaskClaims(userId)) };
+        if (claims.__date && claims.__date !== today) Object.keys(claims).forEach(k => { if (k !== '__date') delete claims[k]; });
         claims.__date = today;
         if (claims[taskId] === today) return { ok:false, reason:'already_claimed' };
+        const actionFlags = await getDailyActionFlags(userId);
+        const defs = dailyTaskDefinitions(user, claims, actionFlags);
+        const task = defs.find(t => t.id === taskId);
+        if (!task || !task.eligible) return { ok:false, reason:'not_eligible' };
 
-        let eligible = false;
-        if (taskId === 'login') eligible = true;
-        else if (taskId === 'deliver5') eligible = Number(user.deliveryCount || 0) >= 5;
-        else if (taskId === 'deliver10') eligible = Number(user.deliveryCount || 0) >= 10;
-        else if (taskId === 'deliver15') eligible = Number(user.deliveryCount || 0) >= 15;
-        else if (taskId === 'watch5ads') eligible = Number(user.adsToday || 0) >= 5;
-        else if (taskId === 'spin1') eligible = Number(user.chestOpensToday || 0) >= 1;
-        else if (taskId === 'invite1') eligible = Number(user.dailyValidInvites || 0) >= 1;
-        else if (taskId === 'invite5') eligible = Number(user.dailyValidInvites || 0) >= 5;
-        if (!eligible) return { ok:false, reason:'not_eligible' };
-
-        // CAS ví trước; task claim marker được lưu ngay sau đó vào user_extra_state.
-        // Per-user/task lock ngăn double-submit trong cùng instance.
-        claims[taskId] = today;
-        const mutation = await atomicWalletMutation(userId, {
-            deltaCoins: reward.coins,
-            deltaOrders: reward.orders,
-            deltaSpins: reward.spins,
-            setFields: {}
-        });
+        const reward = TASK_REWARDS[taskId];
+        const mutation = await atomicWalletMutation(userId, { deltaCoins:reward.coins, deltaOrders:reward.orders, deltaSpins:reward.spins });
         if (mutation.error) return { ok:false, reason:'wallet_update_failed', error:mutation.error };
-
+        claims[taskId] = today;
         await saveUserExtra(userId, { serverTaskClaims: claims });
-        scheduleUserExtraFlush();
-        await recordAntiFraudEvent(userId,'task',{
-            rewardEvent:true, coins:reward.coins, orders:reward.orders, spins:reward.spins
-        });
+        await flushUserExtra();
+        await recordAntiFraudEvent(userId,'task',{ rewardEvent:true, coins:reward.coins, orders:reward.orders, spins:reward.spins });
         if (reward.coins) logTransaction(userId,'coin',reward.coins,`Nhiệm vụ ${taskId}`);
         if (reward.orders) logTransaction(userId,'orders',reward.orders,`Nhiệm vụ ${taskId}`);
         return { ok:true, taskId, reward, walletUpdatedAt:mutation.data?.walletUpdatedAt || new Date().toISOString() };
-    } finally {
-        taskClaimProcessing.delete(lockKey);
-    }
+    } finally { taskClaimProcessing.delete(lockKey); }
 }
-app.post('/api/task/claim', async (req, res) => {
-    const authUserId = String(req.body?.userId || req.params?.id || '');
+
+app.get('/api/daily-tasks/status/:id', async (req,res) => {
+    const userId = String(req.params.id||'');
+    if (!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    try {
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const claims = await getServerTaskClaims(userId);
+        const flags = await getDailyActionFlags(userId);
+        const tasks = dailyTaskDefinitions(user,claims,flags);
+        const allTasksClaimed = claims.__all === vietnamDayKey();
+        const allDone = tasks.every(t => t.done);
+        res.json({ success:true, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:20+Number(user.extraDeliveryCount||0), extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
+    } catch(e) { res.status(500).json({success:false,error:e.message}); }
+});
+
+app.post('/api/task/claim', async (req,res) => {
+    const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     try {
-        const userId = String(req.body?.userId || '');
-        const taskId = String(req.body?.taskId || '');
+        const userId = String(req.body?.userId || ''); const taskId = String(req.body?.taskId || '');
         if (!userId || !taskId) return res.status(400).json({success:false,error:'Thiếu userId/taskId.'});
-        const result = await claimServerTask(userId, taskId);
+        const result = await claimServerTask(userId,taskId);
         if (!result.ok) {
-            if (result.reason === 'already_claimed') return res.json({success:true,alreadyClaimed:true,taskId});
-            if (result.reason === 'processing') return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý.'});
-            if (result.reason === 'fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
+            if (result.reason==='already_claimed') return res.json({success:true,alreadyClaimed:true,taskId});
+            if (result.reason==='processing') return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý.'});
+            if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
             return res.status(400).json({success:false,error:result.reason});
         }
-        const { data:user } = await readUserRow(userId);
-        res.json({success:true, ...result.reward, taskId, coins:user?.coins || 0, orders:user?.orders || 0, spins:user?.spins || 0, walletUpdatedAt:user?.walletUpdatedAt || null});
-    } catch (e) {
-        console.error('Lỗi claim task server:', e);
-        res.status(500).json({success:false,error:e.message});
-    }
+        const {data:user}=await readUserRow(userId);
+        const tasks = dailyTaskDefinitions(user, await getServerTaskClaims(userId), await getDailyActionFlags(userId));
+        res.json({success:true,...result.reward,taskId,tasks,coins:user?.coins||0,orders:user?.orders||0,spins:user?.spins||0,walletUpdatedAt:user?.walletUpdatedAt||null});
+    } catch(e) { res.status(500).json({success:false,error:e.message}); }
+});
+
+app.post('/api/task/claim-all', async (req,res) => {
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const lockKey=`all:${userId}`; if(taskClaimProcessing.has(lockKey)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý phần thưởng.'});
+    taskClaimProcessing.add(lockKey);
+    try {
+        const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
+        const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const claims={...(await getServerTaskClaims(userId))}; const today=vietnamDayKey();
+        if(claims.__date!==today) return res.status(400).json({success:false,error:'Chưa hoàn thành các nhiệm vụ hôm nay.'});
+        const defs=dailyTaskDefinitions(user,claims,await getDailyActionFlags(userId));
+        if(defs.some(t=>claims[t.id]!==today)) return res.status(400).json({success:false,error:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.'});
+        if(claims.__all===today) { const fresh=await readUserRow(userId); return res.json({success:true,alreadyClaimed:true,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||null}); }
+        const reward=DAILY_TASK_ALL_REWARD; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins});
+        if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        claims.__all=today; await saveUserExtra(userId,{serverTaskClaims:claims}); await flushUserExtra();
+        await recordAntiFraudEvent(userId,'task',{rewardEvent:true,coins:reward.coins,orders:reward.orders,spins:reward.spins});
+        logTransaction(userId,'coin',reward.coins,'Thưởng hoàn thành tất cả nhiệm vụ ngày'); logTransaction(userId,'orders',reward.orders,'Thưởng hoàn thành tất cả nhiệm vụ ngày');
+        const fresh=await readUserRow(userId);
+        res.json({success:true,...reward,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||null});
+    } catch(e) { res.status(500).json({success:false,error:e.message}); } finally { taskClaimProcessing.delete(lockKey); }
 });
 
 // ==================== NHIỆM VỤ "THAM GIA NHÓM" (1 LẦN DUY NHẤT, KHÔNG RESET THEO NGÀY) ====================
@@ -3415,6 +3461,9 @@ app.post('/api/truck/upgrade', async (req, res) => {
         }
 
         logTransaction(userId, 'coin', -result.cost, `Nâng cấp xe lên cấp ${result.data.truckLevel}`);
+        const currentFlags = await getDailyActionFlags(userId);
+        await saveUserExtra(userId, { dailyActionFlags: { ...currentFlags, __date: vietnamDayKey(), upgrade: true } });
+        await flushUserExtra();
         const levelStats = calculateLevelStats(result.data.truckLevel);
         return res.json({
             success: true,
@@ -3518,6 +3567,9 @@ app.post('/api/production/speedup', async (req, res) => {
         }
 
         const { data: fresh } = await readUserRow(userId);
+        const currentFlags = await getDailyActionFlags(userId);
+        await saveUserExtra(userId, { dailyActionFlags: { ...currentFlags, __date: vietnamDayKey(), x2: true } });
+        await flushUserExtra();
         res.json({
             success: true,
             lastProducedAt: Number(fresh?.lastProducedAt ?? newLastProducedAt),
@@ -3535,41 +3587,46 @@ app.post('/api/production/speedup', async (req, res) => {
     }
 });
 
-// ==================== GIAO HÀNG: TỐI ĐA 20 LẦN/NGÀY ====================
+// ==================== GIAO HÀNG: 20 CƠ BẢN + TỐI ĐA 10 BONUS/NGÀY ====================
 const DELIVERY_DAILY_LIMIT = 20;
+const DELIVERY_MAX_BONUS = 10;
 const deliveryProcessing = new Set();
-app.post('/api/delivery/claim', async (req, res) => {
-    const authUserId = String(req.body?.userId || req.params?.id || '');
-    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({ success:false, error:'Telegram session không hợp lệ.' });
-    const userId = String(req.body?.userId || '');
-    if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
-    if (deliveryProcessing.has(userId)) {
-        await recordAntiFraudEvent(userId,'delivery',{retry:true,ip:requestIp(req),rewardEvent:false});
-        return res.status(409).json({ success:false, retry:true, error:'Đang xử lý lượt giao hàng.' });
-    }
-    deliveryProcessing.add(userId);
-    try {
-        const user = await loadCurrentDailyUser(userId);
-        if (!user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
-        if (user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-        const fraudGate = await antiFraudRewardGate(userId);
-        if (!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
-        const current = Math.max(0, Number(user.deliveryCount || 0));
-        if (current >= DELIVERY_DAILY_LIMIT) {
-            return res.status(429).json({ success:false, limitReached:true, deliveryCount:current, limit:DELIVERY_DAILY_LIMIT, error:'Hôm nay bạn đã giao đủ 20 lần.' });
-        }
-        const deliveryCount = current + 1;
-        const deliveryCountLifetime = Math.max(0, Number(user.deliveryCountLifetime || 0)) + 1;
-        const mutation = await atomicWalletMutation(userId, {
-            setFields: { deliveryCount, deliveryCountLifetime, lastResetDate:vietnamDayKey() }
+app.post('/api/delivery/claim', async (req,res)=>{
+    const userId=String(req.body?.userId||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const adToken=String(req.body?.adToken||''); if(!adToken) return res.status(400).json({success:false,error:'Thiếu adToken của Rewarded Interstitial.'});
+    const key=`${userId}:${adToken}`; if(deliveryProcessing.has(key)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý lượt giao hàng.'});
+    deliveryProcessing.add(key);
+    try{
+        const event=completedAdEvents.get(adToken);
+        if(!event || event.userId!==userId || event.purpose!=='delivery') return res.status(400).json({success:false,error:'Lượt Rewarded dùng cho giao hàng không hợp lệ hoặc đã hết hạn.'});
+        if(event.used && event.deliveryClaimResult) return res.json({success:true,...event.deliveryClaimResult,idempotent:true});
+        const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
+        const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if(user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const current=Math.max(0,Number(user.deliveryCount||0)); const extra=Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0))); const limit=DELIVERY_DAILY_LIMIT+extra;
+        if(current>=limit) return res.status(429).json({success:false,limitReached:true,deliveryCount:current,limit,error:'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.'});
+        const deliveredProducts=Math.max(0,Number(user.currentProducts||0));
+        if(deliveredProducts<=0) return res.status(400).json({success:false,error:'Kho chưa có hàng để giao.'});
+        const deliveryCount=current+1; const lifetime=Math.max(0,Number(user.deliveryCountLifetime||0))+1;
+        const mutation=await atomicWalletMutation(userId,{
+            deltaOrders: deliveredProducts,
+            setFields:{
+                deliveryCount, deliveryCountLifetime, currentProducts:0,
+                lastProducedAt:Date.now(), speedUpUsed:false, lastResetDate:vietnamDayKey()
+            }
         });
-        if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
-        await recordAntiFraudEvent(userId,'delivery',{rewardEvent:true,ip:requestIp(req)});
-        res.json({ success:true, deliveryCount, remaining:DELIVERY_DAILY_LIMIT-deliveryCount, limit:DELIVERY_DAILY_LIMIT, walletUpdatedAt:mutation.data?.walletUpdatedAt || null });
-    } catch (e) {
-        console.error('Lỗi cấp lượt giao hàng:', e);
-        res.status(500).json({ success:false, error:e.message });
-    } finally { deliveryProcessing.delete(userId); }
+        if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        const fresh=await readUserRow(userId);
+        const result={
+            deliveryCount, remaining:limit-deliveryCount, limit, bonusLimit:DELIVERY_MAX_BONUS, extraDeliveryCount:extra,
+            deliveredProducts, currentProducts:Number(fresh.data?.currentProducts||0), orders:Number(fresh.data?.orders||0),
+            lastProducedAt:Number(fresh.data?.lastProducedAt||Date.now()), speedUpUsed:!!fresh.data?.speedUpUsed,
+            walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
+        };
+        event.used=true; event.deliveryClaimResult=result;
+        await recordAntiFraudEvent(userId,'delivery',{rewardEvent:true,ip:requestIp(req),adToken});
+        res.json({success:true,...result});
+    }catch(e){res.status(500).json({success:false,error:e.message});}finally{deliveryProcessing.delete(key);}
 });
 
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
@@ -3581,13 +3638,15 @@ app.post('/api/delivery/check-captcha', async (req, res) => {
         const user = await loadCurrentDailyUser(String(userId || ''));
         if (!user) return res.status(404).json({ error:'User không tồn tại' });
         const current = Math.max(0, Number(user.deliveryCount || 0));
-        if (current >= DELIVERY_DAILY_LIMIT) {
-            return res.status(429).json({ error:'Hôm nay bạn đã giao đủ 20 lần.', deliveryCount:current, limit:DELIVERY_DAILY_LIMIT });
+        const bonus = Math.min(DELIVERY_MAX_BONUS, Math.max(0, Number(user.extraDeliveryCount || 0)));
+        const limit = DELIVERY_DAILY_LIMIT + bonus;
+        if (current >= limit) {
+            return res.status(429).json({ error:'Hôm nay bạn đã dùng hết lượt giao hàng.', deliveryCount:current, limit });
         }
         const nextDelivery = current + 1;
         const requiresCaptcha = nextDelivery <= 3 && Math.random() < 0.4;
         res.json({
-            requiresCaptcha, deliveryCount:current, remaining:DELIVERY_DAILY_LIMIT-current,
+            requiresCaptcha, deliveryCount:current, remaining:limit-current, limit,
             captchaCode: requiresCaptcha ? Math.random().toString(36).substring(2,8).toUpperCase() : null
         });
     } catch (e) {
@@ -3638,7 +3697,7 @@ app.post('/api/ad/session/start', async (req, res) => {
     try {
         const { userId, adType, purpose, sessionId } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
-        const allowedPurposes = ['generic', 'bonus-task', 'quiz-unlock', 'quiz-skip', 'chest-spin'];
+        const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const token = makeAdToken();
         adSessions.set(token, { userId:String(userId), adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), startedAt:Date.now() });
@@ -3656,119 +3715,53 @@ app.post('/api/ad/session/complete', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     const processingUserId = String(req.body?.userId || '');
-    if (adRewardProcessing.has(processingUserId)) {
-        await recordAntiFraudEvent(processingUserId, 'ad', { retry:true, ip:requestIp(req), rewardEvent:false });
-        return res.status(409).json({success:false,retry:true,error:'Lượt quảng cáo đang được xử lý.'});
-    }
-    adRewardProcessing.add(processingUserId);
+    const key = `${processingUserId}:${String(req.body?.token||'')}`;
+    if (adRewardProcessing.has(key)) return res.status(409).json({success:false,retry:true,error:'Lượt quảng cáo đang được xử lý.'});
+    adRewardProcessing.add(key);
     try {
         const { userId, token, adType, sessionId } = req.body || {};
-        const s = adSessions.get(token);
-        if (!s || s.userId !== String(userId) || s.adType !== adType) {
-            await recordAntiFraudEvent(String(userId || ''), 'ad', { retry:true, ip:requestIp(req), rewardEvent:false });
-            return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
-        }
-        const elapsed = Date.now() - s.startedAt;
-        if (elapsed < 5000) {
-            await recordAntiFraudEvent(String(userId), 'ad', { reactionTime:elapsed, retry:true, ip:requestIp(req), rewardEvent:false, sessionId });
-            insertRowSafe('ad_events', {
-                user_id: String(userId), ad_type: adType || 'rewarded', status: 'too_fast',
-                ip: requestIp(req), created_at: new Date().toISOString()
-            }).catch(() => {});
+        const s=adSessions.get(token);
+        if (!s || s.userId!==String(userId) || s.adType!==adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
+        const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
+        if (purpose!=='passive' && elapsed<5000) {
+            await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,retry:true,ip:requestIp(req),rewardEvent:false,sessionId});
             return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
         }
+        const preRisk=await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
+        if (purpose!=='passive' && preRisk.blockedReward) return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,riskLevel:preRisk.level,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
         adSessions.delete(token);
-        completedAdEvents.set(String(token), { userId:String(userId), adType, purpose:s.purpose || 'generic', completedAt:Date.now(), used:false });
-        setTimeout(() => completedAdEvents.delete(String(token)), 120000);
-
-        const preRisk = await recordAntiFraudEvent(String(userId), 'ad', {
-            reactionTime:elapsed, ip:requestIp(req), rewardEvent:false, countAction:false, sessionId,
-            checkDuplicateIp: true
-        });
-        if (preRisk.blockedReward) {
-            return res.status(429).json({
-                success:false, verificationRequired:true, riskScore:preRisk.score, riskLevel:preRisk.level,
-                error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'
-            });
+        if (purpose==='passive') {
+            insertRowSafe('ad_events',{user_id:String(userId),ad_type:'rewarded',purpose,status:'passive_success',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
+            completedAdEvents.set(String(token),{userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true});
+            setTimeout(()=>completedAdEvents.delete(String(token)),120000);
+            return res.json({success:true,adToken:String(token),purpose,passive:true,elapsed});
         }
-
-        let user = await loadCurrentDailyUser(String(userId));
-        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-
-        const purpose = s.purpose || 'generic';
-        if (purpose === 'bonus-task' && Number(user.bonusAdsToday || 0) >= 30) {
-            return res.status(429).json({success:false,error:'Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.'});
+        let user=await loadCurrentDailyUser(String(userId)); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if (purpose==='extra-delivery') {
+            if (Number(user.extraDeliveryAdsToday||0)>=5) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 5 quảng cáo nhận thêm lượt giao hôm nay.'});
         }
-        // NHÓM SỬA LỖI RƯƠNG: trước đây +1 lượt mở rương chỉ được cộng Ở CLIENT (this.spinFree++) rồi mới
-        // gửi kèm trong saveState() snapshot chung -> hay bị chặn/ghi đè bởi cơ chế bảo vệ walletUpdatedAt
-        // (vì chính request /api/ad/session/complete này cũng làm mới walletUpdatedAt), khiến Supabase
-        // không thực sự nhận được +1 dù giao diện đã báo thành công. Nay spins được SERVER cộng trực tiếp
-        // ngay tại đây (giống cách 'bonus-task' cộng coin/orders), atomic cùng 1 lần ghi Supabase, và trả
-        // về đúng giá trị mới nhất để frontend đồng bộ - không còn phụ thuộc vào saveState() sau đó nữa.
-        // Giữ đúng giới hạn hiện có của tính năng này (10 lượt/ngày, field spinAdCount đã có sẵn và đã
-        // được dailyResetFields() tự reset mỗi ngày - không đổi công thức/giới hạn, chỉ xác minh server-side).
-        if (purpose === 'chest-spin' && Number(user.spinAdCount || 0) >= 10) {
-            return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
+        if (purpose==='chest-spin' && Number(user.spinAdCount||0)>=10) return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
+        const next=await incrementWeeklyAds(String(userId)); if(next===null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
+        const rewardCoins=purpose==='bonus-task'?50:0, rewardOrders=purpose==='bonus-task'?25:0, rewardSpins=purpose==='chest-spin'?1:0;
+        const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,lastResetDate:vietnamDayKey()};
+        if(purpose==='bonus-task') updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
+        if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
+        if(purpose==='extra-delivery'){
+            if(Number(user.deliveryCount||0)<20) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 20 lượt cơ bản hôm nay.'});
+            updateFields.extraDeliveryAdsToday=Number(user.extraDeliveryAdsToday||0)+1;
+            updateFields.extraDeliveryCount=Math.min(10,Number(user.extraDeliveryCount||0)+2);
         }
-
-        const next = await incrementWeeklyAds(String(userId));
-        if (next === null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
-
-        const rewardCoins = purpose === 'bonus-task' ? 50 : 0;
-        const rewardOrders = purpose === 'bonus-task' ? 25 : 0;
-        const rewardSpins = purpose === 'chest-spin' ? 1 : 0;
-        const updateFields = {
-            adsToday: Number(user.adsToday || 0) + 1,
-            lifetimeAdsWatched: Number(user.lifetimeAdsWatched || 0) + 1,
-            lastResetDate: vietnamDayKey()
-        };
-        if (purpose === 'bonus-task') updateFields.bonusAdsToday = Number(user.bonusAdsToday || 0) + 1;
-        if (purpose === 'chest-spin') updateFields.spinAdCount = Number(user.spinAdCount || 0) + 1;
-        const mutation = await atomicWalletMutation(String(userId), {
-            deltaCoins: rewardCoins,
-            deltaOrders: rewardOrders,
-            deltaSpins: rewardSpins,
-            setFields: updateFields
-        });
-        if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
-
-        const fresh = await readUserRow(String(userId));
-        await recordAntiFraudEvent(String(userId), 'ad', {
-            reactionTime:elapsed, ip:requestIp(req), rewardEvent:true,
-            coins:rewardCoins, orders:rewardOrders, spins:rewardSpins, sessionId
-        });
-        if (rewardCoins) logTransaction(String(userId), 'coin', rewardCoins, 'Xem 1 QC hợp lệ');
-        if (rewardOrders) logTransaction(String(userId), 'orders', rewardOrders, 'Xem 1 QC hợp lệ');
-        try { await tryFinalizeReferral(String(userId)); } catch (_) {}
-        // Lịch sử QC tối thiểu để tra soát khi cần (không dùng để quyết định reward - đã quyết ở trên).
-        // Ghi "cố gắng tốt nhất": nếu bảng ad_events chưa tồn tại trên Supabase, bỏ qua và không ảnh hưởng reward.
-        insertRowSafe('ad_events', {
-            user_id: String(userId), ad_type: adType, status: 'success',
-            ip: requestIp(req), created_at: new Date().toISOString()
-        }).catch(() => {});
-
-        res.json({
-            success:true,
-            adToken:String(token),
-            weeklyAdsCount:next,
-            adsToday:Number(fresh.data?.adsToday || 0),
-            lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched || 0),
-            bonusAdsToday:Number(fresh.data?.bonusAdsToday || 0),
-            rewardCoins,
-            rewardOrders,
-            rewardSpins,
-            coins:Number(fresh.data?.coins || 0),
-            orders:Number(fresh.data?.orders || 0),
-            spins:Number(fresh.data?.spins || 0),
-            spinAdCount:Number(fresh.data?.spinAdCount || 0),
-            walletUpdatedAt:fresh.data?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null,
-            elapsed,
-            riskScore:(await getAntiFraudState(String(userId))).stats.score
-        });
-    } catch (e) { res.status(500).json({success:false,error:e.message}); }
-    finally {
-        adRewardProcessing.delete(processingUserId);
-    }
+        const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
+        if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        const fresh=await readUserRow(String(userId));
+        const completed={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null};
+        completedAdEvents.set(String(token),completed); setTimeout(()=>completedAdEvents.delete(String(token)),10*60*1000);
+        await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,spins:rewardSpins,sessionId,purpose});
+        if(rewardCoins) logTransaction(String(userId),'coin',rewardCoins,'Xem 1 QC hợp lệ'); if(rewardOrders) logTransaction(String(userId),'orders',rewardOrders,'Xem 1 QC hợp lệ');
+        try{await tryFinalizeReferral(String(userId));}catch(_){}
+        insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose,ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
+        res.json({success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score});
+    } catch(e){res.status(500).json({success:false,error:e.message});} finally{adRewardProcessing.delete(key);}
 });
 
 // API cũ giữ tương thích nhưng KHÔNG tự cộng BXH nữa.
@@ -3830,10 +3823,29 @@ app.post('/api/check-referral/:id', async (req, res) => {
     }
 });
 
+// ==================== LOGIN STREAK 7 NGÀY ====================
+const STREAK_REWARDS = [
+ {day:1,coins:100,orders:0,spins:0},{day:2,coins:150,orders:0,spins:0},{day:3,coins:200,orders:20,spins:0},
+ {day:4,coins:250,orders:30,spins:0},{day:5,coins:350,orders:0,spins:1},{day:6,coins:500,orders:50,spins:0},{day:7,coins:1000,orders:100,spins:1}
+];
+function addVietnamDays(dayKey,days){ const d=new Date(`${dayKey}T12:00:00+07:00`); d.setUTCDate(d.getUTCDate()+days); return vietnamDayKey(d); }
+function diffVietnamDays(a,b){ const da=new Date(`${a}T12:00:00+07:00`).getTime(); const db=new Date(`${b}T12:00:00+07:00`).getTime(); return Math.round((db-da)/(24*60*60*1000)); }
+async function getStreakState(userId){ const extra=await getUserExtra(userId); return (extra?.loginStreakState&&typeof extra.loginStreakState==='object')?{...extra.loginStreakState}:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}; }
+function streakView(state){ const today=vietnamDayKey(); let day=Number(state.day||0), current=0, missed=false; if(state.lastCheckInDate){ const diff=diffVietnamDays(state.lastCheckInDate,today); if(diff===0) current=day||7; else if(diff===1) current=day>=7?1:day+1; else { missed=true; current=day>=7?1:day+1; } } else current=1; return {today,day,currentDay:current,missed,recoveryAvailable:missed||!!state.recoveryAvailable,recoveryDate:state.recoveryDate||null,lastCheckInDate:state.lastCheckInDate||null}; }
+app.get('/api/streak/status/:id',async(req,res)=>{ const userId=String(req.params.id||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); try{ const state=await getStreakState(userId); res.json({success:true,...streakView(state),rewards:STREAK_REWARDS}); }catch(e){res.status(500).json({success:false,error:e.message});} });
+const streakProcessing=new Set();
+app.post('/api/streak/checkin',async(req,res)=>{ const userId=String(req.body?.userId||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý điểm danh.'}); streakProcessing.add(userId); try{ const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'}); const state=await getStreakState(userId); const view=streakView(state); if(state.lastCheckInDate===view.today) return res.json({success:true,alreadyClaimed:true,...view,rewards:STREAK_REWARDS}); if(view.missed) { const recoveryDate=state.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const recoveryAvailable=true; await saveUserExtra(userId,{loginStreakState:{...state,recoveryAvailable,recoveryDate}}); return res.status(409).json({success:false,missed:true,recoveryAvailable:true,recoveryDate,...view,error:'Chuỗi đã bị đứt. Hãy khôi phục bằng Rewarded để nhận lại ngày bị bỏ lỡ.'}); } const day=view.currentDay||1; const reward=STREAK_REWARDS[day-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const nextState={day:day>=7?0:day,lastCheckInDate:view.today,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); if(reward.coins) logTransaction(userId,'coin',reward.coins,`Điểm danh Day ${day}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Điểm danh Day ${day}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day}); const fresh=await readUserRow(userId); res.json({success:true,day,reward,day7:day===7,...streakView(nextState),coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
+app.post('/api/streak/recover',async(req,res)=>{ const userId=String(req.body?.userId||''); const adToken=String(req.body?.adToken||''); if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'}); if(!adToken) return res.status(400).json({success:false,error:'Thiếu adToken.'}); if(streakProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý khôi phục chuỗi.'}); streakProcessing.add(userId); try{ const event=completedAdEvents.get(adToken); if(!event||event.userId!==userId||event.purpose!=='streak-recovery') return res.status(400).json({success:false,error:'Rewarded khôi phục chuỗi không hợp lệ.'}); if(event.used&&event.streakRecoveryResult) return res.json({success:true,...event.streakRecoveryResult,idempotent:true}); const fraud=await antiFraudRewardGate(userId); if(!fraud.allowed) return res.status(fraud.status).json({success:false,...fraud,verificationRequired:true}); const state=await getStreakState(userId); const view=streakView(state); if(!view.missed) return res.status(400).json({success:false,error:'Hiện không có ngày bị bỏ lỡ để khôi phục.'}); const recoveryDay=Number(view.currentDay||1); const reward=STREAK_REWARDS[recoveryDay-1]; const mutation=await atomicWalletMutation(userId,{deltaCoins:reward.coins,deltaOrders:reward.orders,deltaSpins:reward.spins}); if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message}); const recoveryDate=view.recoveryDate||addVietnamDays(state.lastCheckInDate||view.today,1); const nextState={day:recoveryDay,lastCheckInDate:recoveryDate,recoveryAvailable:false,recoveryDate:null}; await saveUserExtra(userId,{loginStreakState:nextState}); await flushUserExtra(); event.used=true; event.streakRecoveryResult={recoveryDay,reward,...streakView(nextState)}; if(reward.coins) logTransaction(userId,'coin',reward.coins,`Khôi phục chuỗi Day ${recoveryDay}`); if(reward.orders) logTransaction(userId,'orders',reward.orders,`Khôi phục chuỗi Day ${recoveryDay}`); await recordAntiFraudEvent(userId,'streak',{rewardEvent:true,recovery:true,coins:reward.coins,orders:reward.orders,spins:reward.spins,day:recoveryDay}); const fresh=await readUserRow(userId); res.json({success:true,...event.streakRecoveryResult,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null}); }catch(e){res.status(500).json({success:false,error:e.message});}finally{streakProcessing.delete(userId);} });
+
 // API rút tiền - Hỗ trợ Ngân hàng / Momo / ZaloPay với các trường tách riêng
 // (bankName, accountName, accountNumber cho ngân hàng; accountNumber = SĐT cho Momo/ZaloPay)
 // LƯU Ý SCHEMA: bảng "withdrawals" trên Supabase cần có thêm các cột:
 // ordersAmount (int8), bankName (text), accountName (text), accountNumber (text), txCode (int8)
+const SUPPORTED_BANKS = [
+ 'Vietcombank','BIDV','VietinBank','Agribank','MBBank','Techcombank','VPBank','ACB','Sacombank','HDBank','VIB','TPBank','SHB','MSB','Eximbank','OCB','SeABank','LPBank','Bac A Bank','Nam A Bank','VietABank','ABBank','PVcomBank','KienlongBank','VietBank','BVBank','Public Bank Vietnam','Hong Leong Bank Vietnam','UOB Vietnam','HSBC Vietnam','Standard Chartered Vietnam','CIMB Vietnam','Woori Bank Vietnam','Shinhan Bank Vietnam','DBS Vietnam'
+];
+const SUPPORTED_EWALLETS = ['momo','zalopay'];
+function normalizeAccountDigits(v){ return String(v??'').trim().replace(/\s+/g,''); }
 const WITHDRAW_MIN_ORDERS = 30000;      // Tối thiểu 30.000 Đơn Hàng (= 3.000 VNĐ, tỷ giá 1 Order = 0,1 VNĐ giữ nguyên)
 const WITHDRAW_MIN_ADS = 7;             // Xem tối thiểu 7 QC trong ngày
 const WITHDRAW_MIN_SMARTLINKS = 10;     // Bấm tối thiểu 10 SmartLink trong ngày
@@ -3857,7 +3869,7 @@ app.post('/api/withdraw', async (req, res) => {
     const releaseWithdrawalQueue = await acquireWithdrawalQueue();
     let withdrawalUserId = '';
     try {
-        const { userId, method, bankName, accountName, accountNumber, ordersAmount } = req.body;
+        const { userId, method, bankName, accountName, accountNumber, ordersAmount, walletType } = req.body;
         withdrawalUserId = String(userId || '');
         if (withdrawalUserId && withdrawalProcessing.has(withdrawalUserId)) {
             return res.status(409).json({ error: 'Yêu cầu rút tiền đang được xử lý. Vui lòng thử lại sau ít giây.' });
@@ -3873,9 +3885,19 @@ app.post('/api/withdraw', async (req, res) => {
     if (ordersAmount < WITHDRAW_MIN_ORDERS) { // Mức rút tối thiểu: 30.000 Đơn Hàng (3.000 VNĐ)
         return res.status(400).json({ error: "Số đơn hàng rút tối thiểu là 30.000 Đơn Hàng (3.000 VNĐ)." });
     }
-    if (method === 'bank' && (!bankName || !accountName)) {
-        return res.status(400).json({ error: "Vui lòng nhập đầy đủ tên ngân hàng và tên chủ tài khoản." });
-    }
+    const normalizedAccountNumber = normalizeAccountDigits(accountNumber);
+    const normalizedAccountName = String(accountName || '').trim().toUpperCase();
+    if (!/^[0-9]+$/.test(normalizedAccountNumber)) return res.status(400).json({ error:'Số tài khoản/số điện thoại chỉ được chứa chữ số.' });
+    if (!normalizedAccountName) return res.status(400).json({ error:'Tên Chủ Tài Khoản là bắt buộc.' });
+    let normalizedMethod = method;
+    let normalizedWalletType = String(walletType||'').toLowerCase();
+    if (method === 'momo' || method === 'zalopay') { normalizedMethod='ewallet'; normalizedWalletType=method; }
+    if (normalizedMethod === 'bank') {
+        const normalizedBank=String(bankName||'').trim();
+        if (!SUPPORTED_BANKS.includes(normalizedBank)) return res.status(400).json({error:'Ngân hàng không nằm trong danh sách được hỗ trợ.'});
+    } else if (normalizedMethod === 'ewallet') {
+        if (!SUPPORTED_EWALLETS.includes(normalizedWalletType)) return res.status(400).json({error:'Vui lòng chọn MoMo hoặc ZaloPay.'});
+    } else return res.status(400).json({error:'Phương thức rút tiền không hợp lệ.'});
 
     const { data: userData } = await readUserRow(userId);
     if (!userData) {
@@ -3929,8 +3951,8 @@ app.post('/api/withdraw', async (req, res) => {
     // Tỉ lệ quy đổi: 1 Đơn Hàng = 0,1 VNĐ (mức rút tối thiểu: 30.000 Đơn Hàng = 3.000 VNĐ)
     const amountVnd = Math.floor(ordersAmount * 0.1);
     const newOrders = userData.orders - ordersAmount;
-    const methodLabel = method === 'bank' ? (bankName || 'Ngân hàng') : (method === 'momo' ? 'Momo' : 'ZaloPay');
-    const accountInfoText = method === 'bank' ? `${bankName} - ${accountName} - ${accountNumber}` : accountNumber;
+    const methodLabel = normalizedMethod === 'bank' ? String(bankName).trim() : (normalizedWalletType === 'momo' ? 'Ví điện tử - MoMo' : 'Ví điện tử - ZaloPay');
+    const accountInfoText = normalizedMethod === 'bank' ? `${String(bankName).trim()} - ${normalizedAccountName} - ${normalizedAccountNumber}` : `${normalizedWalletType} - ${normalizedAccountNumber}`;
 
     try {
         // Mã giao dịch tuần tự cho TOÀN BỘ bot (đơn rút thứ 1, 2, 3...)
@@ -3956,9 +3978,10 @@ app.post('/api/withdraw', async (req, res) => {
             amount: amountVnd,
             ordersAmount,
             method: methodLabel,
-            bankName: bankName || null,
-            accountName: accountName || null,
-            accountNumber,
+            bankName: normalizedMethod === 'bank' ? String(bankName).trim() : null,
+            accountName: normalizedAccountName,
+            accountNumber: normalizedAccountNumber,
+            walletType: normalizedMethod === 'ewallet' ? normalizedWalletType : null,
             accountInfo: accountInfoText,
             status: 'pending',
             txCode
