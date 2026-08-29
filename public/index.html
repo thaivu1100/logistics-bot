@@ -9,6 +9,18 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
+    <script>
+        // Banner 320x50 config supplied by project owner. No invoke/loader URL exists in this source,
+        // so the configuration is preserved exactly without inventing an ad script URL.
+        window.atOptions = {
+            'key' : '8ee7fbebb850f04e4e48dda69ae38579',
+            'format' : 'iframe',
+            'height' : 50,
+            'width' : 320,
+            'params' : {}
+        };
+        window.__banner320x50Config = { ...window.atOptions };
+    </script>
     <script src="https://www.youtube.com/iframe_api"></script>
     <!-- Rewarded Interstitial uses the existing zone 11457064. Passive fullscreen uses the same flow. -->
     
@@ -1306,7 +1318,7 @@
             'https://thatlobster.com/j68qriqj?key=40bef72361d42e7ccdb12b8e7ea786f1',
             'https://thatlobster.com/q0zpx1rxcw?key=d8fcdb5212100bff572648eb29d41527f'
         ];
-        const SMARTLINKS = [...new Set([...SMARTLINKS_BASE, ...SMARTLINK_ADDED])];
+        const SMARTLINKS = [...new Set([THATLOBSTER_SMARTLINK_1, ...SMARTLINKS_BASE, ...SMARTLINK_ADDED])];
 
         // ===== QUẢNG CÁO NỀN: CHỈ 4 LOẠI THỤ ĐỘNG =====
         // GIẢM TẦN SUẤT: các quảng cáo THỤ ĐỘNG này (KHÁC Rewarded Interstitial Giao Hàng và KHÁC tính năng
@@ -1499,10 +1511,10 @@
                  smartlinkStart:'LÀM SMARTLINK',
                  smartlinkLimitReached:'Đã hết 30 lượt SmartLink hôm nay.',
                  smartlinkCompleted:'SmartLink hoàn thành! +25 Coin +25 Đơn Hàng.',
-                 smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.',
+                 smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.', smartlinkTooEarly:'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!',
                  deliveryProcessing:'Đang xử lý giao hàng...',  streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
                 nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +2 lượt giao hàng!',
-                captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận',
+                captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận', captchaLoadError:'Không tạo được CAPTCHA từ máy chủ. Vui lòng thử lại.', captchaIncorrect:'CAPTCHA không đúng. Vui lòng nhập lại!',
                 quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
             },
             en: {
@@ -1575,11 +1587,11 @@
                  smartlinkStart:'DO SMARTLINK',
                  smartlinkLimitReached:"You have reached today's 30 SmartLink limit.",
                  smartlinkCompleted:'SmartLink completed! +25 Coin +25 Orders.',
-                 smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.',
+                 smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.', smartlinkTooEarly:'You must wait at least 5 seconds. Please try again!!',
                  deliveryProcessing:'Delivery is already being processed.',
  streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
                 nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +2 delivery slots!',
-                captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm',
+                captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm', captchaLoadError:'Could not create a server CAPTCHA. Please try again.', captchaIncorrect:'Incorrect CAPTCHA. Please try again!',
                 quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
             }
         };
@@ -1671,6 +1683,10 @@
                 .replace('Không kết nối được máy chủ để Tăng Tốc X2, vui lòng thử lại.','Could not connect to the server for X2 Speed-Up. Please try again.')
                 .replace('Không đủ Coin để nâng cấp xe.','Not enough Coins to upgrade the truck.')
                 .replace('Vui lòng chờ giao hàng hoàn tất.','Please wait for the delivery to finish.')
+                .replace('Vui lòng hoàn thành CAPTCHA để bắt đầu giao hàng.','Please complete the CAPTCHA to start delivery.')
+                .replace('Chưa đồng bộ được kho với máy chủ. Vui lòng thử lại.','The warehouse has not synced with the server yet. Please try again.')
+                .replace('Kho chưa có hàng để giao.','There are no goods in the warehouse to deliver.')
+                .replace('Hãy bấm Giao Hàng để mở một quảng cáo mới.','Tap Deliver to open a new ad.')
                 .replace('Xe đã đạt cấp tối đa.','The truck has reached the maximum level.')
                 .replace('Nâng cấp xe thất bại, vui lòng thử lại.','Truck upgrade failed. Please try again.')
                 .replace('Không kết nối được máy chủ để nâng cấp xe, vui lòng thử lại.','Could not connect to the server to upgrade the truck. Please try again.')
@@ -1802,7 +1818,7 @@
                 ],
                 // ===== CAPTCHA: bắt buộc MỖI lần giao hàng + MỖI lần rút tiền =====
                 captchaShow: false, captchaCode: '', captchaChars: [], captchaInput: '', captchaError: '',
-                captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null,
+                captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null, captchaChallengeId: '', withdrawCaptchaToken: '',
                 // ===== NHẠC NỀN: chỉ bật/tắt, 4 bài phát lặp lại tuần tự =====
                 musicOn: false, _musicUserEnabledThisSession: false, musicTrack: 0, _musicEl: null, _ytPlayer: null, _ytReady: false, _ambientAdLast: 0, _musicWatchdog: null, _musicArmed: false,
                 // ===== BXH XEM QC (hàng tuần, reset Chủ Nhật 00:00 cùng BXH mời bạn) =====
@@ -1834,10 +1850,13 @@
                     };
                 },
                 get truckName() {
-                    const names = ['🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh',
-                        '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
+                    const names = this.language === 'en'
+                        ? ['🛵 Motorcycle', '🛺 Cargo Trike', '🚐 Small Truck', '🚚 Box Truck', '🚛 Refrigerated Truck',
+                            '🚛 5-ton Truck', '🚛 Tractor Trailer', '🚛 20ft Container', '🚛 40ft Container', '🏆 Logistics Super Truck']
+                        : ['🛵 Xe máy', '🛺 Xe ba gác', '🚐 Xe tải nhỏ', '🚚 Xe tải thùng', '🚛 Xe tải lạnh',
+                            '🚛 Xe tải 5 tấn', '🚛 Xe đầu kéo', '🚛 Container 20ft', '🚛 Container 40ft', '🏆 Siêu xe Logistics'];
                     const tier = Math.min(names.length - 1, Math.floor((this.truckLevel - 1) / 50));
-                    return names[tier] || '🚛 Xe';
+                    return names[tier] || (this.language === 'en' ? '🚛 Truck' : '🚛 Xe');
                 },
                 get truckIcon() {
                     const icons = ['🛵', '🛺', '🚐', '🚚', '🚛', '🚛', '🚛', '🚛', '🚛', '🏆'];
@@ -2178,10 +2197,10 @@
                     // đã đợi đủ 10 giây. Hàm dùng chung, tự reset smartlinkStartTime ngay khi xử lý để tránh bị
                     // tính 2 lần nếu cả 2 sự kiện cùng bắn.
                     document.addEventListener('visibilitychange', () => {
-                        if (!document.hidden && this.tab === 'tasks') this.handleSmartlinkReturn();
+                        if (!document.hidden && this.smartlinkAttemptId) this.handleSmartlinkReturn();
                     });
                     window.addEventListener('focus', () => {
-                        if (this.tab === 'tasks') this.handleSmartlinkReturn();
+                        if (this.smartlinkAttemptId) this.handleSmartlinkReturn();
                     });
                     
                     // Chống spam: click quá 5 lần trong 3 giây trên cùng 1 nút sẽ bị chặn + cảnh báo
@@ -3194,8 +3213,7 @@
                     }, this.texts.adError, 'bonus-task');
                 },
                 async openSmartlinkAd1() {
-                    window.open(THATLOBSTER_SMARTLINK_1, '_blank');
-                    this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink quảng cáo đã mở.');
+                    return this.startSmartlink(THATLOBSTER_SMARTLINK_1);
                 },
                 inAppResetKey() {
                     const now = new Date();
@@ -3265,37 +3283,79 @@
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                     }
                 },
-                startSmartlink() {
-                    if (this._smartlinkSaving || this.smartlinkStartTime > 0) return;
+                async startSmartlink(preferredLink = '') {
+                    if (this._smartlinkSaving || this.smartlinkStartTime > 0 || this.smartlinkAttemptId) return false;
                     if (Number(this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
                         this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
-                        return;
+                        return false;
                     }
+                    // Increase visibility of the owner-provided priority SmartLink without removing any existing link.
                     const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
-                    const randomLink = availableLinks.length > 0
-                        ? availableLinks[Math.floor(Math.random() * availableLinks.length)]
-                        : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)];
-                    this.usedSmartlinks = [...this.usedSmartlinks, randomLink].slice(-SMARTLINKS.length);
-                    this.smartlinkStartTime = Date.now();
-                    this.smartlinkAttemptId = `${this.user.id}_${this.smartlinkStartTime}_${Math.random().toString(36).slice(2,10)}`;
+                    const priorityLink = String(preferredLink || '').trim();
+                    const prioritizeMain = !priorityLink && Math.random() < 0.45;
+                    const randomLink = priorityLink || (prioritizeMain
+                        ? THATLOBSTER_SMARTLINK_1
+                        : (availableLinks.length > 0
+                            ? availableLinks[Math.floor(Math.random() * availableLinks.length)]
+                            : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)]));
+                    if (!randomLink) return false;
+
+                    this._smartlinkSaving = true;
                     try {
-                        localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
-                        localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
-                        localStorage.setItem('shipper_smartlink_link', randomLink);
+                        const response = await fetch(`${API_URL}/api/smartlink/start`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id, link:randomLink, sessionId:this.securitySessionId})
+                        });
+                        const result = await response.json().catch(() => ({}));
+                        if (!response.ok || !result.success || !result.attemptId) {
+                            if (result.limitReached) {
+                                if (typeof result.smartlinksToday === 'number') this.smartlinksToday = Number(result.smartlinksToday);
+                                this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
+                            } else {
+                                this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'Unable to start SmartLink. Please try again.'));
+                            }
+                            return false;
+                        }
+
+                        this.usedSmartlinks = [...this.usedSmartlinks, randomLink].slice(-SMARTLINKS.length);
+                        // This timestamp is UI/reload state only. Reward eligibility is checked from server startedAt.
+                        this.smartlinkStartTime = Number(result.startedAt || Date.now());
+                        this.smartlinkAttemptId = String(result.attemptId);
+                        try {
+                            localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
+                            localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
+                            localStorage.setItem('shipper_smartlink_link', randomLink);
+                        } catch (_) {}
+
+                        if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(randomLink);
+                        else window.open(randomLink, '_blank', 'noopener');
+                        this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink opened. Stay on the SmartLink for at least 5 seconds.');
+                        setTimeout(() => {
+                            if (this.smartlinkAttemptId && !document.hidden) this.handleSmartlinkReturn();
+                        }, 12000);
+                        return true;
+                    } catch (e) {
+                        console.error('SmartLink start:',e);
+                        this.showNotification('⚠️ ' + (this.texts.serverConnectionError || 'Server connection error.'));
+                        return false;
+                    } finally {
+                        this._smartlinkSaving = false;
+                    }
+                },
+
+                clearSmartlinkAttempt() {
+                    this.smartlinkStartTime = 0;
+                    this.smartlinkAttemptId = '';
+                    try {
+                        localStorage.removeItem('shipper_smartlink_start');
+                        localStorage.removeItem('shipper_smartlink_attempt');
+                        localStorage.removeItem('shipper_smartlink_link');
                     } catch (_) {}
-                    this.saveState().catch(() => {});
-                    window.open(randomLink, '_blank', 'noopener');
-                    this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink opened. Stay on the SmartLink for at least 5 seconds.');
-                    setTimeout(() => {
-                        if (this.smartlinkStartTime > 0) this.handleSmartlinkReturn();
-                    }, 12000);
                 },
 
                 async handleSmartlinkReturn() {
-                    if (this.smartlinkStartTime <= 0 || this._smartlinkSaving) return;
-                    if (Date.now() - this.smartlinkStartTime < 5000) return;
+                    if (!this.smartlinkAttemptId || this._smartlinkSaving || document.hidden) return;
                     const attemptId = String(this.smartlinkAttemptId || '');
-                    if (!attemptId) return;
                     this._smartlinkSaving = true;
                     try {
                         let response = null, result = {};
@@ -3311,33 +3371,51 @@
                                 result = {success:false,retry:true};
                             }
                             if (response?.ok && result.success) break;
-                            if (!result.retry && response && ![408,409,429,500,502,503,504].includes(response.status)) break;
+                            if (result.tooEarly || result.attemptExpired || result.invalidAttempt || result.limitReached) break;
+                            if (!result.retry && response && ![408,409,425,429,500,502,503,504].includes(response.status)) break;
                             await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
                         }
-                        if (!response?.ok || !result.success) {
-                            this.showNotification('⚠️ ' + (this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
-                            return;
+
+                        if (result.tooEarly) {
+                            // Exact required warning. No reward/counter/task/referral update occurs.
+                            this.clearSmartlinkAttempt();
+                            this.showNotification('⚠️ ' + (this.texts.smartlinkTooEarly || (this.language === 'en'
+                                ? 'You must wait at least 5 seconds. Please try again!!'
+                                : 'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!')));
+                            return false;
                         }
+                        if (result.attemptExpired || result.invalidAttempt) {
+                            this.clearSmartlinkAttempt();
+                            this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry));
+                            return false;
+                        }
+                        if (result.limitReached) {
+                            this.clearSmartlinkAttempt();
+                            this.smartlinksToday = Number(result.smartlinksToday ?? this.smartlinksToday);
+                            this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
+                            return false;
+                        }
+                        if (!response?.ok || !result.success) {
+                            this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
+                            return false;
+                        }
+
+                        // Server is the only source of truth for all SmartLink rewards/counters.
                         this.smartlinkCount = Number(result.smartlinkCount ?? this.smartlinkCount);
                         this.smartlinksToday = Number(result.smartlinksToday ?? this.smartlinksToday);
                         this.lifetimeSmartlinks = Number(result.lifetimeSmartlinks ?? this.lifetimeSmartlinks);
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        this.smartlinkStartTime = 0;
-                        this.smartlinkAttemptId = '';
-                        try {
-                            localStorage.removeItem('shipper_smartlink_start');
-                            localStorage.removeItem('shipper_smartlink_attempt');
-                            localStorage.removeItem('shipper_smartlink_link');
-                        } catch (_) {}
+                        this.clearSmartlinkAttempt();
                         this.onSmartlinkWatched();
                         await this.syncDailyTasksFromServer();
-                        this.saveState().catch(() => {});
                         this.showNotification('✅ ' + (this.texts.smartlinkCompleted || 'SmartLink completed! +25 Coin +25 Orders.'));
+                        return true;
                     } catch (e) {
                         console.error('SmartLink:',e);
                         this.showNotification('⚠️ ' + (this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
+                        return false;
                     } finally {
                         this._smartlinkSaving = false;
                     }
@@ -3532,11 +3610,13 @@
                     this.withdrawAccountNumber = accountNumber;
                     this.withdrawAccountName = accountName;
                     this.withdrawSubmitting = true;
-                    // Giữ nguyên CAPTCHA hiện có; submitWithdraw chỉ chạy sau khi CAPTCHA được xác nhận.
-                    this.startCaptcha('withdraw', async () => {
+                    this.withdrawCaptchaToken = '';
+                    // Reuse the existing CAPTCHA modal, but challenge/verification is server-authoritative.
+                    const captchaStarted = await this.startCaptcha('withdraw', async () => {
                         try { await this.submitWithdraw(); }
                         finally { this.withdrawSubmitting = false; }
                     });
+                    if (!captchaStarted) this.withdrawSubmitting = false;
                 },
                 async submitWithdraw() {
                     try {
@@ -3551,11 +3631,13 @@
                                 accountName: this.withdrawAccountName,
                                 accountNumber: String(this.withdrawAccountNumber || '').trim().replace(/\s+/g,''),
                                 ordersAmount: Number(this.withdrawOrdersAmount),
-                                walletType: method === 'ewallet' ? this.withdrawWalletType : null
+                                walletType: method === 'ewallet' ? this.withdrawWalletType : null,
+                                withdrawCaptchaToken: this.withdrawCaptchaToken
                             })
                         });
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
+                            if (result.captchaRequired || result.captchaExpired) this.withdrawCaptchaToken = '';
                             this.showNotification('❌ ' + (result.error || this.texts.withdrawError || 'Withdrawal request failed.'));
                             return false;
                         }
@@ -3567,6 +3649,7 @@
                         this.withdrawBankName = '';
                         this.withdrawAccountName = '';
                         this.withdrawAccountNumber = '';
+                        this.withdrawCaptchaToken = '';
                         this.showNotification('💸 ' + (this.texts.withdrawSubmitted || 'Withdrawal request submitted: ') + this.formatNumber(vndAmount) + ' VNĐ.');
                         this.fetchWithdrawHistory();
                         this.saveState().catch(() => {});
@@ -3611,9 +3694,9 @@
                         .catch(err => console.error('Failed to copy text: ', err));
                 },
                 shareInvite() {
-                    const text = 'Tham gia Kho Hàng Logistics kiếm tiền cùng tôi! Link: https://t.me/' + BOT_USERNAME + '?start=' + this.user.id;
+                    const text = (this.language === 'en' ? 'Join Logistics Warehouse with me! Link: ' : 'Tham gia Kho Hàng Logistics kiếm tiền cùng tôi! Link: ') + 'https://t.me/' + BOT_USERNAME + '?start=' + this.user.id;
                     if (navigator.share) {
-                        navigator.share({ title: 'Mời bạn tham gia', text: text })
+                        navigator.share({ title: this.language === 'en' ? 'Invite a friend' : 'Mời bạn tham gia', text: text })
                             .catch(err => {
                                 console.error('Error sharing:', err);
                                 this.showNotification('❌ Lỗi chia sẻ. Vui lòng copy thủ công.');
@@ -3682,35 +3765,102 @@
                 // được XẾP HÀNG (queue) và LUÔN CHỜ lệnh lưu trước đó xong rồi mới gửi lệnh tiếp theo, đảm bảo
                 // các request luôn tới server ĐÚNG THỨ TỰ và luôn dùng dữ liệu MỚI NHẤT tại thời điểm gửi.
                 // ==================== CAPTCHA ====================
-                newCaptchaCode() {
-                    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-                    let code = '';
-                    for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
-                    this.captchaCode = code;
-                    this.captchaChars = [...code].map((ch, i) => ({ ch, rot: Math.round((Math.random() * 22) - 11), i }));
+                setCaptchaVisual(code) {
+                    this.captchaCode = String(code || '').toUpperCase();
+                    this.captchaChars = [...this.captchaCode].map((ch, i) => ({ ch, rot: Math.round((Math.random() * 22) - 11), i }));
                     this.captchaInput = '';
                     this.captchaError = '';
                     this.captchaRefreshing = true;
                     setTimeout(() => { this.captchaRefreshing = false; }, 320);
                 },
-                startCaptcha(action, onSuccess) {
+                async loadWithdrawCaptchaChallenge() {
+                    this.captchaRefreshing = true;
+                    this.captchaError = '';
+                    try {
+                        const res = await fetch(`${API_URL}/api/withdraw/captcha-challenge`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id})
+                        });
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success || !result.challengeId || !result.captchaCode) {
+                            throw new Error(result.error || this.texts.captchaLoadError || 'Could not create CAPTCHA.');
+                        }
+                        this.captchaChallengeId = String(result.challengeId);
+                        this.setCaptchaVisual(result.captchaCode);
+                        return true;
+                    } catch (e) {
+                        console.error('Withdraw CAPTCHA challenge:',e);
+                        this.captchaChallengeId = '';
+                        this.captchaCode = '';
+                        this.captchaChars = [];
+                        this.captchaError = '❌ ' + (e?.message || this.texts.captchaLoadError || 'Could not create CAPTCHA.');
+                        this.captchaRefreshing = false;
+                        return false;
+                    }
+                },
+                async newCaptchaCode() {
+                    if (this.captchaAction === 'withdraw') return this.loadWithdrawCaptchaChallenge();
+                    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                    let code = '';
+                    for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
+                    this.setCaptchaVisual(code);
+                    return true;
+                },
+                async startCaptcha(action, onSuccess) {
                     this.captchaAction = action;
                     this.captchaOnSuccess = onSuccess;
                     this.captchaShow = true;
-                    this.newCaptchaCode();
+                    this.captchaChallengeId = '';
+                    const ready = await this.newCaptchaCode();
                     this.$nextTick(() => document.querySelector('.captcha-box')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                    if (!ready && action === 'withdraw') return false;
+                    return true;
                 },
                 closeCaptcha() {
+                    const cancelledWithdraw = this.captchaAction === 'withdraw' && !this.withdrawCaptchaToken;
                     this.captchaShow = false;
                     this.captchaInput = '';
                     this.captchaError = '';
+                    this.captchaChallengeId = '';
+                    this.captchaAction = '';
                     this.captchaOnSuccess = null;
+                    if (cancelledWithdraw) this.withdrawSubmitting = false;
                 },
-                verifyCaptcha() {
+                async verifyCaptcha() {
                     const input = String(this.captchaInput || '').trim().toUpperCase();
+                    if (this.captchaAction === 'withdraw') {
+                        if (input.length !== 5 || !this.captchaChallengeId) {
+                            this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
+                            return;
+                        }
+                        try {
+                            const res = await fetch(`${API_URL}/api/withdraw/captcha-verify`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id, challengeId:this.captchaChallengeId, captchaInput:input})
+                            });
+                            const result = await res.json().catch(() => ({}));
+                            if (!res.ok || !result.verified || !result.withdrawCaptchaToken) {
+                                const errorText = '❌ ' + (result.error || this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
+                                if (!result.retry) await this.loadWithdrawCaptchaChallenge();
+                                this.captchaError = errorText;
+                                return;
+                            }
+                            this.withdrawCaptchaToken = String(result.withdrawCaptchaToken);
+                            const fn = this.captchaOnSuccess;
+                            this.closeCaptcha();
+                            if (typeof fn === 'function') await Promise.resolve(fn());
+                            return;
+                        } catch (e) {
+                            console.error('Withdraw CAPTCHA verify:',e);
+                            this.captchaError = '❌ ' + (this.texts.serverConnectionError || 'Server connection error.');
+                            return;
+                        }
+                    }
+
+                    // Existing delivery CAPTCHA remains unchanged and local; only withdrawal requires server token.
                     if (input.length !== 5 || input !== this.captchaCode) {
-                        this.captchaError = '❌ CAPTCHA không đúng. Vui lòng nhập lại!';
-                        this.newCaptchaCode();
+                        this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'CAPTCHA không đúng. Vui lòng nhập lại!');
+                        await this.newCaptchaCode();
                         return;
                     }
                     const fn = this.captchaOnSuccess;
@@ -4313,6 +4463,9 @@
                 },
                 saveState() {
                     if (this._serverHydrationFailed) return Promise.resolve(false);
+                    // Never enqueue a legacy snapshot while Delivery is claiming/animating. The server response
+                    // is source-of-truth and must not be followed by a stale wallet/production save.
+                    if (this._pendingDeliveryClaim || this._deliveryClaimInFlight || this.showDeliveryAnimation) return Promise.resolve(true);
                     this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => false);
                     return this._saveQueue;
                 },
