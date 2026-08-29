@@ -90,6 +90,12 @@
         .delivery-progress-fill { height:100%; width:38%; border-radius:999px; background:linear-gradient(90deg,#3b82f6,#fbbf24,#22c55e); animation:deliveryProgress 2.65s cubic-bezier(.2,.8,.2,1) forwards; box-shadow:0 0 14px rgba(251,191,36,.45); }
         .delivery-success-spark { position:absolute; right:34px; bottom:74px; z-index:25; font-size:18px; opacity:0; }
         .delivery-scene.is-moving .delivery-success-spark { animation:deliverySpark .7s ease-out 1.72s both; }
+        .delivery-success-badge { position:absolute; right:12px; top:12px; z-index:30; padding:5px 9px; border-radius:999px; background:rgba(34,197,94,.16); border:1px solid rgba(74,222,128,.45); color:#86efac; font-size:8px; font-weight:900; letter-spacing:.06em; opacity:0; transform:translateY(-8px) scale(.88); box-shadow:0 0 20px rgba(34,197,94,.18); }
+        .delivery-scene.is-moving .delivery-success-badge { animation:deliveryBadge .55s ease-out 1.78s forwards; }
+        .delivery-particles { position:absolute; inset:0; z-index:24; pointer-events:none; overflow:hidden; }
+        .delivery-particles span { position:absolute; left:79%; top:45%; font-size:10px; opacity:0; }
+        .delivery-scene.is-moving .delivery-particles span { animation:deliveryParticle .85s ease-out 1.72s forwards; }
+        .delivery-particles span:nth-child(2){--dx:-34px;--dy:-46px;animation-delay:1.78s!important}.delivery-particles span:nth-child(3){--dx:24px;--dy:-40px;animation-delay:1.84s!important}.delivery-particles span:nth-child(4){--dx:38px;--dy:-14px;animation-delay:1.9s!important}.delivery-particles span:nth-child(5){--dx:-30px;--dy:22px;animation-delay:1.96s!important}.delivery-particles span:nth-child(6){--dx:26px;--dy:26px;animation-delay:2.02s!important}
         @keyframes deliveryAura { to { transform:rotate(360deg); } }
         @keyframes deliverySunPulse { 50% { transform:scale(1.08); opacity:.78; } }
         @keyframes deliveryCloud { from { transform:translateX(0); } to { transform:translateX(520px); } }
@@ -101,6 +107,8 @@
         @keyframes deliveryDust { 0% { transform:translateX(0) scale(.7); opacity:0; } 30% { opacity:.75; } 100% { transform:translateX(-18px) scale(1.15); opacity:0; } }
         @keyframes deliveryProgress { from { width:12%; } to { width:100%; } }
         @keyframes deliverySpark { 0% { opacity:0; transform:scale(.3) rotate(-20deg); } 55% { opacity:1; transform:scale(1.45) rotate(10deg); } 100% { opacity:1; transform:scale(1) rotate(0); } }
+        @keyframes deliveryBadge { 0%{opacity:0;transform:translateY(-8px) scale(.88)} 70%{opacity:1;transform:translateY(1px) scale(1.05)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+        @keyframes deliveryParticle { 0%{opacity:0;transform:translate(0,0) scale(.5) rotate(0)} 25%{opacity:1} 100%{opacity:0;transform:translate(var(--dx,18px),var(--dy,-38px)) scale(1.15) rotate(120deg)} }
         
         /* Animation băng chuyền khi đang sản xuất */
         .conveyor-belt-anim { margin: 10px auto; width: 70%; height: 60px; background: #555; border-radius: 20px; position: relative; overflow: hidden; border: 2px solid #334155; }
@@ -156,6 +164,7 @@
         }
         .low-graphics .coin-float,
         .low-graphics .delivery-animation .box-on-conveyor,
+        .low-graphics .delivery-particles,
         .low-graphics .delivery-animation .delivery-truck,
         .low-graphics .conveyor-belt-anim .conveyor-goods,
         .low-graphics .task-route-fill,
@@ -614,6 +623,8 @@
             <div class="delivery-road"></div>
             <div class="delivery-truck" :class="{ 'moving': isTruckMoving }" x-text="truckIcon"></div>
             <div class="delivery-success-spark">✨📦✨</div>
+            <div class="delivery-success-badge">✅ DELIVERED</div>
+            <div class="delivery-particles"><span>✨</span><span>✦</span><span>✨</span><span>✦</span><span>✨</span><span>✦</span></div>
             <div class="house">🏠</div>
         </div>
         <div class="delivery-status-card">
@@ -832,7 +843,8 @@
                             <div class="flex-shrink-0 pl-2">
                                 <span x-show="task.done" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
                                 <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.claim"></button>
-                                <span x-show="!task.done && !task.claimable && task.id !== 'smartlink5'" class="text-slate-500 text-[7px] font-black uppercase" x-text="texts.monitoring"></span>
+                                <span x-show="!task.done && !task.claimable" class="text-slate-500 text-[7px] font-black uppercase" x-text="taskProgressText(task)"></span>
+                                <span x-show="!task.done && task.claimable" class="text-green-400 text-[7px] font-black" x-text="language === 'vi' ? '✅ Hoàn thành — Có thể nhận' : '✅ Complete — Claimable'"></span>
                             </div>
                         </div>
                     </template>
@@ -1316,13 +1328,18 @@
                     data._deliveryClaimInFlight ||
                     data.isShipping ||
                     data._pendingDeliveryClaim ||
+                    data.showDeliveryAnimation ||
                     data.isSpinning ||
+                    data.isShaking ||
+                    data._taskClaimInFlight ||
+                    data._smartlinkSaving ||
                     data.captchaShow ||
                     data.quizModalShow ||
                     data.showCoinBoxModal ||
                     data.withdrawSubmitting ||
                     data.upgradeSubmitting ||
                     data.giftcodeSubmitting ||
+                    data._saveInFlight ||
                     ['chest', 'withdraw', 'giftcode'].includes(data.tab)
                 );
             } catch (_) { return true; }
@@ -1725,9 +1742,11 @@
                 // lượt giao hàng ở server" (do lỗi tạm thời) và cờ khoá chống gọi /api/delivery/claim
                 // trùng lặp. Xem deliverWithAd()/retryDeliveryClaim() để biết luồng xử lý đầy đủ.
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
-                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, deliveryServerLimit: 20,
+                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 20,
+                _rewardedRunning: false, _rewardedActionId: '', _smartlinkSaving: false, _taskClaimInFlight: false,
+                _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
-                _saveQueue: Promise.resolve(), // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
+                _saveQueue: Promise.resolve(), _saveInFlight: false, // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
                 coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
                 spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
@@ -2226,6 +2245,14 @@
                         this._deliveryAdToken = pendingDeliveryToken;
                         this.retryDeliveryClaim(pendingDeliveryToken).catch(() => {});
                     }
+                    // Rewarded server-authoritative khác cũng giữ token qua reload để retry action,
+                    // tránh bắt user xem lại QC khi response API bị mất sau khi quảng cáo đã xác minh.
+                    this._pendingUpgradeAdToken = localStorage.getItem('shipper_pending_truck_upgrade_token') || '';
+                    this._pendingSpeedupAdToken = localStorage.getItem('shipper_pending_speedup_token') || '';
+                    this._pendingCoinBoxAdToken = localStorage.getItem('shipper_pending_coinbox_token') || '';
+                    if (this._pendingUpgradeAdToken) this.completeTruckUpgrade(this._pendingUpgradeAdToken).catch(() => {});
+                    if (this._pendingSpeedupAdToken) this.completeSpeedUpProduction(this._pendingSpeedupAdToken).catch(() => {});
+                    if (this._pendingCoinBoxAdToken) this.completeOpenCoinBox(this._pendingCoinBoxAdToken).catch(() => {});
                     this.initQcRankList();
 
                     // ===== ĐẢM BẢO DỮ LIỆU KHÔNG MẤT KHI CHUYỂN TAB / TẮT MỞ LẠI =====
@@ -2508,6 +2535,10 @@
                 // (xem "/api/production/speedup"), giống hệt cách "/api/truck/upgrade" đang xử lý nâng cấp
                 // xe. Client chỉ cập nhật đồng hồ + báo "X2 thành công" SAU KHI server xác nhận đã lưu.
                 speedUpProduction() {
+                    if (this._pendingSpeedupAdToken) {
+                        this.completeSpeedUpProduction(this._pendingSpeedupAdToken).catch(() => {});
+                        return;
+                    }
                     if (this.currentProducts >= this.maxProducts) {
                         this.showNotification('📦 Kho đã đầy, không cần tăng tốc!');
                         return;
@@ -2521,38 +2552,68 @@
                         this.showNotification('✅ Đã sẵn sàng, không cần tăng tốc!');
                         return;
                     }
-                    this.playRewardedAd((adResult) => this.completeSpeedUpProduction(adResult?.adToken || ''));
+                    this.playRewardedAd(async (adResult) => {
+                        const token = String(adResult?.adToken || '');
+                        if (!token) return false;
+                        this._pendingSpeedupAdToken = token;
+                        try { localStorage.setItem('shipper_pending_speedup_token', token); } catch (_) {}
+                        return await this.completeSpeedUpProduction(token);
+                    }, this.texts.adError, 'x2');
                 },
                 async completeSpeedUpProduction(adToken) {
                     if (!adToken) {
                         this.showNotification('⚠️ Không xác định được lượt quảng cáo, vui lòng thử lại.');
-                        return;
+                        return false;
                     }
-                    try {
-                        const res = await fetch(`${API_URL}/api/production/speedup`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: this.user.id, adToken })
-                        });
-                        const result = await res.json().catch(() => ({}));
-                        if (!res.ok || !result.success) {
-                            if (result.alreadyUsed) this.showNotification('⚠️ Bạn chỉ được Tăng Tốc X2 1 lần cho mỗi mẻ hàng đang sản xuất!');
-                            else if (result.alreadyReady) this.showNotification('✅ Mẻ hàng đã sẵn sàng, không cần tăng tốc nữa!');
-                            else this.showNotification('⚠️ ' + (result.error || 'Tăng Tốc X2 thất bại, vui lòng thử lại.'));
-                            return;
+                    let lastError = 'Tăng Tốc X2 thất bại, vui lòng thử lại.';
+                    for (let attempt = 0; attempt < 5; attempt++) {
+                        try {
+                            const res = await fetch(`${API_URL}/api/production/speedup`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: this.user.id, adToken })
+                            });
+                            const result = await res.json().catch(() => ({}));
+                            if (res.ok && result.success) {
+                                this.lastProducedAt = Number(result.lastProducedAt ?? this.lastProducedAt);
+                                this.productionInterval = Number(result.productionInterval ?? this.productionInterval);
+                                this.speedUpUsed = !!result.speedUpUsed;
+                                if (typeof result.currentProducts === 'number') this.currentProducts = Number(result.currentProducts);
+                                if (typeof result.maxProducts === 'number' && result.maxProducts > 0) this.maxProducts = Number(result.maxProducts);
+                                if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                                await this.syncDailyTasksFromServer();
+                                this._pendingSpeedupAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_speedup_token'); } catch (_) {}
+                                this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
+                                return true;
+                            }
+                            if (result.alreadyUsed) {
+                                this._pendingSpeedupAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_speedup_token'); } catch (_) {}
+                                this.showNotification('⚠️ Bạn chỉ được Tăng Tốc X2 1 lần cho mỗi mẻ hàng đang sản xuất!');
+                                return false;
+                            }
+                            if (result.alreadyReady) {
+                                this._pendingSpeedupAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_speedup_token'); } catch (_) {}
+                                this.showNotification('✅ Mẻ hàng đã sẵn sàng, không cần tăng tốc nữa!');
+                                return false;
+                            }
+                            lastError = result.error || lastError;
+                            if (!(result.retry || [408,409,429,500,502,503,504].includes(res.status))) {
+                                this._pendingSpeedupAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_speedup_token'); } catch (_) {}
+                                this.showNotification('⚠️ ' + lastError);
+                                return false;
+                            }
+                        } catch (e) {
+                            console.error('Tăng Tốc X2 retry:', e);
+                            lastError = 'Không kết nối được máy chủ để Tăng Tốc X2.';
                         }
-                        // Chỉ cập nhật đồng hồ bằng giá trị THẬT mà server đã xác nhận lưu thành công vào
-                        // Supabase - không tự trừ/tự đặt speedUpUsed trên client nữa.
-                        this.lastProducedAt = Number(result.lastProducedAt ?? this.lastProducedAt);
-                        this.productionInterval = Number(result.productionInterval ?? this.productionInterval);
-                        this.speedUpUsed = true;
-                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        await this.syncDailyTasksFromServer();
-                        this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
-                    } catch (e) {
-                        console.error('Tăng Tốc X2:', e);
-                        this.showNotification('⚠️ Không kết nối được máy chủ để Tăng Tốc X2, vui lòng thử lại.');
+                        await new Promise(resolve => setTimeout(resolve, Math.min(3000, 350 * Math.pow(2, attempt))));
                     }
+                    this.showNotification('⚠️ ' + lastError + ' Quảng cáo đã được xác minh; không cần xem lại QC.');
+                    return false;
                 },
                 produceLoop() {
                     setInterval(() => {
@@ -2603,20 +2664,23 @@
                     const deliveryActionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._deliveryActionId = deliveryActionId;
                     this.isShipping = true;
-                    await this.playRewardedAd(async (adResult) => {
-                        const token = String(adResult?.adToken || '');
-                        if (!token) throw new Error('Không xác định được phiên Rewarded hợp lệ.');
-                        if (this._deliveryActionId !== deliveryActionId) return false;
-                        this._deliveryAdToken = token;
-                        this._pendingDeliveryClaim = true;
-                        try {
-                            localStorage.setItem('shipper_pending_delivery_claim', '1');
-                            localStorage.setItem('shipper_pending_delivery_claim_token', token);
-                        } catch (_) {}
-                        const claimed = await this.retryDeliveryClaim(token);
-                        if (!claimed) return false;
-                    }, this.texts.adError || 'QC không thể hoàn tất, vui lòng thử lại sau.', 'delivery');
-                    if (!this._pendingDeliveryClaim) this.isShipping = false;
+                    try {
+                        await this.playRewardedAd(async (adResult) => {
+                            const token = String(adResult?.adToken || '');
+                            if (!token) throw new Error('Không xác định được phiên Rewarded hợp lệ.');
+                            if (this._deliveryActionId !== deliveryActionId) return false;
+                            this._deliveryAdToken = token;
+                            this._pendingDeliveryClaim = true;
+                            try {
+                                localStorage.setItem('shipper_pending_delivery_claim', '1');
+                                localStorage.setItem('shipper_pending_delivery_claim_token', token);
+                            } catch (_) {}
+                            return await this.retryDeliveryClaim(token);
+                        }, this.texts.adError || 'QC không thể hoàn tất, vui lòng thử lại sau.', 'delivery');
+                    } finally {
+                        if (this._deliveryActionId === deliveryActionId) this._deliveryActionId = '';
+                        if (!this._pendingDeliveryClaim && !this.showDeliveryAnimation) this.isShipping = false;
+                    }
                 },
                 // Claim 1 lượt giao bằng đúng adToken server đã xác thực. Không bao giờ gửi
                 // deliveryCount/orders từ client để xin server cộng thưởng.
@@ -2643,11 +2707,16 @@
                             if (r && r.ok && d.success) {
                                 this._pendingDeliveryClaim = false;
                                 this._deliveryAdToken = '';
+                                if (this._deliveryRetryTimer) {
+                                    clearTimeout(this._deliveryRetryTimer);
+                                    this._deliveryRetryTimer = null;
+                                }
                                 try {
                                     localStorage.removeItem('shipper_pending_delivery_claim');
                                     localStorage.removeItem('shipper_pending_delivery_claim_token');
                                 } catch (_) {}
-                                // Chỉ hydrate bằng dữ liệu server đã xác nhận.
+                                // Chỉ hydrate bằng dữ liệu server đã xác nhận. Không saveState ngay tại đây:
+                                // response Delivery là source-of-truth và một snapshot client cũ không được ghi ngược lại.
                                 this.deliveryCount = Number(d.deliveryCount ?? this.deliveryCount);
                                 this.deliveryServerLimit = Number(d.limit ?? this.deliveryServerLimit ?? 20);
                                 this.extraDeliveryCount = Number(d.extraDeliveryCount ?? this.extraDeliveryCount ?? 0);
@@ -2658,8 +2727,10 @@
                                 this._deliveryDeliveredProducts = Number(d.deliveredProducts || 0);
                                 if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
                                 await this.syncDailyTasksFromServer();
-                                this.saveState().catch(() => {});
-                                this.startDeliveryAnimation(this._deliveryDeliveredProducts);
+                                if (this._lastAppliedDeliveryToken !== token) {
+                                    this._lastAppliedDeliveryToken = token;
+                                    this.startDeliveryAnimation(this._deliveryDeliveredProducts);
+                                }
                                 return true;
                             }
 
@@ -2729,44 +2800,67 @@
                         this._deliveryClaimInFlight = false;
                     }
                 },
+                clearDeliveryAnimationTimers() {
+                    (this._deliveryAnimationTimers || []).forEach(timer => clearTimeout(timer));
+                    this._deliveryAnimationTimers = [];
+                },
                 startDeliveryAnimation(deliveredProducts = 0) {
-                    if (this.showDeliveryAnimation || !this.isShipping) this.isShipping = true;
+                    this.clearDeliveryAnimationTimers();
+                    this.isShipping = true;
                     this.showDeliveryAnimation = true;
                     this.isTruckMoving = false;
                     this._deliveryResultApplied = true;
                     this._deliveryDeliveredProducts = Number(deliveredProducts || this._deliveryDeliveredProducts || 0);
-                    setTimeout(() => { this.isTruckMoving = true; }, 620);
-                    setTimeout(() => {
+                    const moveTimer = setTimeout(() => { this.isTruckMoving = true; }, this.graphicsMode === 'fixlag' ? 250 : 620);
+                    const finishTimer = setTimeout(() => {
                         this.completeDelivery(this._deliveryDeliveredProducts);
                         this.showDeliveryAnimation = false;
                         this.isTruckMoving = false;
-                    }, 2950);
+                        this.clearDeliveryAnimationTimers();
+                    }, this.graphicsMode === 'fixlag' ? 1500 : 2950);
+                    this._deliveryAnimationTimers = [moveTimer, finishTimer];
                 },
                 completeDelivery(delivered = this._deliveryDeliveredProducts || 0) {
                     // Server đã chuyển hàng + cộng orders trước khi animation chạy.
                     // Tuyệt đối không cộng orders/currentProducts ở client lần nữa.
-                    this.currentProducts = 0;
-                    this.speedUpUsed = false;
+                    // currentProducts/lastProducedAt/speedUpUsed đã hydrate từ response server.
+                    // Không ghi cưỡng bức về 0 ở đây vì một idempotent retry rất muộn có thể đã sang mẻ mới.
                     this.isShipping = false;
                     this._deliveryResultApplied = false;
                     this._deliveryDeliveredProducts = 0;
                     this.syncDailyTasksFromServer().catch(() => {});
-                    this.saveState().catch(() => {});
                     this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(Number(delivered || 0)) + ' ' + (this.texts.ordersTarget || 'Orders'));
                     this.scheduleCoinBox();
                 },
-                upgradeTruck() {
+                async upgradeTruck() {
+                    if (this.upgradeSubmitting || this._rewardedRunning) return;
+                    if (this.isShipping || this._deliveryClaimInFlight || this._pendingDeliveryClaim) {
+                        this.showNotification('⏳ Vui lòng chờ giao hàng hoàn tất.');
+                        return;
+                    }
+                    if (this._pendingUpgradeAdToken) {
+                        this.upgradeSubmitting = true;
+                        try { await this.completeTruckUpgrade(this._pendingUpgradeAdToken); }
+                        finally { this.upgradeSubmitting = false; }
+                        return;
+                    }
                     if (this.truckLevel >= this.maxTruckLevel) return;
                     if (this.coins < this.upgradeCost) {
                         this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
                         return;
                     }
-                    if (this.isShipping) {
-                        this.showNotification('⏳ Vui lòng chờ giao hàng hoàn tất.');
-                        return;
+                    this.upgradeSubmitting = true;
+                    try {
+                        await this.playRewardedAd(async (adResult) => {
+                            const token = String(adResult?.adToken || '');
+                            if (!token) return false;
+                            this._pendingUpgradeAdToken = token;
+                            try { localStorage.setItem('shipper_pending_truck_upgrade_token', token); } catch (_) {}
+                            return await this.completeTruckUpgrade(token);
+                        }, this.texts.adError, 'truck-upgrade');
+                    } finally {
+                        this.upgradeSubmitting = false;
                     }
-                    // Nâng cấp xe cũng phải xem Rewarded Interstitial, giống nút Giao Hàng.
-                    this.playRewardedAd((adResult) => this.completeTruckUpgrade(adResult?.adToken || ''));
                 },
                 // FIX LỖI "NÂNG CẤP XE BÁO THÀNH CÔNG NHƯNG KHÔNG TRỪ COIN / KHÔNG TĂNG LEVEL": trước đây
                 // hàm này tự trừ coin + tăng truckLevel NGAY TRÊN CLIENT rồi mới đồng bộ lên server bằng
@@ -2778,32 +2872,55 @@
                 async completeTruckUpgrade(adToken) {
                     if (!adToken) {
                         this.showNotification('⚠️ Không xác định được lượt quảng cáo, vui lòng thử lại.');
-                        return;
+                        return false;
                     }
-                    try {
-                        const res = await fetch(`${API_URL}/api/truck/upgrade`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: this.user.id, adToken })
-                        });
-                        const result = await res.json().catch(() => ({}));
-                        if (!res.ok || !result.success) {
-                            if (result.maxed) this.showNotification('✅ Xe đã đạt cấp tối đa.');
-                            else if (result.insufficientCoins) this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
-                            else this.showNotification('⚠️ ' + (result.error || 'Nâng cấp xe thất bại, vui lòng thử lại.'));
-                            return;
+                    let lastError = 'Nâng cấp xe thất bại, vui lòng thử lại.';
+                    for (let attempt = 0; attempt < 6; attempt++) {
+                        try {
+                            const res = await fetch(`${API_URL}/api/truck/upgrade`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: this.user.id, adToken })
+                            });
+                            const result = await res.json().catch(() => ({}));
+                            if (res.ok && result.success) {
+                                // Chỉ cập nhật giao diện bằng giá trị THẬT mà server đã xác nhận lưu thành công.
+                                this.coins = Number(result.coins ?? this.coins);
+                                this.truckLevel = Number(result.truckLevel ?? this.truckLevel);
+                                if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                                this.applyLevelStats();
+                                await this.syncDailyTasksFromServer();
+                                this._pendingUpgradeAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_truck_upgrade_token'); } catch (_) {}
+                                this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
+                                return true;
+                            }
+                            if (result.maxed) {
+                                this._pendingUpgradeAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_truck_upgrade_token'); } catch (_) {}
+                                this.showNotification('✅ Xe đã đạt cấp tối đa.');
+                                return false;
+                            }
+                            if (result.insufficientCoins) {
+                                this.showNotification('❌ Không đủ Coin để nâng cấp xe.');
+                                return false;
+                            }
+                            lastError = result.error || lastError;
+                            if (!(result.retry || [408,409,429,500,502,503,504].includes(res.status))) {
+                                this._pendingUpgradeAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_truck_upgrade_token'); } catch (_) {}
+                                this.showNotification('⚠️ ' + lastError);
+                                return false;
+                            }
+                        } catch (e) {
+                            console.error('Nâng cấp xe retry:', e);
+                            lastError = 'Không kết nối được máy chủ để nâng cấp xe.';
                         }
-                        // Chỉ cập nhật giao diện bằng giá trị THẬT mà server đã xác nhận lưu thành công.
-                        this.coins = Number(result.coins ?? this.coins);
-                        this.truckLevel = Number(result.truckLevel ?? this.truckLevel);
-                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        this.applyLevelStats();
-                        await this.syncDailyTasksFromServer();
-                        this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
-                    } catch (e) {
-                        console.error('Nâng cấp xe:', e);
-                        this.showNotification('⚠️ Không kết nối được máy chủ để nâng cấp xe, vui lòng thử lại.');
+                        await new Promise(resolve => setTimeout(resolve, Math.min(3500, 400 * Math.pow(2, attempt))));
                     }
+                    // QC đã thành công: tuyệt đối không báo "QC lỗi". Token server vẫn idempotent để lần thử tiếp theo không trừ Coin/level lần hai.
+                    this.showNotification('⚠️ ' + lastError + ' Quảng cáo đã được xác minh; vui lòng bấm Nâng Cấp Xe để đồng bộ lại nếu cần.');
+                    return false;
                 },
                 // Áp lại thông số theo cấp hiện tại (gọi cả lúc mở app để dữ liệu cũ khớp công thức mới)
                 applyLevelStats() {
@@ -2837,28 +2954,57 @@
                         }, 60000); // Box visible for 60 seconds
                     }, delay);
                 },
-                openCoinBoxWithAd() {
+                async openCoinBoxWithAd() {
                     this.showCoinBoxModal = false;
-                    this.playRewardedAd((adResult) => this.completeOpenCoinBox(adResult?.adToken || ''),);
+                    if (this._pendingCoinBoxAdToken) {
+                        return this.completeOpenCoinBox(this._pendingCoinBoxAdToken);
+                    }
+                    return this.playRewardedAd(async (adResult) => {
+                        const token = adResult?.adToken || '';
+                        if (!token) return false;
+                        this._pendingCoinBoxAdToken = token;
+                        try { localStorage.setItem('shipper_pending_coinbox_token', token); } catch (_) {}
+                        return this.completeOpenCoinBox(token);
+                    }, this.texts.adError, 'coinbox');
                 },
                 async completeOpenCoinBox(adToken) {
-                    if (!this.coinBoxVisible) return;
-                    try {
-                        const res = await fetch(`${API_URL}/api/coinbox/open`, {
-                            method:'POST', headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({userId:this.user.id,adToken})
-                        });
-                        const result=await res.json().catch(()=>({}));
-                        if(!res.ok || !result.success) throw new Error(result.error || 'Không nhận được phần thưởng Hộp Coin');
-                        this.coins=Number(result.coins ?? this.coins);
-                        this.showNotification('🎁 Nhận ' + this.formatNumber(Number(result.coin||0)) + ' Coin!');
-                        this.coinBoxVisible=false;
-                        this.coinBoxCountdown='2 giờ';
-                        this.scheduleCoinBox();
-                    } catch(e) {
-                        console.error('Coin Box:',e);
-                        this.showNotification('⚠️ Không thể nhận phần thưởng Hộp Coin lúc này.');
+                    if (!adToken) return false;
+                    this._pendingCoinBoxAdToken = adToken;
+                    let lastError = 'Không nhận được phần thưởng Hộp Coin';
+                    for (let attempt = 0; attempt < 5; attempt++) {
+                        try {
+                            const res = await fetch(`${API_URL}/api/coinbox/open`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id,adToken})
+                            });
+                            const result=await res.json().catch(()=>({}));
+                            if (res.ok && result.success) {
+                                this.coins=Number(result.coins ?? this.coins);
+                                if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                                this._pendingCoinBoxAdToken = '';
+                                try { localStorage.removeItem('shipper_pending_coinbox_token'); } catch (_) {}
+                                this.showNotification('🎁 Nhận ' + this.formatNumber(Number(result.coin||0)) + ' Coin!');
+                                this.coinBoxVisible=false;
+                                this.coinBoxCountdown='2 giờ';
+                                this.scheduleCoinBox();
+                                return true;
+                            }
+                            lastError = result.error || lastError;
+                            const canRetry = result.retry || [408,409,429,500,502,503,504].includes(res.status);
+                            if (!canRetry) {
+                                if ([400,401,403,410].includes(res.status)) {
+                                    this._pendingCoinBoxAdToken = '';
+                                    try { localStorage.removeItem('shipper_pending_coinbox_token'); } catch (_) {}
+                                }
+                                break;
+                            }
+                        } catch(e) {
+                            console.error('Coin Box retry:',e);
+                        }
+                        await new Promise(resolve => setTimeout(resolve, Math.min(2500, 350 * Math.pow(2, attempt))));
                     }
+                    this.showNotification('⚠️ ' + lastError + '. Quảng cáo đã được xác minh, không cần xem lại QC.');
+                    return false;
                 },
                 openChest() {
                     if (this.spinFree <= 0 || this.isShaking) {
@@ -2891,7 +3037,7 @@
                             if (chosen.type === 'order' && Number(chosen.value) === 75000) this.showNotification('💎 CHÚC MỪNG! JACKPOT 75.000 Đơn Hàng!');
                             else if (chosen.type !== 'none') this.showNotification('🎁 ' + rewardText);
                             else this.showNotification('❌ ' + rewardText);
-                            this.checkTaskProgress('spin');
+                            await this.syncDailyTasksFromServer();
                         } catch (e) {
                             console.error('Chest:',e);
                             this.showNotification('⚠️ Không thể mở rương lúc này, vui lòng thử lại.');
@@ -2991,7 +3137,7 @@
                 },
                 taskProgressText(task) {
                     if (!task || !task.max) return '';
-                    return `${Math.min(Number(task.progress || 0), Number(task.max))}/${task.max}`;
+                    return `${Math.min(Number(task.progress || 0), Number(task.max))} / ${task.max}`;
                 },
                 onAdWatched(type = 'rewarded', weeklyCount = null, serverData = null) {
                     if (type !== 'rewarded' && type !== 'inapp') return;
@@ -3058,11 +3204,13 @@
                 },
                 // Removed checkAndClaimTask as it was redundant with claimTaskReward and completeTask
                 async claimTaskReward(idx) {
+                    if (this._taskClaimInFlight) return;
                     const task = this.dailyTasks[idx];
                     if (!task || task.done || !task.claimable) {
                         this.showNotification('📋 ' + (this.texts.taskNotReady || 'Task not ready or already claimed.'));
                         return;
                     }
+                    this._taskClaimInFlight = true;
                     try {
                         const res = await fetch(`${API_URL}/api/task/claim`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
@@ -3077,6 +3225,7 @@
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         this.spinFree = Number(result.spins ?? this.spinFree);
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         if (Array.isArray(result.tasks)) this.dailyTasks = this.localizeDailyTasks(result.tasks);
                         else await this.syncDailyTasksFromServer();
                         if (!result.alreadyClaimed) {
@@ -3087,6 +3236,8 @@
                     } catch (e) {
                         console.error('Claim task:',e);
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
+                    } finally {
+                        this._taskClaimInFlight = false;
                     }
                 },
                 async claimGroupTask() {
@@ -3206,11 +3357,13 @@
                 },
 
                 async claimAllTasksReward() {
+                    if (this._taskClaimInFlight) return;
                     if (!this.allTasksDone) {
                         this.showNotification('⚠️ ' + (this.texts.completeAllFirst || 'Complete all daily tasks first.'));
                         await this.syncDailyTasksFromServer();
                         return;
                     }
+                    this._taskClaimInFlight = true;
                     try {
                         const res = await fetch(`${API_URL}/api/task/claim-all`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
@@ -3225,12 +3378,15 @@
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         this.spinFree = Number(result.spins ?? this.spinFree);
+                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         this.allTasksClaimed = true;
                         await this.syncDailyTasksFromServer();
                         if (!result.alreadyClaimed) this.showNotification('🎉 ' + (this.texts.allTasksReward || '+1,000 Coin +500 Orders +2 Chests!'));
                     } catch (e) {
                         console.error('Claim all tasks:',e);
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
+                    } finally {
+                        this._taskClaimInFlight = false;
                     }
                 },
                 async watchExtraDeliveryAd() {
@@ -3693,8 +3849,8 @@
                     }
                 },
                 async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', purpose = 'generic') {
-                    // Một Rewarded chỉ có 1 lifecycle: start session -> show SDK -> complete server -> callback.
-                    // Không để callback cũ, SDK resolve sớm hoặc session race làm hỏng lượt hiện tại.
+                    // Lifecycle quảng cáo và lifecycle nghiệp vụ là 2 bước độc lập:
+                    // SDK/verification success không được biến thành "QC lỗi" chỉ vì callback Delivery/Upgrade/X2 lỗi.
                     if (this._rewardedRunning) return false;
                     this._rewardedRunning = true;
                     const actionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
@@ -3706,15 +3862,13 @@
                     let sessionStarted = false;
                     let sdkOpened = false;
                     let visibilityTimer = null;
-                    let sdkPromise = null;
+                    let adVerified = false;
                     try {
                         if (typeof show_11457064 !== 'function' || window.__adBlockLikely) {
                             this.showNotification(this.texts.adBlocked || '🚫 Vui lòng tắt trình chặn quảng cáo để nhận thưởng.');
                             return false;
                         }
 
-                        // BẮT BUỘC tạo session trước khi gọi SDK để tránh trường hợp SDK chạy trước,
-                        // callback complete đến khi server chưa có token hoặc token bị session khác đè.
                         let sessionResponse = null;
                         let sessionData = {};
                         for (let attempt = 0; attempt < 3; attempt++) {
@@ -3743,8 +3897,7 @@
                         if (!token) throw new Error(sessionData?.error || 'Không tạo được phiên quảng cáo hợp lệ');
                         sessionStarted = true;
 
-                        // Gọi SDK sau khi session đã tồn tại.
-                        sdkPromise = Promise.resolve()
+                        const sdkResult = await Promise.resolve()
                             .then(() => show_11457064({ ymid: String(this.user.id || '') }))
                             .then(() => { sdkOpened = true; return true; })
                             .catch((e) => {
@@ -3752,29 +3905,21 @@
                                 console.warn('Rewarded SDK error:', e);
                                 return false;
                             });
-
-                        // Với passive/auto ad: KHÔNG yêu cầu 5 giây.
-                        // Với Rewarded có reward: nếu SDK resolve ngay khi mở quảng cáo thì vẫn đợi đủ 5 giây
-                        // trước khi complete server; tránh false "too early" do SDK resolve sớm.
-                        if (requiresFiveSeconds) {
-                            const sdkResult = await sdkPromise;
-                            if (!sdkResult) throw new Error('Rewarded Interstitial không thể mở.');
-                            const remaining = Math.max(0, MIN_AD_MS - (Date.now() - startedAt));
-                            if (remaining > 0) await new Promise(resolve => { visibilityTimer = setTimeout(resolve, remaining); });
-                        } else {
-                            const sdkResult = await sdkPromise;
-                            if (!sdkResult) throw new Error('Quảng cáo tự động không thể hiển thị.');
+                        if (!sdkResult) {
+                            throw new Error(purpose === 'passive' ? 'Quảng cáo tự động không thể hiển thị.' : 'Rewarded Interstitial không thể mở.');
                         }
 
-                        // Không cho callback của action cũ chạm vào action mới.
+                        // Chỉ passive được bỏ điều kiện 5 giây. Mọi Rewarded có reward vẫn giữ nguyên verification.
+                        if (requiresFiveSeconds) {
+                            const remaining = Math.max(0, MIN_AD_MS - (Date.now() - startedAt));
+                            if (remaining > 0) await new Promise(resolve => { visibilityTimer = setTimeout(resolve, remaining); });
+                        }
+
                         if (this._rewardedActionId !== actionId) return false;
 
-                        // Complete server-side bằng đúng token đã start. Có retry an toàn bằng token cũ.
                         let completeData = null;
                         let completeRes = null;
-                        // Delivery giữ cùng token lâu hơn để vượt qua cửa sổ persistent `processing` 12s
-                        // nếu response complete trước bị mất/instance Render đổi giữa chừng. Không mở QC mới.
-                        const completeAttempts = purpose === 'delivery' ? 8 : 4;
+                        const completeAttempts = purpose === 'delivery' ? 8 : 5;
                         for (let attempt = 0; attempt < completeAttempts; attempt++) {
                             try {
                                 completeRes = await fetch(`${API_URL}/api/ad/session/complete`, {
@@ -3791,31 +3936,34 @@
                                 completeData = await completeRes.json().catch(() => ({}));
                             } catch (_) {
                                 completeRes = null;
-                                completeData = {success:false, retry:true, error:this.texts.networkTemporary || 'Mất kết nối tạm thời.'};
+                                completeData = {success:false,retry:true,error:this.texts.networkTemporary || 'Mất kết nối tạm thời.'};
                             }
                             if (completeRes?.ok && completeData?.success) break;
                             if (!(completeData?.retry || !completeRes || [408,409,429,500,502,503,504].includes(completeRes.status))) break;
                             await new Promise(resolve => setTimeout(resolve, Math.min(2500, 300 * Math.pow(2, attempt))));
                         }
 
+                        // Server có thể trả verified=true khi Rewarded đã được xác minh/commit nhưng marker
+                        // persistence đang retry. Đây vẫn là AD SUCCESS và phải dùng lại đúng token, không xem QC mới.
+                        if (!completeData?.success && completeData?.verified && completeData?.adToken) {
+                            completeData = { ...completeData, success:true, adToken:String(completeData.adToken) };
+                        }
                         if (!completeData?.success) {
-                            // Delivery is special: a 503 response may mean the Rewarded was already
-                            // verified and the durable marker is still being synchronized. In that case
-                            // keep using the SAME token and continue directly to the Delivery claim.
-                            if (purpose === 'delivery' && completeData?.verified && completeData?.adToken) {
-                                await Promise.resolve(onDone?.({ ...completeData, success:true, adToken:String(completeData.adToken) }));
-                                this._rewardedPreloadStarted = false;
-                                this._rewardedPreloaded = false;
-                                this.preloadRewardedAd().catch(() => {});
-                                return true;
-                            }
                             throw new Error(completeData?.error || this.texts.adVerifyError || 'Không xác minh được lượt quảng cáo');
                         }
 
+                        adVerified = true;
                         if (purpose !== 'passive') {
                             this.onAdWatched('rewarded', completeData.weeklyAdsCount, completeData);
-                            await Promise.resolve(onDone?.(completeData));
-                            await this.saveState();
+                            await this.syncDailyTasksFromServer().catch(() => false);
+                            try {
+                                // Không kiểm tra truthy/falsy của return value: callback async trả undefined vẫn là hợp lệ.
+                                await Promise.resolve(onDone?.(completeData));
+                            } catch (actionError) {
+                                console.error('Rewarded action failed after verified ad:', actionError);
+                                this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.');
+                                return true;
+                            }
                         }
 
                         this._rewardedPreloadStarted = false;
@@ -3824,14 +3972,18 @@
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
-                        if (sessionStarted && token && !sdkOpened) {
+                        if (sessionStarted && token && !sdkOpened && !adVerified) {
                             fetch(`${API_URL}/api/ad/session/cancel`, {
                                 method:'POST',
                                 headers:{'Content-Type':'application/json'},
                                 body:JSON.stringify({userId:this.user.id,token,actionId})
                             }).catch(() => {});
                         }
-                        this.showNotification((e?.message && purpose === 'delivery') ? e.message : failMessage);
+                        if (adVerified) {
+                            this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác phía máy chủ chưa hoàn tất.');
+                            return true;
+                        }
+                        this.showNotification(e?.message || failMessage);
                         return false;
                     } finally {
                         if (visibilityTimer) clearTimeout(visibilityTimer);
@@ -4165,6 +4317,7 @@
                     return this._saveQueue;
                 },
                 async _doSaveState() {
+                    this._saveInFlight = true;
                     const data = {
                 // QUAN TRỌNG: các field phải nằm PHẲNG (top-level) để khớp với tên cột trong bảng
                         // Supabase "users". Trước đây các field này bị lồng trong object "user" khiến
@@ -4304,6 +4457,8 @@
                     } catch (e) {
                         console.error("Lỗi lưu DB:", e);
                         return false;
+                    } finally {
+                        this._saveInFlight = false;
                     }
                 },
                 antiFraudDeviceSignals() {
