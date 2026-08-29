@@ -59,16 +59,48 @@
         .maintenance-dots span:nth-child(3) { animation-delay: 0.3s; }
         @keyframes maintenanceHop { 0%, 100% { transform: translateY(0); opacity: 0.5; } 50% { transform: translateY(-8px); opacity: 1; } }
         
-        /* Animation giao hàng */
-        .delivery-animation { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.95); z-index: 5000; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .delivery-scene { position: relative; width: 100%; max-width: 400px; height: 120px; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 10px; }
-        .factory { font-size: 3rem; z-index: 10; margin-bottom: 10px; }
-        .house { font-size: 3rem; z-index: 10; margin-bottom: 10px; }
-        .conveyor { position: absolute; bottom: 15px; left: 50px; right: 50px; height: 8px; background: repeating-linear-gradient(90deg, #475569 0px, #475569 8px, #64748b 8px, #64748b 16px); border-radius: 4px; border: 1px solid #334155; }
-        .box-on-conveyor { position: absolute; bottom: 23px; left: 50px; font-size: 1.2rem; animation: moveBox 1.5s linear infinite; }
-        @keyframes moveBox { 0% { left: 50px; opacity: 1; } 70% { left: calc(100% - 90px); opacity: 1; } 100% { left: calc(100% - 70px); opacity: 0; } }
-        .delivery-truck { position: absolute; bottom: 10px; left: 15%; transform: translateX(-50%); font-size: 2.5rem; transition: left 2s ease-in-out; z-index: 20; }
-        .delivery-truck.moving { left: 85%; }
+        /* Animation giao hàng - CSS thuần, nhẹ cho Telegram WebView */
+        .delivery-animation { position: fixed; inset: 0; overflow: hidden; background: radial-gradient(circle at 50% 20%, rgba(59,130,246,.28), transparent 34%), linear-gradient(180deg,#07111f 0%,#0f172a 58%,#111827 100%); z-index: 5000; display: flex; flex-direction: column; align-items: center; justify-content: center; isolation:isolate; }
+        .delivery-animation::before { content:''; position:absolute; inset:-25%; background:conic-gradient(from 180deg at 50% 50%, transparent, rgba(251,191,36,.08), transparent 28%, rgba(59,130,246,.09), transparent 62%); animation:deliveryAura 7s linear infinite; pointer-events:none; }
+        .delivery-animation::after { content:''; position:absolute; left:0; right:0; bottom:0; height:34%; background:linear-gradient(180deg,transparent,rgba(0,0,0,.38)); pointer-events:none; }
+        .delivery-scene { position: relative; width: calc(100% - 28px); max-width: 430px; height: 190px; border-radius: 30px; overflow:hidden; display:flex; align-items:flex-end; justify-content:space-between; padding:0 16px 33px; background:linear-gradient(180deg,rgba(30,64,175,.16),rgba(15,23,42,.42)); border:1px solid rgba(255,255,255,.10); box-shadow:0 24px 70px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.08); }
+        .delivery-sky-glow { position:absolute; width:170px; height:170px; border-radius:50%; top:-95px; right:-30px; background:radial-gradient(circle,rgba(251,191,36,.55),rgba(251,191,36,.08) 48%,transparent 70%); filter:blur(2px); animation:deliverySunPulse 2.4s ease-in-out infinite; }
+        .delivery-cloud { position:absolute; font-size:22px; opacity:.28; filter:grayscale(1); animation:deliveryCloud 7s linear infinite; }
+        .delivery-cloud.c1 { top:28px; left:-32px; }
+        .delivery-cloud.c2 { top:58px; left:-80px; animation-delay:-3.2s; font-size:16px; opacity:.18; }
+        .delivery-speed-lines { position:absolute; inset:44px 0 52px; opacity:0; background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(255,255,255,.13) 22px 52px,transparent 52px 82px); transform:skewX(-18deg); transition:opacity .25s ease; animation:deliverySpeedLines .42s linear infinite; }
+        .delivery-scene.is-moving .delivery-speed-lines { opacity:.62; }
+        .factory, .house { font-size:3.2rem; z-index:12; margin-bottom:7px; filter:drop-shadow(0 8px 10px rgba(0,0,0,.38)); }
+        .factory { animation:deliveryFactoryPulse 1.3s ease-in-out infinite; }
+        .house { transform-origin:bottom center; }
+        .delivery-scene.is-moving .house { animation:deliveryHouseHello .6s ease-out 1.45s both; }
+        .conveyor { position:absolute; bottom:43px; left:58px; width:116px; height:10px; background:repeating-linear-gradient(90deg,#334155 0 8px,#64748b 8px 16px); border-radius:999px; border:1px solid #1e293b; box-shadow:0 5px 0 #0f172a; overflow:visible; z-index:8; }
+        .box-on-conveyor { position:absolute; bottom:10px; left:0; font-size:1.25rem; animation:moveBox 1.2s linear infinite; filter:drop-shadow(0 4px 4px rgba(0,0,0,.25)); }
+        @keyframes moveBox { 0% { left:-3px; opacity:0; transform:translateY(-1px) rotate(-4deg); } 12% { opacity:1; } 80% { opacity:1; } 100% { left:92px; opacity:0; transform:translateY(-1px) rotate(4deg); } }
+        .delivery-road { position:absolute; left:-10%; right:-10%; bottom:19px; height:29px; background:linear-gradient(#1f2937,#111827); border-top:2px solid rgba(148,163,184,.22); border-bottom:2px solid #020617; transform:perspective(150px) rotateX(7deg); }
+        .delivery-road::after { content:''; position:absolute; left:0; right:0; top:12px; height:3px; background:repeating-linear-gradient(90deg,#fbbf24 0 24px,transparent 24px 48px); animation:deliveryRoadMove .48s linear infinite; opacity:.8; }
+        .delivery-truck { position:absolute; bottom:44px; left:23%; transform:translateX(-50%); font-size:3rem; transition:left 2.15s cubic-bezier(.22,.9,.2,1), transform .25s ease; z-index:20; filter:drop-shadow(0 9px 8px rgba(0,0,0,.45)); }
+        .delivery-truck::after { content:'💨'; position:absolute; right:78%; top:17px; font-size:18px; opacity:0; transition:opacity .2s ease; }
+        .delivery-truck.moving { left:79%; animation:deliveryTruckBounce .24s ease-in-out infinite alternate; }
+        .delivery-truck.moving::after { opacity:.7; animation:deliveryDust .65s ease-out infinite; }
+        .delivery-status-card { position:relative; z-index:3; width:min(390px,calc(100% - 34px)); margin-top:18px; padding:13px 16px; border-radius:20px; background:rgba(15,23,42,.78); border:1px solid rgba(255,255,255,.09); box-shadow:0 14px 35px rgba(0,0,0,.3); text-align:center; backdrop-filter:blur(12px); }
+        .delivery-status-title { font-weight:900; font-size:13px; letter-spacing:.04em; }
+        .delivery-status-orders { margin-top:5px; color:#fbbf24; font-weight:900; font-size:11px; }
+        .delivery-progress-track { height:6px; margin-top:10px; border-radius:999px; overflow:hidden; background:rgba(148,163,184,.18); }
+        .delivery-progress-fill { height:100%; width:38%; border-radius:999px; background:linear-gradient(90deg,#3b82f6,#fbbf24,#22c55e); animation:deliveryProgress 2.65s cubic-bezier(.2,.8,.2,1) forwards; box-shadow:0 0 14px rgba(251,191,36,.45); }
+        .delivery-success-spark { position:absolute; right:34px; bottom:74px; z-index:25; font-size:18px; opacity:0; }
+        .delivery-scene.is-moving .delivery-success-spark { animation:deliverySpark .7s ease-out 1.72s both; }
+        @keyframes deliveryAura { to { transform:rotate(360deg); } }
+        @keyframes deliverySunPulse { 50% { transform:scale(1.08); opacity:.78; } }
+        @keyframes deliveryCloud { from { transform:translateX(0); } to { transform:translateX(520px); } }
+        @keyframes deliverySpeedLines { to { background-position:82px 0; } }
+        @keyframes deliveryFactoryPulse { 50% { transform:translateY(-2px); filter:drop-shadow(0 10px 14px rgba(59,130,246,.3)); } }
+        @keyframes deliveryHouseHello { 0% { transform:scale(.82); } 70% { transform:scale(1.1); } 100% { transform:scale(1); } }
+        @keyframes deliveryRoadMove { to { background-position:-48px 0; } }
+        @keyframes deliveryTruckBounce { from { transform:translateX(-50%) translateY(0) rotate(-1deg); } to { transform:translateX(-50%) translateY(-2px) rotate(1deg); } }
+        @keyframes deliveryDust { 0% { transform:translateX(0) scale(.7); opacity:0; } 30% { opacity:.75; } 100% { transform:translateX(-18px) scale(1.15); opacity:0; } }
+        @keyframes deliveryProgress { from { width:12%; } to { width:100%; } }
+        @keyframes deliverySpark { 0% { opacity:0; transform:scale(.3) rotate(-20deg); } 55% { opacity:1; transform:scale(1.45) rotate(10deg); } 100% { opacity:1; transform:scale(1) rotate(0); } }
         
         /* Animation băng chuyền khi đang sản xuất */
         .conveyor-belt-anim { margin: 10px auto; width: 70%; height: 60px; background: #555; border-radius: 20px; position: relative; overflow: hidden; border: 2px solid #334155; }
@@ -568,17 +600,29 @@
 
         <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
     <div x-show="showDeliveryAnimation" class="delivery-animation" x-transition>
-        <div class="delivery-scene">
+        <div class="delivery-scene" :class="{ 'is-moving': isTruckMoving }">
+            <div class="delivery-sky-glow"></div>
+            <div class="delivery-cloud c1">☁️</div>
+            <div class="delivery-cloud c2">☁️</div>
+            <div class="delivery-speed-lines"></div>
             <div class="factory">🏭</div>
             <div class="conveyor">
                 <div class="box-on-conveyor">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: 0.5s">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: 1s">📦</div>
+                <div class="box-on-conveyor" style="animation-delay: .38s">📦</div>
+                <div class="box-on-conveyor" style="animation-delay: .76s">📦</div>
             </div>
+            <div class="delivery-road"></div>
             <div class="delivery-truck" :class="{ 'moving': isTruckMoving }" x-text="truckIcon"></div>
+            <div class="delivery-success-spark">✨📦✨</div>
             <div class="house">🏠</div>
         </div>
-        <p class="text-white font-bold mt-4 animate-pulse" x-text="isTruckMoving ? texts.deliveryDriving : texts.deliveryLoading"></p>
+        <div class="delivery-status-card">
+            <div class="delivery-status-title" x-text="isTruckMoving ? texts.deliveryDriving : texts.deliveryLoading"></div>
+            <div class="delivery-status-orders" x-show="_deliveryDeliveredProducts > 0">
+                +<span x-text="formatNumber(_deliveryDeliveredProducts)"></span> <span x-text="texts.ordersTarget"></span>
+            </div>
+            <div class="delivery-progress-track"><div class="delivery-progress-fill"></div></div>
+        </div>
     </div>
 
     <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
@@ -1258,7 +1302,10 @@
         // Passive fullscreen chỉ dùng CÙNG Rewarded Interstitial zone hiện tại.
         // Không trao Coin/Đơn Hàng/lượt giao/lượt rương và không bypass xác thực SDK/server.
         function nextPassiveAdCooldown() {
-            return (2 + Math.random() * 2) * 60 * 1000; // 2-4 phút
+            return (45 + Math.random() * 45) * 1000; // 45-90 giây: tăng tần suất nhưng vẫn có capping
+        }
+        function nextPassiveTabThreshold() {
+            return 2 + Math.floor(Math.random() * 2); // 2-3 lần chuyển mục
         }
         function isCriticalActionActive() {
             try {
@@ -1280,7 +1327,7 @@
                 );
             } catch (_) { return true; }
         }
-        const PASSIVE_TAB_THRESHOLD = 3;
+        let passiveTabThreshold = nextPassiveTabThreshold();
         const passiveAdAppOpenedAt = Date.now();
         let passiveAdCooldown = nextPassiveAdCooldown();
         let passiveAdLastShown = 0;
@@ -1292,13 +1339,14 @@
         window.notePassiveAdSuppression = function () {
             passiveAdLastShown = Date.now();
             passiveAdCooldown = nextPassiveAdCooldown();
+            passiveTabThreshold = nextPassiveTabThreshold();
             passiveTabCount = 0;
         };
 
         async function showPassiveAdRandom() {
             const now = Date.now();
             if (passiveAdInFlight) return false;
-            if (passiveTabCount < PASSIVE_TAB_THRESHOLD) return false;
+            if (passiveTabCount < passiveTabThreshold) return false;
             if (now - passiveAdAppOpenedAt < 1500) return false;
             if (now - passiveAdLastShown < passiveAdCooldown) return false;
             if (isCriticalActionActive()) return false;
@@ -1315,6 +1363,7 @@
                 if (ok) {
                     passiveAdLastShown = Date.now();
                     passiveAdCooldown = nextPassiveAdCooldown();
+                    passiveTabThreshold = nextPassiveTabThreshold();
                     passiveTabCount = 0;
                 }
                 return !!ok;
@@ -2148,7 +2197,14 @@
                     let prevCoins = this.coins, prevOrders = this.orders;
                     this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
-                    this.$watch('tab', () => { this.saveState(); });
+                    this.$watch('tab', (nextTab, previousTab) => {
+                        this.saveState();
+                        if (nextTab === 'tasks') this.syncDailyTasksFromServer().catch(() => {});
+                        if (previousTab && nextTab !== previousTab) {
+                            passiveTabCount += 1;
+                            schedulePassiveAdCheck(650);
+                        }
+                    });
                     setInterval(() => { this.tick++; }, 1000);
                     setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
                     setInterval(() => this.saveState(), 30000);
@@ -2491,6 +2547,7 @@
                         this.productionInterval = Number(result.productionInterval ?? this.productionInterval);
                         this.speedUpUsed = true;
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                        await this.syncDailyTasksFromServer();
                         this.showNotification('⚡ Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.');
                     } catch (e) {
                         console.error('Tăng Tốc X2:', e);
@@ -2530,6 +2587,19 @@
                 },
                 async runDeliverAd() {
                     if (this._rewardedRunning || this._deliveryClaimInFlight) return;
+                    // currentProducts được sản xuất ở client rồi đồng bộ lên Supabase. Phải chốt snapshot mới
+                    // nhất TRƯỚC khi mở Rewarded để tránh xem xong QC nhưng server vẫn thấy "Kho chưa có hàng".
+                    const synced = await this.saveState();
+                    if (!synced) {
+                        this.showNotification('⚠️ Chưa đồng bộ được kho với máy chủ. Vui lòng thử lại.');
+                        this.isShipping = false;
+                        return;
+                    }
+                    if (Number(this.currentProducts || 0) <= 0) {
+                        this.showNotification('⚠️ Kho chưa có hàng để giao.');
+                        this.isShipping = false;
+                        return;
+                    }
                     const deliveryActionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._deliveryActionId = deliveryActionId;
                     this.isShipping = true;
@@ -2607,9 +2677,32 @@
                                 return false;
                             }
 
+                            if (d?.sessionMissing || d?.canStartNewAd) {
+                                // Server xác nhận token này KHÔNG còn phiên verified (thường là token cũ/đã hết hạn).
+                                // Không được giữ _pendingDeliveryClaim mãi vì sẽ chặn mọi Rewarded mới.
+                                this._pendingDeliveryClaim = false;
+                                this._deliveryAdToken = '';
+                                try {
+                                    localStorage.removeItem('shipper_pending_delivery_claim');
+                                    localStorage.removeItem('shipper_pending_delivery_claim_token');
+                                } catch (_) {}
+                                this.isShipping = false;
+                                this.showNotification('⚠️ ' + (d.error || lastError) + ' Hãy bấm Giao Hàng để mở một quảng cáo mới.');
+                                return false;
+                            }
+
                             if (d && !d.retry && r && [400,401,403].includes(r.status)) {
                                 lastError = d.error || lastError;
-                                break;
+                                // Lỗi vĩnh viễn khác cũng không được giả vờ rằng token vẫn "đã xác minh".
+                                this._pendingDeliveryClaim = false;
+                                this._deliveryAdToken = '';
+                                try {
+                                    localStorage.removeItem('shipper_pending_delivery_claim');
+                                    localStorage.removeItem('shipper_pending_delivery_claim_token');
+                                } catch (_) {}
+                                this.isShipping = false;
+                                this.showNotification('⚠️ ' + lastError);
+                                return false;
                             }
 
                             lastError = d?.error || lastError;
@@ -2642,12 +2735,12 @@
                     this.isTruckMoving = false;
                     this._deliveryResultApplied = true;
                     this._deliveryDeliveredProducts = Number(deliveredProducts || this._deliveryDeliveredProducts || 0);
-                    setTimeout(() => { this.isTruckMoving = true; }, 500);
+                    setTimeout(() => { this.isTruckMoving = true; }, 620);
                     setTimeout(() => {
                         this.completeDelivery(this._deliveryDeliveredProducts);
                         this.showDeliveryAnimation = false;
                         this.isTruckMoving = false;
-                    }, 2500);
+                    }, 2950);
                 },
                 completeDelivery(delivered = this._deliveryDeliveredProducts || 0) {
                     // Server đã chuyển hàng + cộng orders trước khi animation chạy.
@@ -2705,6 +2798,7 @@
                         this.truckLevel = Number(result.truckLevel ?? this.truckLevel);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         this.applyLevelStats();
+                        await this.syncDailyTasksFromServer();
                         this.showNotification(`⬆️ Lên cấp ${this.truckLevel}/${this.maxTruckLevel}! Xe: ${this.truckName}`);
                     } catch (e) {
                         console.error('Nâng cấp xe:', e);
@@ -2985,9 +3079,11 @@
                         this.spinFree = Number(result.spins ?? this.spinFree);
                         if (Array.isArray(result.tasks)) this.dailyTasks = this.localizeDailyTasks(result.tasks);
                         else await this.syncDailyTasksFromServer();
-                        this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(result.reward?.coins ?? task.reward ?? 0) + ' 💰' +
-                            (result.reward?.orders ? ' +' + this.formatNumber(result.reward.orders) + ' 📦' : '') +
-                            (result.reward?.spins ? ' +' + this.formatNumber(result.reward.spins) + ' 🎁' : '') + ')');
+                        if (!result.alreadyClaimed) {
+                            this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(result.reward?.coins ?? task.reward ?? 0) + ' 💰' +
+                                (result.reward?.orders ? ' +' + this.formatNumber(result.reward.orders) + ' 📦' : '') +
+                                (result.reward?.spins ? ' +' + this.formatNumber(result.reward.spins) + ' 🎁' : '') + ')');
+                        }
                     } catch (e) {
                         console.error('Claim task:',e);
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
@@ -3676,7 +3772,10 @@
                         // Complete server-side bằng đúng token đã start. Có retry an toàn bằng token cũ.
                         let completeData = null;
                         let completeRes = null;
-                        for (let attempt = 0; attempt < 4; attempt++) {
+                        // Delivery giữ cùng token lâu hơn để vượt qua cửa sổ persistent `processing` 12s
+                        // nếu response complete trước bị mất/instance Render đổi giữa chừng. Không mở QC mới.
+                        const completeAttempts = purpose === 'delivery' ? 8 : 4;
+                        for (let attempt = 0; attempt < completeAttempts; attempt++) {
                             try {
                                 completeRes = await fetch(`${API_URL}/api/ad/session/complete`, {
                                     method:'POST',
@@ -3725,6 +3824,13 @@
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
+                        if (sessionStarted && token && !sdkOpened) {
+                            fetch(`${API_URL}/api/ad/session/cancel`, {
+                                method:'POST',
+                                headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id,token,actionId})
+                            }).catch(() => {});
+                        }
                         this.showNotification((e?.message && purpose === 'delivery') ? e.message : failMessage);
                         return false;
                     } finally {
@@ -4055,7 +4161,7 @@
                 },
                 saveState() {
                     if (this._serverHydrationFailed) return Promise.resolve(false);
-                    this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => {});
+                    this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => false);
                     return this._saveQueue;
                 },
                 async _doSaveState() {
@@ -4194,7 +4300,11 @@
                         } else if (result?.walletUpdatedAt) {
                             this.walletSyncedAt = result.walletUpdatedAt;
                         }
-                    } catch (e) { console.error("Lỗi lưu DB:", e); }
+                        return !!res.ok && !!result?.success;
+                    } catch (e) {
+                        console.error("Lỗi lưu DB:", e);
+                        return false;
+                    }
                 },
                 antiFraudDeviceSignals() {
                     const tg = window.Telegram?.WebApp || {};
