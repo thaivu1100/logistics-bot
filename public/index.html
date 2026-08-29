@@ -731,6 +731,32 @@
             <!-- NHIỆM VỤ -->
             <div x-show="tab === 'tasks'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.tasksTitle"></h2>
+                <div class="glass p-3 rounded-[25px] space-y-3 card-padding border border-blue-500/20">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <h3 class="text-sm font-black uppercase opacity-80 flex items-center gap-1.5">
+                                <span>🔗</span> <span x-text="texts.smartlinkSectionTitle"></span>
+                            </h3>
+                            <p class="text-[8px] text-slate-400 mt-1" x-text="texts.smartlinkSectionDesc"></p>
+                        </div>
+                        <div class="text-right flex-shrink-0">
+                            <div class="text-lg font-black text-blue-300" x-text="smartlinksToday + '/' + smartlinkDailyLimit"></div>
+                            <div class="text-[7px] uppercase opacity-50" x-text="texts.smartlinkProgressLabel"></div>
+                        </div>
+                    </div>
+                    <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden border border-white/5">
+                        <div class="h-full bg-blue-500 progress-bar" :style="'width:' + smartlinkProgressPercent + '%'"></div>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 text-[8px]">
+                        <span class="text-yellow-300 font-black" x-text="texts.smartlinkRewardLabel"></span>
+                        <span class="text-slate-400" x-text="smartlinkRemaining > 0 ? (texts.smartlinkRemainingLabel + ' ' + smartlinkRemaining) : texts.smartlinkLimitReached"></span>
+                    </div>
+                    <button @click="startSmartlink()" :disabled="smartlinkRemaining <= 0 || !!smartlinkStartTime || _smartlinkSaving"
+                        class="w-full py-2.5 rounded-2xl bg-blue-600 text-white font-black text-[10px] uppercase tracking-wide shadow-lg shadow-blue-600/20 btn-text">
+                        <span x-text="smartlinkRemaining > 0 ? texts.smartlinkStart : texts.smartlinkLimitReached"></span>
+                    </button>
+                </div>
+
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
                         <span class="tasks-header-truck">🚚</span> <span x-text="texts.dailyTasks"></span>
@@ -1377,7 +1403,17 @@
                 quizCorrect: 'Đúng', quizWrong: 'Sai', quizSkip: 'Bỏ qua', quizFree: 'Trả lời câu miễn phí', quizMore: 'Thêm câu hỏi', quizAnswerNow: 'Đang có câu hỏi - trả lời ngay!',
                 adError: 'Không thể hoàn tất quảng cáo Rewarded. Vui lòng thử lại.', deliveryLimitReached: 'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.',
                 captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
-                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.', streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
+                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.',
+                 smartlinkSectionTitle:'🔗 Làm SmartLink',
+                 smartlinkSectionDesc:'Hoàn thành SmartLink để nhận thưởng trực tiếp. Tối đa 30 lượt mỗi ngày.',
+                 smartlinkProgressLabel:'Tiến độ hôm nay',
+                 smartlinkRewardLabel:'+25 Coin +25 Đơn Hàng / SmartLink',
+                 smartlinkRemainingLabel:'Còn lại:',
+                 smartlinkStart:'LÀM SMARTLINK',
+                 smartlinkLimitReached:'Đã hết 30 lượt SmartLink hôm nay.',
+                 smartlinkCompleted:'SmartLink hoàn thành! +25 Coin +25 Đơn Hàng.',
+                 smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.',
+                 deliveryProcessing:'Đang xử lý giao hàng...',  streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
                 nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +2 lượt giao hàng!',
                 captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận',
                 quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
@@ -1443,7 +1479,18 @@
                 quizCorrect: 'Correct', quizWrong: 'Wrong', quizSkip: 'Skip', quizFree: 'Answer free question', quizMore: 'More questions', quizAnswerNow: 'A question is ready - answer now!',
                 adError: 'Could not complete the Rewarded ad. Please try again.', deliveryLimitReached: 'You have used all available delivery attempts today.',
                 captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
-                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.', streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
+                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.',
+                 smartlinkSectionTitle:'🔗 SmartLink Tasks',
+                 smartlinkSectionDesc:'Complete SmartLinks to earn direct rewards. Maximum 30 per day.',
+                 smartlinkProgressLabel:"Today's progress",
+                 smartlinkRewardLabel:'+25 Coin +25 Orders / SmartLink',
+                 smartlinkRemainingLabel:'Remaining:',
+                 smartlinkStart:'DO SMARTLINK',
+                 smartlinkLimitReached:"You have reached today's 30 SmartLink limit.",
+                 smartlinkCompleted:'SmartLink completed! +25 Coin +25 Orders.',
+                 smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.',
+                 deliveryProcessing:'Delivery is already being processed.',
+ streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
                 nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +2 delivery slots!',
                 captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm',
                 quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
@@ -1565,7 +1612,12 @@
                 .replace('Không thể xác minh câu trả lời, vui lòng thử lại.','Could not verify the answer. Please try again.')
                 .replace('Đã bỏ qua câu hỏi sau khi xem QC. Không nhận thưởng.','The question was skipped after watching the ad. No reward earned.')
                 .replace('Không thể xác minh thao tác bỏ qua, vui lòng thử lại.','Could not verify the skip action. Please try again.')
-                .replace('Nhận ','Received ');
+                .replace('Lượt Rewarded dùng cho giao hàng không hợp lệ hoặc đã hết hạn.','The verified delivery Rewarded session could not be found or has expired.')
+                 .replace('Không tìm thấy phiên Rewarded giao hàng đã được xác minh. Vui lòng thử lại.','The verified delivery Rewarded session could not be found. Please try again.')
+                 .replace('Đang xử lý giao hàng...','Delivery is already being processed.')
+                 .replace('Chưa cấp được lượt giao hàng.','Delivery is still being processed. Please return to the app to retry.')
+                 .replace('SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.','The SmartLink was completed but is still syncing. Return to the app to retry.')
+                 .replace('Nhận ','Received ');
         }
 
         // 5 CÂU HỎI QUIZ MỖI NGÀY (answer = index đáp án đúng trong mảng options)
@@ -1640,7 +1692,7 @@
                 smartlinkCount:0, lastSmartlinkTime:0,
                 groupTaskClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Nhiệm vụ "Tham gia nhóm" - 1 lần duy nhất, không reset theo ngày
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
-                smartlinkStartTime: 0, smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
+                smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
                 isTruckMoving: false, isShaking: false, isOpened: false, texts: translations.vi,
@@ -1742,7 +1794,10 @@
                 get extraDeliveryVisible() {
                     return Number(this.deliveryCount || 0) >= 20;
                 },
-                get allTasksDone() { return this.dailyTasks.every(t => t.done) && !this.allTasksClaimed; },
+                get smartlinkDailyLimit() { return 30; },
+                 get smartlinkRemaining() { return Math.max(0, this.smartlinkDailyLimit - Math.min(this.smartlinkDailyLimit, Number(this.smartlinksToday || 0))); },
+                 get smartlinkProgressPercent() { return Math.min(100, Number(this.smartlinksToday || 0) / this.smartlinkDailyLimit * 100); },
+                 get allTasksDone() { return this.dailyTasks.every(t => t.done) && !this.allTasksClaimed; },
                 get productionCountdown() {
                     const _ = this.tick; // Force re-evaluation every second
                     if (this.currentProducts >= this.maxProducts) return this.language === 'vi' ? 'Đã đầy' : 'Full';
@@ -1845,6 +1900,14 @@
                     this.texts = translations[this.language];
                     document.documentElement.lang = this.language;
                     document.title = this.language === 'en' ? 'Logistics Warehouse' : 'Kho Hàng Logistics';
+                    try {
+                        const pendingStart = Number(localStorage.getItem('shipper_smartlink_start') || 0);
+                        const pendingAttempt = String(localStorage.getItem('shipper_smartlink_attempt') || '');
+                        if (pendingStart > 0 && pendingAttempt) {
+                            this.smartlinkStartTime = pendingStart;
+                            this.smartlinkAttemptId = pendingAttempt;
+                        }
+                    } catch (_) {}
                     try {
                         const res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`);
                         if (res.status === 404) { // User not found, create new local state
@@ -2364,6 +2427,9 @@
                         this.smartlinkCount = 0;
                         this.lastSmartlinkTime = 0; 
                         this.usedSmartlinks = [];
+                        this.smartlinkStartTime = 0;
+                        this.smartlinkAttemptId = '';
+                        try { localStorage.removeItem('shipper_smartlink_start'); localStorage.removeItem('shipper_smartlink_attempt'); localStorage.removeItem('shipper_smartlink_link'); } catch (_) {}
                         // Reset TRẢ LỜI CÂU HỎI mỗi ngày: trả lại 1 câu miễn phí + 4 câu mở bằng QC
                         this.quizFreeUsed = false;
                         this.quizAdUnlocked = 0;
@@ -2476,7 +2542,7 @@
                             localStorage.setItem('shipper_pending_delivery_claim_token', token);
                         } catch (_) {}
                         const claimed = await this.retryDeliveryClaim(token);
-                        if (!claimed) throw new Error('Chưa cấp được lượt giao hàng.');
+                        if (!claimed) return false;
                     }, this.texts.adError || 'QC không thể hoàn tất, vui lòng thử lại sau.', 'delivery');
                 },
                 // Claim 1 lượt giao bằng đúng adToken server đã xác thực. Không bao giờ gửi
@@ -2948,41 +3014,79 @@
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                     }
                 },
+                startSmartlink() {
+                    if (this._smartlinkSaving || this.smartlinkStartTime > 0) return;
+                    if (Number(this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
+                        this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
+                        return;
+                    }
+                    const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
+                    const randomLink = availableLinks.length > 0
+                        ? availableLinks[Math.floor(Math.random() * availableLinks.length)]
+                        : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)];
+                    this.usedSmartlinks = [...this.usedSmartlinks, randomLink].slice(-SMARTLINKS.length);
+                    this.smartlinkStartTime = Date.now();
+                    this.smartlinkAttemptId = `${this.user.id}_${this.smartlinkStartTime}_${Math.random().toString(36).slice(2,10)}`;
+                    try {
+                        localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
+                        localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
+                        localStorage.setItem('shipper_smartlink_link', randomLink);
+                    } catch (_) {}
+                    this.saveState().catch(() => {});
+                    window.open(randomLink, '_blank', 'noopener');
+                    this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink opened. Stay on the SmartLink for at least 5 seconds.');
+                    setTimeout(() => {
+                        if (this.smartlinkStartTime > 0) this.handleSmartlinkReturn();
+                    }, 12000);
+                },
+
                 async handleSmartlinkReturn() {
                     if (this.smartlinkStartTime <= 0 || this._smartlinkSaving) return;
-                    const timeSpent = Date.now() - this.smartlinkStartTime;
-                    if (timeSpent < 5000) return;
-                    this.smartlinkStartTime = 0;
+                    if (Date.now() - this.smartlinkStartTime < 5000) return;
+                    const attemptId = String(this.smartlinkAttemptId || '');
+                    if (!attemptId) return;
                     this._smartlinkSaving = true;
                     try {
                         let response = null, result = {};
-                        for (let attempt = 0; attempt < 3; attempt++) {
+                        for (let attempt = 0; attempt < 4; attempt++) {
                             try {
                                 response = await fetch(`${API_URL}/api/smartlink/complete`, {
                                     method:'POST', headers:{'Content-Type':'application/json'},
-                                    body:JSON.stringify({userId:this.user.id, sessionId:this.securitySessionId})
+                                    body:JSON.stringify({userId:this.user.id, sessionId:this.securitySessionId, attemptId})
                                 });
                                 result = await response.json().catch(() => ({}));
                             } catch (_) {
+                                response = null;
                                 result = {success:false,retry:true};
                             }
                             if (response?.ok && result.success) break;
-                            if (!result.retry) break;
+                            if (!result.retry && response && ![408,409,429,500,502,503,504].includes(response.status)) break;
                             await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
                         }
-                        if (!response?.ok || !result.success) throw new Error(result.error || 'SmartLink could not be confirmed.');
-                        this.smartlinkCount = Number(result.smartlinkCount || this.smartlinkCount);
-                        this.smartlinksToday = Number(result.smartlinksToday || this.smartlinksToday);
-                        this.lifetimeSmartlinks = Number(result.lifetimeSmartlinks || this.lifetimeSmartlinks);
+                        if (!response?.ok || !result.success) {
+                            this.showNotification('⚠️ ' + (this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
+                            return;
+                        }
+                        this.smartlinkCount = Number(result.smartlinkCount ?? this.smartlinkCount);
+                        this.smartlinksToday = Number(result.smartlinksToday ?? this.smartlinksToday);
+                        this.lifetimeSmartlinks = Number(result.lifetimeSmartlinks ?? this.lifetimeSmartlinks);
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                        this.smartlinkStartTime = 0;
+                        this.smartlinkAttemptId = '';
+                        try {
+                            localStorage.removeItem('shipper_smartlink_start');
+                            localStorage.removeItem('shipper_smartlink_attempt');
+                            localStorage.removeItem('shipper_smartlink_link');
+                        } catch (_) {}
                         this.onSmartlinkWatched();
                         await this.syncDailyTasksFromServer();
                         this.saveState().catch(() => {});
-                        this.showNotification('✅ SmartLink completed.');
+                        this.showNotification('✅ ' + (this.texts.smartlinkCompleted || 'SmartLink completed! +25 Coin +25 Orders.'));
                     } catch (e) {
                         console.error('SmartLink:',e);
+                        this.showNotification('⚠️ ' + (this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
                     } finally {
                         this._smartlinkSaving = false;
                     }
@@ -2995,25 +3099,17 @@
                         else await this.syncDailyTasksFromServer();
                         return;
                     }
-                    if (this.smartlinkStartTime > 0 || this._smartlinkSaving) return;
-                    if ((this.smartlinkCount || 0) >= 5) {
-                        await this.syncDailyTasksFromServer();
+                    if (task.claimable) {
+                        await this.claimTaskReward(idx);
                         return;
                     }
-                    const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
-                    const randomLink = availableLinks.length > 0
-                        ? availableLinks[Math.floor(Math.random() * availableLinks.length)]
-                        : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)];
-                    this.usedSmartlinks = [...this.usedSmartlinks, randomLink];
-                    this.smartlinkStartTime = Date.now();
-                    try { localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime)); } catch (_) {}
-                    this.saveState().catch(() => {});
-                    window.open(randomLink, '_blank', 'noopener');
-                    this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink opened. Please stay at least 5 seconds.');
-                    setTimeout(() => {
-                        if (this.smartlinkStartTime > 0) this.handleSmartlinkReturn();
-                    }, 12000);
+                    if ((this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
+                        this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
+                        return;
+                    }
+                    this.startSmartlink();
                 },
+
                 async claimAllTasksReward() {
                     if (!this.allTasksDone) {
                         this.showNotification('⚠️ ' + (this.texts.completeAllFirst || 'Complete all daily tasks first.'));
