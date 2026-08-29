@@ -3758,7 +3758,7 @@ app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     try {
-        const { userId, adType, purpose, sessionId } = req.body || {};
+        const { userId, adType, purpose, sessionId, actionId } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
         const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
@@ -3773,8 +3773,20 @@ app.post('/api/ad/session/start', async (req, res) => {
             adSessions.delete(existingToken);
         }
         const token = makeAdToken();
-        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), startedAt:Date.now() });
+        const startedAt = Date.now();
+        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), actionId:String(actionId || ''), startedAt });
         activeAdByUser.set(normalizedUserId, token);
+        // Persist session metadata so a server restart / multiple instance does not turn a valid
+        // Rewarded completion into "session not found".
+        await writePersistentEvent(persistentEventKey('ad-session', token), {
+            userId: normalizedUserId,
+            adType,
+            purpose: sessionPurpose,
+            sessionId: String(sessionId || ''),
+            actionId: String(actionId || ''),
+            startedAt,
+            expiresAt: startedAt + 10 * 60 * 1000
+        });
         recordAntiFraudEvent(String(userId), 'ad_start', {
             ip: requestIp(req),
             sessionId: String(sessionId || ''),
@@ -3801,7 +3813,21 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (existingCompleted && existingCompleted.userId === String(userId) && existingCompleted.adType === adType) {
             if (existingCompleted.completionResult) return res.json({ ...existingCompleted.completionResult, idempotent:true });
         }
-        const s=adSessions.get(token);
+        let s=adSessions.get(token);
+        if (!s) {
+            const persistedSession = await readPersistentEvent(persistentEventKey('ad-session', token));
+            if (persistedSession && (!persistedSession.expiresAt || Date.now() < Number(persistedSession.expiresAt))) {
+                s = {
+                    userId:String(persistedSession.userId || ''),
+                    adType:persistedSession.adType || 'rewarded',
+                    purpose:persistedSession.purpose || 'generic',
+                    sessionId:String(persistedSession.sessionId || ''),
+                    actionId:String(persistedSession.actionId || ''),
+                    startedAt:Number(persistedSession.startedAt || Date.now())
+                };
+                adSessions.set(token, s);
+            }
+        }
         if (!s || s.userId!==String(userId) || s.adType!==adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
         const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
         if (purpose!=='passive' && elapsed<5000) {
