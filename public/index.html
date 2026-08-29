@@ -1280,28 +1280,30 @@
                 );
             } catch (_) { return true; }
         }
-        const PASSIVE_AD_GRACE_MS = 0;
+        const PASSIVE_TAB_THRESHOLD = 3;
         const passiveAdAppOpenedAt = Date.now();
         let passiveAdCooldown = nextPassiveAdCooldown();
         let passiveAdLastShown = 0;
         let passiveAdInFlight = false;
         let passiveAdRetryTimer = null;
+        let passiveTabCount = 0;
+        let passiveWasHidden = false;
 
         window.notePassiveAdSuppression = function () {
             passiveAdLastShown = Date.now();
-            passiveAdCooldown = Math.max(passiveAdCooldown, 5 * 60 * 1000);
+            passiveAdCooldown = nextPassiveAdCooldown();
+            passiveTabCount = 0;
         };
 
         async function showPassiveAdRandom() {
             const now = Date.now();
             if (passiveAdInFlight) return false;
-            if (now - passiveAdAppOpenedAt < PASSIVE_AD_GRACE_MS) return false;
+            if (passiveTabCount < PASSIVE_TAB_THRESHOLD) return false;
+            if (now - passiveAdAppOpenedAt < 1500) return false;
             if (now - passiveAdLastShown < passiveAdCooldown) return false;
             if (isCriticalActionActive()) return false;
 
             passiveAdInFlight = true;
-            passiveAdLastShown = now;
-            passiveAdCooldown = nextPassiveAdCooldown();
             try {
                 const appData = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
                 if (!appData || appData._rewardedRunning || isCriticalActionActive()) return false;
@@ -1310,6 +1312,11 @@
                     'Quảng cáo tự động không thể hiển thị. Vui lòng thử lại sau.',
                     'passive'
                 );
+                if (ok) {
+                    passiveAdLastShown = Date.now();
+                    passiveAdCooldown = nextPassiveAdCooldown();
+                    passiveTabCount = 0;
+                }
                 return !!ok;
             } catch (e) {
                 console.warn('Passive rewarded error', e);
@@ -1325,23 +1332,35 @@
             }
         }
 
-        function schedulePassiveAdCheck(delay = 5000) {
+        function schedulePassiveAdCheck(delay = 1200) {
             if (passiveAdRetryTimer) return;
             passiveAdRetryTimer = setTimeout(() => {
                 passiveAdRetryTimer = null;
                 showPassiveAdRandom().catch(() => {});
             }, delay);
         }
-        // Auto Rewarded is now triggered primarily by tab switching; no mandatory app-open delay.
-        setTimeout(() => schedulePassiveAdCheck(5000), 1000);
+
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) schedulePassiveAdCheck(1200);
+            if (document.hidden) {
+                passiveWasHidden = true;
+                return;
+            }
+            if (passiveWasHidden) {
+                passiveWasHidden = false;
+                passiveTabCount += 1;
+                schedulePassiveAdCheck(1200);
+            }
         });
-        window.addEventListener('focus', () => schedulePassiveAdCheck(1200));
-        // Chỉ thử sau khi click đã hoàn tất để không race với CAPTCHA/Rewarded của nút đang được nhấn.
-        document.addEventListener('click', () => {
-            if (Math.random() < 0.12) schedulePassiveAdCheck(250);
-        }, { passive: true });
+
+        window.addEventListener('focus', () => {
+            // Some Telegram Desktop/WebView builds do not emit visibilitychange when the user returns
+            // from an external tab. Count focus-return only after a real hidden state was observed.
+            if (passiveWasHidden) {
+                passiveWasHidden = false;
+                passiveTabCount += 1;
+                schedulePassiveAdCheck(1200);
+            }
+        });
 
         const translations = {
             vi: {
@@ -1354,7 +1373,7 @@
                 chestTitle: 'MỞ RƯƠNG MAY MẮN', chestDesc: 'Mở rương để nhận phần thưởng ngẫu nhiên!',
                 history: 'Lịch sử mở rương', noHistory: 'Chưa có lượt nào',
                 tasksTitle: '📋 Nhiệm vụ', dailyTasks: 'Nhiệm vụ hằng ngày', claimed: '✅ Đã nhận',
-                claim: 'Nhận', monitoring: 'Đang theo dõi...', doNow: 'Làm ngay', completeAll: 'Hoàn thành tất cả', onceOnly: 'MỘT LẦN',
+                claim: 'Nhận', monitoring: 'Đang theo dõi...', completeAll: 'Hoàn thành tất cả', onceOnly: 'MỘT LẦN',
                 groupTaskTitle: '👥 Nhiệm vụ đặc biệt', groupTaskName: '👥 Tham gia nhóm', groupTaskJoinBtn: 'Tham gia nhóm', groupTaskCheckBtn: '✅ Kiểm tra tham gia',
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
@@ -1430,7 +1449,7 @@
                 chestTitle: 'LUCKY CHEST', chestDesc: 'Open chest to get random rewards!',
                 history: 'Chest history', noHistory: 'No history yet',
                 tasksTitle: '📋 Tasks', dailyTasks: 'Daily tasks', claimed: '✅ Claimed',
-                claim: 'Claim', monitoring: 'Monitoring...', doNow: 'Do now', completeAll: 'Complete all', onceOnly: 'ONE-TIME',
+                claim: 'Claim', monitoring: 'Monitoring...', completeAll: 'Complete all', onceOnly: 'ONE-TIME',
                 groupTaskTitle: '👥 Special task', groupTaskName: '👥 Join group', groupTaskJoinBtn: 'Join group', groupTaskCheckBtn: '✅ Check membership',
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
@@ -1920,6 +1939,7 @@
                             await this.saveState(); 
                         } else if (res.ok) {
                             let data = await res.json();
+                            this._serverHydrationFailed = false;
                             // Nếu snapshot cục bộ đã được server xác nhận ở một mốc mới hơn dữ liệu server hiện tại,
                             // ưu tiên snapshot đó để tránh hiện tượng reload làm lùi coin/đơn hàng/nhiệm vụ/quảng cáo.
                             // Khi server trả dữ liệu thành công, Supabase là nguồn sự thật duy nhất.
@@ -2029,37 +2049,11 @@
                         }
                     } catch (e) { 
                         console.error("Lỗi kết nối DB hoặc tải dữ liệu user:", e);
-                        try {
-                            const backup = JSON.parse(localStorage.getItem('shipper_state_backup') || 'null');
-                            if (backup?.data) {
-                                const b = backup.data;
-                                this.orders = b.orders ?? this.orders;
-                                this.coins = b.coins ?? this.coins;
-                                this.spinFree = b.spins ?? this.spinFree;
-                                this.currentProducts = b.currentProducts ?? this.currentProducts;
-                                this.lastProducedAt = b.lastProducedAt ?? this.lastProducedAt;
-                                this.truckLevel = b.truckLevel ?? this.truckLevel;
-                                this.maxProducts = b.maxProducts ?? this.maxProducts;
-                                this.productionInterval = b.productionInterval ?? this.productionInterval;
-                                this.productionAmount = b.productionAmount ?? this.productionAmount;
-                                this.speedUpUsed = b.speedUpUsed ?? this.speedUpUsed;
-                                this.dailyTasks = Array.isArray(b.dailyTasks) ? b.dailyTasks : this.dailyTasks;
-                                this.smartlinkCount = b.smartlinkCount ?? this.smartlinkCount;
-                                this.usedSmartlinks = b.usedSmartlinks ?? this.usedSmartlinks;
-                                this.lastSmartlinkTime = b.lastSmartlinkTime ?? this.lastSmartlinkTime;
-                                this.quizDate = b.quizDate ?? this.quizDate;
-                                this.quizFreeUsed = b.quizFreeUsed ?? this.quizFreeUsed;
-                                this.quizAdUnlocked = b.quizAdUnlocked ?? this.quizAdUnlocked;
-                                this.quizUsedIds = Array.isArray(b.quizUsedIds) ? b.quizUsedIds : this.quizUsedIds;
-                                this.weeklyAdsCount = b.weeklyAdsCount ?? this.weeklyAdsCount;
-                                this.walletSyncedAt = backup.walletUpdatedAt || this.walletSyncedAt;
-                                this.showNotification('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.');
-                            } else {
-                                this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
-                            }
-                        } catch (restoreErr) {
-                            this.showNotification("⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!");
-                        }
+                        // SECURITY: không hydrate lại reward/progress từ localStorage sau khi server đọc thất bại.
+                        // Snapshot cũ chỉ được dùng làm backup debug; không được để nó trở thành nguồn dữ liệu thứ hai
+                        // rồi ghi ngược lên Supabase và vô tình rollback progress mới.
+                        this._serverHydrationFailed = true;
+                        this.showNotification("⚠️ Không đọc được dữ liệu mới nhất từ máy chủ. Vui lòng thử lại!");
                     }
                     // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
                     // màn loading nào - giờ tắt overlay loading ngay khi đã tải xong (hoặc lỗi) dữ liệu
@@ -2353,7 +2347,7 @@
                 updateSmartlinkCooldown() {
                     const now = Date.now();
                     const diff = now - this.lastSmartlinkTime;
-                    const cooldown = 10 * 60 * 1000; // 10 minutes cooldown for smartlink
+                    const cooldown = 5 * 60 * 1000; // 5 minutes cooldown for SmartLink actions
                     this.smartlinkCooldown = diff < cooldown ? Math.floor((cooldown - diff) / 1000) : 0;
                 },
                 // BXH lấy dữ liệu THẬT từ DB (số bạn mời hợp lệ thực tế của từng user), không còn random
@@ -2531,6 +2525,7 @@
                         return;
                     }
                     if (this.captchaShow) return;
+                    this.showNotification('🔐 Vui lòng hoàn thành CAPTCHA để bắt đầu giao hàng.');
                     this.startCaptcha('deliver', () => this.runDeliverAd());
                 },
                 async runDeliverAd() {
@@ -3103,20 +3098,15 @@
                 async completeTask(idx) {
                     const task = this.dailyTasks[idx];
                     if (!task || task.done) return;
-                    if (task.id !== 'smartlink5') {
+                    // The 5-SmartLink task is ONLY a daily reward milestone. It never launches the
+                    // SmartLink system itself; SmartLinks are started only from the dedicated section.
+                    if (task.id === 'smartlink5') {
                         if (task.claimable) await this.claimTaskReward(idx);
                         else await this.syncDailyTasksFromServer();
                         return;
                     }
-                    if (task.claimable) {
-                        await this.claimTaskReward(idx);
-                        return;
-                    }
-                    if ((this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
-                        this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
-                        return;
-                    }
-                    this.startSmartlink();
+                    if (task.claimable) await this.claimTaskReward(idx);
+                    else await this.syncDailyTasksFromServer();
                 },
 
                 async claimAllTasksReward() {
@@ -3710,6 +3700,16 @@
                         }
 
                         if (!completeData?.success) {
+                            // Delivery is special: a 503 response may mean the Rewarded was already
+                            // verified and the durable marker is still being synchronized. In that case
+                            // keep using the SAME token and continue directly to the Delivery claim.
+                            if (purpose === 'delivery' && completeData?.verified && completeData?.adToken) {
+                                await Promise.resolve(onDone?.({ ...completeData, success:true, adToken:String(completeData.adToken) }));
+                                this._rewardedPreloadStarted = false;
+                                this._rewardedPreloaded = false;
+                                this.preloadRewardedAd().catch(() => {});
+                                return true;
+                            }
                             throw new Error(completeData?.error || this.texts.adVerifyError || 'Không xác minh được lượt quảng cáo');
                         }
 
@@ -4054,6 +4054,7 @@
                     try { await this.syncStreakStatus(); } catch (_) {}
                 },
                 saveState() {
+                    if (this._serverHydrationFailed) return Promise.resolve(false);
                     this._saveQueue = this._saveQueue.then(() => this._doSaveState()).catch(() => {});
                     return this._saveQueue;
                 },
