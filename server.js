@@ -303,6 +303,199 @@ const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onren
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// ==================== BOT USER LANGUAGE + PERSISTENT REPLY KEYBOARD ====================
+function normalizeUserLanguage(value) {
+    return value === 'en' ? 'en' : 'vi';
+}
+async function getStoredUserLanguage(userId) {
+    try {
+        const { data } = await readUserRow(String(userId || ''));
+        return normalizeUserLanguage(data?.language);
+    } catch (_) {
+        return 'vi';
+    }
+}
+function botMainReplyKeyboard(language = 'vi') {
+    const en = normalizeUserLanguage(language) === 'en';
+    return {
+        reply_markup: {
+            keyboard: [
+                [en ? '🚀 Open Warehouse' : '🚀 Mở Kho Hàng', en ? '📦 How to Play' : '📦 Hướng Dẫn Chơi'],
+                [en ? '👨‍💻 Contact Admin' : '👨‍💻 Liên Hệ Admin', en ? '🌐 Language' : '🌐 Chọn Ngôn Ngữ']
+            ],
+            resize_keyboard: true,
+            is_persistent: true,
+            one_time_keyboard: false
+        }
+    };
+}
+function botLanguageReplyKeyboard() {
+    return {
+        reply_markup: {
+            keyboard: [['🇻🇳 Tiếng Việt', '🇬🇧 English']],
+            resize_keyboard: true,
+            is_persistent: true,
+            one_time_keyboard: false
+        }
+    };
+}
+function botOpenAppInline(language = 'vi') {
+    const en = normalizeUserLanguage(language) === 'en';
+    return {
+        reply_markup: {
+            inline_keyboard: [[{ text: en ? '🚀 Open Mini App' : '🚀 Vào Mini App', web_app: { url: WEB_APP_URL } }]]
+        }
+    };
+}
+async function sendPersistentMainMenu(ctx, language = 'vi') {
+    const en = normalizeUserLanguage(language) === 'en';
+    return ctx.reply(en ? '📌 Main menu is ready below.' : '📌 Menu chính đã được ghim bên dưới.', botMainReplyKeyboard(language));
+}
+
+const BOT_GUIDE_VI = `📦 *HƯỚNG DẪN CHƠI KHO HÀNG*
+
+🏠 *1. Trang chủ*
+Chờ kho sản xuất đầy hàng → bấm *GIAO HÀNG* → hoàn thành quảng cáo → nhận *Đơn Hàng*. 🚚
+Cấp xe càng cao → sản xuất càng nhanh và được nhiều hàng hơn.
+
+⚡ *2. Tăng tốc sản xuất*
+Khi kho đang sản xuất, bấm *TĂNG TỐC X2* → xem quảng cáo → giảm *1/2 thời gian còn lại*.
+_Mỗi mẻ chỉ dùng X2 1 lần._
+
+⬆️ *3. Nâng cấp xe*
+Đủ Coin → bấm *Nâng Cấp Xe* → xem quảng cáo → tăng cấp xe.
+Cấp càng cao → thời gian sản xuất giảm + số hàng mỗi chuyến tăng.
+
+🎁 *4. Rương*
+Dùng lượt mở rương để nhận thưởng ngẫu nhiên.
+Hết lượt có thể:
+• 📺 Xem quảng cáo nhận +1 lượt.
+• 🔄 Đổi *500 Đơn Hàng = 1 lượt mở*.
+
+📋 *5. Nhiệm vụ*
+Làm đúng yêu cầu → theo dõi thanh tiến trình → đủ điều kiện bấm *NHẬN*.
+Hoàn thành tất cả nhiệm vụ ngày còn có *thưởng tổng*.
+
+🔥 *6. Điểm danh*
+Vào Nhiệm vụ → *Điểm danh mỗi ngày* để duy trì chuỗi.
+Bỏ lỡ có thể dùng quảng cáo để khôi phục.
+
+📺 *7. Kiếm thêm thưởng*
+• Rewarded: *+50 Coin +25 Đơn Hàng/lượt*, tối đa 30 lượt/ngày.
+• SmartLink: *+25 Coin +25 Đơn Hàng/lượt*, tối đa 30 lượt/ngày.
+
+👥 *8. Mời bạn*
+Chia sẻ link giới thiệu.
+Bạn được mời chỉ tính *hợp lệ* khi:
+
+Vào bằng link
+→ tham gia nhóm
+→ xem ≥3 QC
+→ làm ≥2 SmartLink
+→ giao hàng ≥1 lần.
+
+Mỗi bạn hợp lệ nhận ngay:
+
+*+500 Coin +1.000 Đơn Hàng*
+
+🏆 *9. BXH*
+Vào *BXH* để xem thứ hạng và điều kiện nhận thưởng tuần.
+
+💳 *10. Rút tiền*
+Tối thiểu:
+
+*30.000 Đơn Hàng = 3.000 VNĐ*
+
+Hỗ trợ:
+
+• Ngân hàng
+• MoMo
+• ZaloPay
+
+Nhập thông tin → CAPTCHA → gửi yêu cầu rút.
+
+🎟️ *Nhập Code*
+Có Giftcode → vào *Nhập Code → nhập mã → Nhận*.
+
+⚙️ *Cài đặt*
+Đổi ngôn ngữ, bật/tắt nhạc hoặc dùng *FIX LAG* nếu máy yếu.
+
+💡 *Cách chơi đơn giản nhất:*
+
+*Chờ sản xuất → Giao hàng → Làm nhiệm vụ → Nâng cấp xe → Lặp lại.* 🚚📦💰`;
+
+const BOT_GUIDE_EN = `📦 *LOGISTICS WAREHOUSE GUIDE*
+
+🏠 *1. Home*
+Wait until your warehouse finishes production → tap *DELIVER* → complete the ad → receive *Orders*. 🚚
+Higher truck levels produce faster and carry more goods.
+
+⚡ *2. X2 Production Speed-Up*
+While production is running, tap *X2 SPEED-UP* → watch the ad → reduce the remaining production time by *50%*.
+_Only once per production batch._
+
+⬆️ *3. Upgrade Truck*
+Have enough Coins → tap *Upgrade Truck* → watch the ad → increase your truck level.
+Higher levels mean faster production and more goods per delivery.
+
+🎁 *4. Chest*
+Use chest opens to receive random rewards.
+If you have no opens left:
+• 📺 Watch an ad for +1 open.
+• 🔄 Exchange *500 Orders = 1 chest open*.
+
+📋 *5. Tasks*
+Complete the requirements → track your progress → tap *CLAIM* when ready.
+Complete all daily tasks to receive an extra bonus.
+
+🔥 *6. Daily Check-in*
+Check in every day in Tasks to maintain your streak.
+A missed streak may be recovered by watching an ad.
+
+📺 *7. Earn More Rewards*
+• Rewarded Ads: *+50 Coins +25 Orders each*, maximum 30/day.
+• SmartLink: *+25 Coins +25 Orders each*, maximum 30/day.
+
+👥 *8. Invite Friends*
+Share your referral link.
+An invited friend becomes *valid* after:
+
+Opening the Mini App through your link
+→ joining the required Telegram groups
+→ watching ≥3 valid ads
+→ completing ≥2 SmartLinks
+→ completing ≥1 delivery.
+
+Each valid friend gives:
+
+*+500 Coins +1,000 Orders*
+
+🏆 *9. Ranking*
+Open *Ranking* to view your position and weekly reward conditions.
+
+💳 *10. Withdraw*
+Minimum:
+
+*30,000 Orders = 3,000 VND*
+
+Supported:
+
+• Bank
+• MoMo
+• ZaloPay
+
+Enter your details → complete CAPTCHA → submit withdrawal.
+
+🎟️ *Redeem Code*
+Have a Giftcode → open *Redeem → enter code → Claim*.
+
+⚙️ *Settings*
+Change language, toggle music, or use *FIX LAG* on slower devices.
+
+💡 *Simple gameplay loop:*
+
+*Produce → Deliver → Complete Tasks → Upgrade Truck → Repeat.* 🚚📦💰`;
+
 // ==================== HỆ THỐNG CẤP ĐỘ VÀ CÔNG THỨC (LEVEL 1-500) ====================
 /**
  * Tính toán tất cả thống kê xe theo cấp độ (công thức LOCKED)
@@ -443,9 +636,13 @@ async function atomicIncrement(userId, field, amount = 1, maxRetries = 6) {
 // tra thành viên nhóm, dữ liệu JSON hỏng...) đều khiến Telegraf âm thầm nuốt lỗi, chỉ log ra console mà
 // KHÔNG trả lời gì cho người dùng -> nhìn như bot bị "im lặng"/"treo". bot.catch() đảm bảo mọi lỗi đều
 // được ghi log VÀ luôn có phản hồi báo lỗi cho người dùng thay vì im lặng.
-bot.catch((err, ctx) => {
+bot.catch(async (err, ctx) => {
     console.error(`⚠️ Lỗi khi xử lý update (${ctx.updateType}) từ user ${ctx.from?.id}:`, err);
-    ctx.reply('❌ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây. Nếu lỗi tiếp diễn hãy liên hệ Admin.').catch(() => {});
+    const language = await getStoredUserLanguage(ctx.from?.id);
+    const text = language === 'en'
+        ? '❌ Something went wrong. Please try again in a few seconds. Contact Admin if the problem continues.'
+        : '❌ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây. Nếu lỗi tiếp diễn hãy liên hệ Admin.';
+    ctx.reply(text).catch(() => {});
 });
 
 // Hàm gửi tin nhắn Telegram an toàn
@@ -457,6 +654,11 @@ async function safeSendMessage(chatId, text, options = {}) {
         console.error(`Lỗi gửi tin nhắn tới ${chatId}:`, e.message);
         return false;
     }
+}
+
+async function safeSendLocalizedMessage(chatId, viText, enText, options = {}) {
+    const language = await getStoredUserLanguage(chatId);
+    return safeSendMessage(chatId, language === 'en' ? enText : viText, options);
 }
 
 // Hàm kiểm tra thành viên nhóm
@@ -1114,16 +1316,17 @@ async function logTransaction(userId, type, amount, reason) {
 // Xây dựng nội dung thông báo "lượt mời chưa thành công" gửi cho người mời, CHỈ liệt kê đúng những điều
 // kiện người được mời CÒN THIẾU tại thời điểm gửi (không hiển thị điều kiện đã hoàn thành) - phản ánh đúng
 // 5 điều kiện thực tế mà tryFinalizeReferral() đang xét ở trên, không tự bịa hay đổi điều kiện referral.
-function buildReferralPendingConditionsText(userRow, isMemberNow) {
+function buildReferralPendingConditionsText(userRow, isMemberNow, language = 'vi') {
+    const en = normalizeUserLanguage(language) === 'en';
     const missing = [];
-    if (!isMemberNow) missing.push('✅ Tham gia đầy đủ nhóm Telegram bắt buộc');
-    if ((userRow?.lifetimeAdsWatched || 0) < 3) missing.push('✅ Xem ít nhất 3 quảng cáo hợp lệ');
-    if ((userRow?.lifetimeSmartlinks || 0) < 2) missing.push('✅ Hoàn thành ít nhất 2 SmartLink');
-    if ((userRow?.deliveryCountLifetime || 0) < 1) missing.push('✅ Giao hàng ít nhất 1 lần');
-    if (userRow?.isBanned) missing.push('✅ Tài khoản không bị khóa/ban');
+    if (!isMemberNow) missing.push(en ? '✅ Join all required Telegram groups' : '✅ Tham gia đầy đủ nhóm Telegram bắt buộc');
+    if ((userRow?.lifetimeAdsWatched || 0) < 3) missing.push(en ? '✅ Watch at least 3 valid ads' : '✅ Xem ít nhất 3 quảng cáo hợp lệ');
+    if ((userRow?.lifetimeSmartlinks || 0) < 2) missing.push(en ? '✅ Complete at least 2 valid SmartLinks' : '✅ Hoàn thành ít nhất 2 SmartLink');
+    if ((userRow?.deliveryCountLifetime || 0) < 1) missing.push(en ? '✅ Complete at least 1 valid delivery' : '✅ Giao hàng ít nhất 1 lần');
+    if (userRow?.isBanned) missing.push(en ? '✅ Account must not be banned' : '✅ Tài khoản không bị khóa/ban');
     return missing.length > 0
         ? missing.join('\n')
-        : '✅ Đã hoàn tất các điều kiện, hệ thống sẽ tự động xác nhận trong ít phút.';
+        : (en ? '✅ All requirements are complete. The system will confirm this referral automatically.' : '✅ Đã hoàn tất các điều kiện, hệ thống sẽ tự động xác nhận trong ít phút.');
 }
 
 // Thử xác nhận 1 lượt mời bạn hợp lệ. Điều kiện đầy đủ:
@@ -1222,12 +1425,19 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         try { milestonesData = JSON.parse(refUser.referralMilestones); } catch (_) { milestonesData = []; }
     }
     const nextMilestone = milestonesData.find(m => m.friends > newValid);
-    const progressText = nextMilestone
+    const progressTextVi = nextMilestone
         ? `🎯 Tiến độ: ${newValid}/${nextMilestone.friends} bạn (Phần thưởng mốc: ${nextMilestone.reward})`
         : '🏆 Đã đạt tất cả các mốc!';
+    const milestoneRewardEn = nextMilestone
+        ? [nextMilestone.coins ? `${Number(nextMilestone.coins).toLocaleString('en-US')} Coins` : '', nextMilestone.orders ? `${Number(nextMilestone.orders).toLocaleString('en-US')} Orders` : '', nextMilestone.spins ? `${Number(nextMilestone.spins).toLocaleString('en-US')} Chest Opens` : ''].filter(Boolean).join(' + ')
+        : '';
+    const progressTextEn = nextMilestone
+        ? `🎯 Progress: ${newValid}/${nextMilestone.friends} valid friends (Milestone reward: ${milestoneRewardEn})`
+        : '🏆 All milestones completed!';
 
-    await safeSendMessage(userRecord.referrerId,
-        `✅ *Xác nhận hợp lệ!* ${userRecord.name} đã tham gia đủ nhóm và xem đủ QC.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressText}`,
+    await safeSendLocalizedMessage(userRecord.referrerId,
+        `✅ *Xác nhận hợp lệ!* ${userRecord.name} đã hoàn thành đủ điều kiện giới thiệu.\n🎁 Nhận ngay: *+${INSTANT_REF_COINS.toLocaleString()} Coin + ${INSTANT_REF_ORDERS.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ: *${newValid}*\n${progressTextVi}`,
+        `✅ *Valid referral confirmed!* ${userRecord.name} completed all referral requirements.\n🎁 Reward: *+${INSTANT_REF_COINS.toLocaleString('en-US')} Coins + ${INSTANT_REF_ORDERS.toLocaleString('en-US')} Orders*\n📊 Total valid referrals: *${newValid}*\n${progressTextEn}`,
         { parse_mode: 'Markdown' }
     );
 
@@ -1256,7 +1466,10 @@ bot.use(async (ctx, next) => {
     const winner = await Promise.race([nextPromise, timeoutPromise]);
     if (winner === '__timeout__') {
         console.error(`⏱️ Update (${ctx.updateType}) từ user ${ctx.from?.id} xử lý quá ${BOT_UPDATE_TIMEOUT_MS / 1000}s -> đã bỏ qua để không làm treo toàn bộ bot.`);
-        ctx.reply('⏱️ Yêu cầu đang xử lý quá lâu (có thể do máy chủ dữ liệu phản hồi chậm). Vui lòng thử lại sau ít giây.').catch(() => {});
+        const language = await getStoredUserLanguage(ctx.from?.id);
+        ctx.reply(language === 'en'
+            ? '⏱️ This request is taking too long (the data server may be slow). Please try again in a few seconds.'
+            : '⏱️ Yêu cầu đang xử lý quá lâu (có thể do máy chủ dữ liệu phản hồi chậm). Vui lòng thử lại sau ít giây.').catch(() => {});
         // handler thật vẫn tiếp tục chạy ngầm phía sau (không huỷ được vì Supabase/Telegram API không hỗ
         // trợ abort) - vẫn lắng nghe để LOG lỗi thật nếu có, tránh mất dấu debug và tránh cảnh báo
         // "unhandled rejection" thừa cho promise này.
@@ -1280,10 +1493,14 @@ bot.use(async (ctx, next) => {
             // Im lặng hoàn toàn trong group/supergroup/channel khi bot bị khoá - không reply, không cảnh báo.
             return;
         }
+        const language = await getStoredUserLanguage(ctx.from?.id);
+        const maintenanceText = language === 'en'
+            ? '🔒 The bot is locked for maintenance. Please try again later!!'
+            : MAINTENANCE_MESSAGE;
         if (ctx.callbackQuery) {
-            await ctx.answerCbQuery(MAINTENANCE_MESSAGE, { show_alert: true }).catch(() => {});
+            await ctx.answerCbQuery(maintenanceText, { show_alert: true }).catch(() => {});
         }
-        return ctx.reply(MAINTENANCE_MESSAGE).catch(() => {});
+        return ctx.reply(maintenanceText).catch(() => {});
     }
     return next();
 });
@@ -1318,7 +1535,10 @@ bot.command('addadmin', async (ctx) => {
     }
     await loadAdmins(); // Nạp lại cache ngay để có hiệu lực tức thì
     ctx.reply(`✅ Đã phong user ${targetId} làm *Admin phụ*.\nUser này giờ dùng được tất cả lệnh admin (trừ /addadmin, /xoaadmin).`, { parse_mode: 'Markdown' });
-    safeSendMessage(targetId, "🎉 Bạn vừa được phong làm *Admin phụ*! Giờ bạn có thể dùng các lệnh quản trị của bot.", { parse_mode: 'Markdown' });
+    safeSendLocalizedMessage(targetId,
+        "🎉 Bạn vừa được phong làm *Admin phụ*! Giờ bạn có thể dùng các lệnh quản trị của bot.",
+        "🎉 You have been promoted to *Sub-Admin*! You can now use the bot's admin commands.",
+        { parse_mode: 'Markdown' });
 });
 
 // /xoaadmin <ID> - Hạ 1 admin phụ xuống lại thành user thường (CHỈ Admin chính được dùng lệnh này)
@@ -1336,7 +1556,10 @@ bot.command('xoaadmin', async (ctx) => {
     }
     await loadAdmins();
     ctx.reply(`✅ Đã hạ user ${targetId} xuống lại thành người dùng thường.`);
-    safeSendMessage(targetId, "ℹ️ Bạn đã bị gỡ quyền *Admin phụ*.", { parse_mode: 'Markdown' });
+    safeSendLocalizedMessage(targetId,
+        "ℹ️ Bạn đã bị gỡ quyền *Admin phụ*.",
+        "ℹ️ Your *Sub-Admin* permission has been removed.",
+        { parse_mode: 'Markdown' });
 });
 
 // /listadmins - Xem danh sách admin hiện tại
@@ -1356,6 +1579,7 @@ bot.start(async (ctx) => {
     const userId = ctx.from.id.toString();
     const userName = ctx.from.first_name || 'User';
     const referrerId = ctx.startPayload;
+    let language = 'vi';
 
     try {
         let userRecord;
@@ -1365,6 +1589,7 @@ bot.start(async (ctx) => {
             const newUser = {
                 id: userId,
                 name: userName,
+                language: 'vi',
                 referrerId: referrerId || null,
                 coins: 0,
                 orders: 0,
@@ -1402,7 +1627,7 @@ bot.start(async (ctx) => {
             const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUserRow).select().single();
             if (insertError) {
                 console.error("Lỗi tạo user mới:", insertError);
-                return ctx.reply("⚠️ Có lỗi xảy ra khi tạo tài khoản, vui lòng thử lại sau!");
+                return ctx.reply(language === 'en' ? '⚠️ Could not create your account. Please try again later!' : '⚠️ Có lỗi xảy ra khi tạo tài khoản, vui lòng thử lại sau!');
             }
             if (Object.keys(newUserExtra).length > 0) await saveUserExtra(userId, newUserExtra);
             userRecord = { ...newUserExtra, ...insertedUser };
@@ -1420,17 +1645,22 @@ bot.start(async (ctx) => {
                     // đủ). Thưởng + thông báo "thành công" thật sự chỉ được gửi trong tryFinalizeReferral()
                     // khi bạn bè ĐÃ đủ điều kiện.
                     const isMemberAtInvite = await checkUserMembership(userId).catch(() => false);
-                    const conditionsText = buildReferralPendingConditionsText(userRecord, isMemberAtInvite);
-                    await safeSendMessage(referrerId, 
-                        `👋 *${userName}* vừa tham gia Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *chưa được tính thành công*.\n\nĐể được tính hợp lệ, bạn ấy cần hoàn tất:\n${conditionsText}\n\n🎁 Khi đủ điều kiện, hệ thống sẽ tự động xác nhận lượt mời và cộng thưởng cho bạn.`,
+                    const refLanguage = await getStoredUserLanguage(referrerId);
+                    const conditionsText = buildReferralPendingConditionsText(userRecord, isMemberAtInvite, refLanguage);
+                    await safeSendMessage(referrerId, refLanguage === 'en'
+                        ? `👋 *${userName}* joined the Mini App through your referral link!\n⚠️ This referral is *not valid yet*.\n\nThey still need to complete:\n${conditionsText}\n\n🎁 Once all requirements are met, the system will confirm it automatically and add your reward.`
+                        : `👋 *${userName}* vừa tham gia Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *chưa được tính thành công*.\n\nĐể được tính hợp lệ, bạn ấy cần hoàn tất:\n${conditionsText}\n\n🎁 Khi đủ điều kiện, hệ thống sẽ tự động xác nhận lượt mời và cộng thưởng cho bạn.`,
                         { parse_mode: 'Markdown' }
                     );
                 }
             }
         } else {
             userRecord = existingUser;
+            const mergedExisting = await readUserRow(userId);
+            if (mergedExisting.data) userRecord = mergedExisting.data;
+            language = normalizeUserLanguage(userRecord.language);
             if (userRecord.isBanned) {
-                return ctx.reply("❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.");
+                return ctx.reply(language === 'en' ? '❌ Your account has been banned. Contact Admin for support.' : '❌ Tài khoản của bạn đã bị khóa. Liên hệ admin để được hỗ trợ.');
             }
             // FIX LỖI TÊN BỊ GHI ĐÈ SAI (vd hiện "🚫 BANNED - RESET 🚫" thay vì tên thật): trường "name"
             // trước đây chỉ được ghi 1 LẦN DUY NHẤT lúc tạo tài khoản, không bao giờ tự làm mới lại từ
@@ -1444,6 +1674,13 @@ bot.start(async (ctx) => {
             }
         }
 
+        // Đồng bộ ngôn ngữ từ cùng một nguồn user.language mà Mini App đang sử dụng.
+        if (!userRecord?.language) {
+            await saveUserFields(userId, { language:'vi' });
+            userRecord = { ...(userRecord || {}), language:'vi' };
+        }
+        language = normalizeUserLanguage(userRecord.language);
+
         // Kiểm tra tham gia nhóm
         const isMember = await checkUserMembership(userId);
 
@@ -1452,34 +1689,33 @@ bot.start(async (ctx) => {
             await tryFinalizeReferral(userId, true);
 
             // Gửi nút mở Mini App
-            ctx.reply(`Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`, {
-                reply_markup: { 
-                    inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]] 
-                }
-            });
+            await ctx.reply(
+                language === 'en'
+                    ? `Welcome ${userName}! 🎉\nVerification successful. Tap the button below to open the Mini App!`
+                    : `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
+                botOpenAppInline(language)
+            );
+            await sendPersistentMainMenu(ctx, language);
         } else {
             // Yêu cầu tham gia nhóm TRƯỚC khi cho vào miniapp
-            ctx.reply(
-                "⚠️ *Bạn chưa tham gia đủ 2 nhóm bắt buộc!*\n\n" +
-                "Vui lòng tham gia 2 nhóm dưới đây:\n" +
-                "1️⃣ https://t.me/khohangkiemtien (Kênh thông báo)\n" +
-                "2️⃣ https://t.me/khohangchatkiemtien (Nhóm chat)\n\n" +
-                "Sau khi tham gia xong, nhấn nút *Xác Nhận* bên dưới để bot kiểm tra.",
-                {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: "1️⃣ Tham gia Kênh", url: "https://t.me/khohangkiemtien" }],
-                            [{ text: "2️⃣ Tham gia Nhóm Chat", url: "https://t.me/khohangchatkiemtien" }],
-                            [{ text: "✅ Xác Nhận Bot Kiểm Tra", callback_data: "check_groups" }]
-                        ]
-                    }
+            const joinText = language === 'en'
+                ? "⚠️ *You have not joined both required Telegram groups!*\n\nPlease join both groups below:\n1️⃣ https://t.me/khohangkiemtien (Notification Channel)\n2️⃣ https://t.me/khohangchatkiemtien (Community Chat)\n\nAfter joining, tap *Verify* below so the bot can check."
+                : "⚠️ *Bạn chưa tham gia đủ 2 nhóm bắt buộc!*\n\nVui lòng tham gia 2 nhóm dưới đây:\n1️⃣ https://t.me/khohangkiemtien (Kênh thông báo)\n2️⃣ https://t.me/khohangchatkiemtien (Nhóm chat)\n\nSau khi tham gia xong, nhấn nút *Xác Nhận* bên dưới để bot kiểm tra.";
+            await ctx.reply(joinText, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: language === 'en' ? "1️⃣ Join Channel" : "1️⃣ Tham gia Kênh", url: "https://t.me/khohangkiemtien" }],
+                        [{ text: language === 'en' ? "2️⃣ Join Community Chat" : "2️⃣ Tham gia Nhóm Chat", url: "https://t.me/khohangchatkiemtien" }],
+                        [{ text: language === 'en' ? "✅ Verify Membership" : "✅ Xác Nhận Bot Kiểm Tra", callback_data: "check_groups" }]
+                    ]
                 }
-            );
+            });
+            await sendPersistentMainMenu(ctx, language);
         }
     } catch (err) {
         console.error("Lỗi /start:", err);
-        ctx.reply("⚠️ Có lỗi xảy ra, vui lòng thử lại sau!");
+        ctx.reply(language === 'en' ? '⚠️ Something went wrong. Please try again later!' : '⚠️ Có lỗi xảy ra, vui lòng thử lại sau!');
     }
 });
 
@@ -1493,9 +1729,10 @@ bot.on('callback_query', async (ctx) => {
     if (ctx.callbackQuery.data === 'check_groups') {
         const userId = ctx.from.id.toString();
         const userName = ctx.from.first_name || 'User';
+        const language = await getStoredUserLanguage(userId);
 
         try {
-            await ctx.answerCbQuery("🔍 Đang kiểm tra...");
+            await ctx.answerCbQuery(language === 'en' ? '🔍 Checking...' : '🔍 Đang kiểm tra...');
 
             const isMember = await checkUserMembership(userId);
 
@@ -1503,29 +1740,83 @@ bot.on('callback_query', async (ctx) => {
                 const { data: userRecord, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
                 if (userError) {
                     console.error("Lỗi lấy user trong callback:", userError);
-                    return ctx.editMessageText("⚠️ Có lỗi xảy ra, vui lòng thử lại sau!").catch(() => {});
+                    return ctx.editMessageText(language === 'en' ? '⚠️ Something went wrong. Please try again later!' : '⚠️ Có lỗi xảy ra, vui lòng thử lại sau!').catch(() => {});
                 }
 
                 // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
                 await tryFinalizeReferral(userId, true);
 
                 await ctx.editMessageText(
-                    `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
-                    {
-                        reply_markup: {
-                            inline_keyboard: [[{ text: "🚀 Vào Mini App", web_app: { url: WEB_APP_URL } }]]
-                        }
-                    }
+                    language === 'en'
+                        ? `Welcome ${userName}! 🎉\nVerification successful. Tap the button below to open the Mini App!`
+                        : `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
+                    botOpenAppInline(language)
                 );
+                await sendPersistentMainMenu(ctx, language);
             } else {
-                await ctx.answerCbQuery("❌ Bạn vẫn chưa tham gia đủ 2 nhóm! Vui lòng tham gia cả Kênh và Nhóm Chat rồi nhấn lại.");
+                await ctx.answerCbQuery(language === 'en'
+                    ? '❌ You still have not joined both required groups. Join the Channel and Community Chat, then try again.'
+                    : '❌ Bạn vẫn chưa tham gia đủ 2 nhóm! Vui lòng tham gia cả Kênh và Nhóm Chat rồi nhấn lại.');
             }
         } catch (err) {
             console.error("Lỗi xử lý callback check_groups:", err);
             // Luôn cố gắng tắt vòng xoay loading trên nút, kể cả khi answerCbQuery ở trên đã lỡ chưa chạy tới
-            await ctx.answerCbQuery("⚠️ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây.").catch(() => {});
+            await ctx.answerCbQuery(language === 'en' ? '⚠️ Something went wrong. Please try again in a few seconds.' : '⚠️ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây.').catch(() => {});
         }
     }
+});
+
+// ==================== MENU CỐ ĐỊNH CHO USER THƯỜNG ====================
+bot.hears(['🚀 Mở Kho Hàng', '🚀 Open Warehouse'], async (ctx) => {
+    const userId = String(ctx.from?.id || '');
+    const language = await getStoredUserLanguage(userId);
+    const isMember = await checkUserMembership(userId);
+    if (!isMember) {
+        return ctx.reply(language === 'en'
+            ? '⚠️ Please join both required Telegram groups first, then use /start to verify.'
+            : '⚠️ Vui lòng tham gia đủ 2 nhóm Telegram bắt buộc trước, sau đó dùng /start để xác minh.',
+            botMainReplyKeyboard(language));
+    }
+    await ctx.reply(language === 'en' ? '🚀 Open your warehouse:' : '🚀 Mở Kho Hàng của bạn:', botOpenAppInline(language));
+});
+
+bot.hears(['📦 Hướng Dẫn Chơi', '📦 How to Play'], async (ctx) => {
+    const language = await getStoredUserLanguage(ctx.from?.id);
+    await ctx.reply(language === 'en' ? BOT_GUIDE_EN : BOT_GUIDE_VI, {
+        parse_mode:'Markdown',
+        ...botMainReplyKeyboard(language)
+    });
+});
+
+bot.hears(['👨‍💻 Liên Hệ Admin', '👨‍💻 Contact Admin'], async (ctx) => {
+    const language = await getStoredUserLanguage(ctx.from?.id);
+    await ctx.reply(language === 'en' ? '👨‍💻 Contact Admin @dttb12:' : '👨‍💻 Liên hệ Admin @dttb12:', {
+        reply_markup: {
+            inline_keyboard: [[{ text: language === 'en' ? '👨‍💻 Contact @dttb12' : '👨‍💻 Liên hệ @dttb12', url:'https://t.me/dttb12' }]]
+        }
+    });
+    await sendPersistentMainMenu(ctx, language);
+});
+
+bot.hears(['🌐 Chọn Ngôn Ngữ', '🌐 Language'], async (ctx) => {
+    const language = await getStoredUserLanguage(ctx.from?.id);
+    await ctx.reply(language === 'en' ? '🌐 Choose language:' : '🌐 Chọn ngôn ngữ:', botLanguageReplyKeyboard());
+});
+
+bot.hears('🇻🇳 Tiếng Việt', async (ctx) => {
+    const userId = String(ctx.from?.id || '');
+    const { error } = await saveUserFields(userId, { language:'vi' });
+    if (error) return ctx.reply('❌ Không thể lưu ngôn ngữ lúc này. Vui lòng thử lại.');
+    await flushUserExtra();
+    await ctx.reply('✅ Đã chuyển sang Tiếng Việt.', botMainReplyKeyboard('vi'));
+});
+
+bot.hears('🇬🇧 English', async (ctx) => {
+    const userId = String(ctx.from?.id || '');
+    const { error } = await saveUserFields(userId, { language:'en' });
+    if (error) return ctx.reply('❌ Could not save the language right now. Please try again.');
+    await flushUserExtra();
+    await ctx.reply('✅ Language changed to English.', botMainReplyKeyboard('en'));
 });
 
 // ==================== LỆNH ADMIN ====================
@@ -1709,7 +2000,7 @@ bot.command('addref', async (ctx) => {
     if (!ok) return ctx.reply("❌ Lỗi khi cập nhật dữ liệu user.");
 
     ctx.reply(`✅ Đã cộng ${amount} lượt mời hợp lệ cho ${targetId}.\n📊 Tổng hợp lệ mới: ${newValid}\n🎁 Đã cộng thưởng: +${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng`);
-    safeSendMessage(targetId, `🎉 Admin vừa cộng thêm *${amount}* lượt mời bạn hợp lệ cho bạn!\n🎁 Nhận thêm: *+${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ hiện tại: *${newValid}*`, { parse_mode: 'Markdown' });
+    safeSendLocalizedMessage(targetId, `🎉 Admin vừa cộng thêm *${amount}* lượt mời bạn hợp lệ cho bạn!\n🎁 Nhận thêm: *+${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ hiện tại: *${newValid}*`, `🎉 Admin added *${amount}* valid invite(s) to your account!\n🎁 Reward: *+${bonusCoins.toLocaleString()} Coins + ${bonusOrders.toLocaleString()} Orders*\n📊 Current valid invites: *${newValid}*`, { parse_mode: 'Markdown' });
 });
 
 // /setlevel
@@ -2074,8 +2365,9 @@ bot.command('thuhoi', async (ctx) => {
             successCount++;
             if (r.rewardCoin) logTransaction(r.userId, 'coin', -(r.rewardCoin || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
             if (r.rewardOrders) logTransaction(r.userId, 'orders', -(r.rewardOrders || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
-            safeSendMessage(r.userId,
+            safeSendLocalizedMessage(r.userId,
                 `⚠️ Mã code \`${code}\` bạn đã nhập trước đây vừa bị *Admin thu hồi*.\n🪙 -${r.rewardCoin || 0} Coin | 📦 -${r.rewardOrders || 0} Đơn hàng | 🎡 -${r.rewardSpins || 0} Lượt mở rương\n(Số dư không thể âm nên nếu bạn đã tiêu hết, phần đã tiêu không thể trừ thêm).`,
+                `⚠️ The code \`${code}\` you redeemed earlier has been *revoked by Admin*.\n🪙 -${r.rewardCoin || 0} Coins | 📦 -${r.rewardOrders || 0} Orders | 🎡 -${r.rewardSpins || 0} Chest Opens\n(Balances cannot go below zero, so already-spent rewards cannot be deducted further).`,
                 { parse_mode: 'Markdown' }
             );
         } else {
@@ -2214,7 +2506,7 @@ bot.command('hoantra', async (ctx) => {
         await touchWallet(targetId, { orders: newOrders });
         
         totalRefundedOrdersValue += ordersToRefund; // Đây là giá trị đơn hàng, không phải số tiền
-        await safeSendMessage(targetId, `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${ordersToRefund.toLocaleString()}`);
+        await safeSendLocalizedMessage(targetId, `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${ordersToRefund.toLocaleString()}`, `🔄 Your withdrawal request has been REFUNDED.\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`);
     }
     
     ctx.reply(`✅ Đã hoàn trả ${withdrawals.length} đơn của ${targetId}.\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
@@ -2239,7 +2531,7 @@ bot.command('duyet', async (ctx) => {
         totalApprovedAmount += w.amount;
     }
     
-    await safeSendMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!\n💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ\nTiền sẽ sớm được chuyển vào tài khoản.`, { parse_mode: 'Markdown' });
+    await safeSendLocalizedMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!\n💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ\nTiền sẽ sớm được chuyển vào tài khoản.`, `✅ Your withdrawal request has been *APPROVED*!\n💰 Total amount: ${totalApprovedAmount.toLocaleString()} VND\nThe funds will be transferred to your account soon.`, { parse_mode: 'Markdown' });
     ctx.reply(`✅ Đã duyệt ${withdrawals.length} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
 });
 
@@ -2274,7 +2566,7 @@ bot.command('huy', async (ctx) => {
         await touchWallet(targetId, { orders: newOrders });
         
         totalRefundedOrdersValue += ordersToRefund;
-        await safeSendMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${ordersToRefund.toLocaleString()}`, { parse_mode: 'Markdown' });
+        await safeSendLocalizedMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${ordersToRefund.toLocaleString()}`, `❌ Your withdrawal request was *REJECTED*.\n📝 Reason: ${reason}\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`, { parse_mode: 'Markdown' });
     }
     
     ctx.reply(`✅ Đã hủy yêu cầu rút tiền của ${targetId}.\n📝 Lý do: ${reason}\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
@@ -2482,8 +2774,9 @@ async function weeklyLeaderboardReset() {
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
                     await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
                     logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
-                    await safeSendMessage(u.id,
+                    await safeSendLocalizedMessage(u.id,
                         `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới!`,
+                        `🏆 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Invite Ranking with *${u.weeklyValidInvites}* valid invites!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe ranking has been reset for the new week!`,
                         { parse_mode: 'Markdown' }
                     );
                     logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này`);
@@ -2522,8 +2815,9 @@ async function weeklyLeaderboardReset() {
                     const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
                     await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
                     logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH Xem QC tuần`);
-                    await safeSendMessage(u.id,
+                    await safeSendLocalizedMessage(u.id,
                         `📺 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Xem QC tuần này với *${u.weeklyAdsCount}* lượt xem!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH Xem QC đã được reset cho tuần mới!`,
+                        `📺 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Ad Ranking with *${u.weeklyAdsCount}* valid views!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe Ad Ranking has been reset for the new week!`,
                         { parse_mode: 'Markdown' }
                     );
                     logActivity(`📺 ${maskName(u.name)} đạt ${prize.label} BXH Xem QC tuần này`);
@@ -2814,85 +3108,240 @@ app.post('/api/user/:id', async (req, res) => {
 
 // ==================== SMARTLINK ====================
 // Each valid SmartLink completion = +25 Coin +25 Orders.
-// Daily SmartLink limit = 30. Daily task "5 SmartLinks" is only a reward milestone.
+// Server owns attemptId + startedAt; client timestamps are never trusted for reward eligibility.
 const smartlinkProcessing = new Set();
 const SMARTLINK_DAILY_LIMIT = 30;
 const SMARTLINK_REWARD_COINS = 25;
 const SMARTLINK_REWARD_ORDERS = 25;
-app.post('/api/smartlink/complete', async (req, res) => {
-    const authUserId = String(req.body?.userId || req.params?.id || '');
-    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+const SMARTLINK_MIN_ELAPSED_MS = 5000;
+const SMARTLINK_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+function isAllowedSmartlinkUrl(value) {
+    try {
+        const url = new URL(String(value || ''));
+        if (url.protocol !== 'https:') return false;
+        const host = url.hostname.toLowerCase();
+        return host === 'omg10.com' || host.endsWith('.omg10.com') || host === 'thatlobster.com' || host.endsWith('.thatlobster.com');
+    } catch (_) {
+        return false;
+    }
+}
+function smartlinkAttemptKey(attemptId) {
+    return persistentEventKey('smartlink-attempt', String(attemptId || ''));
+}
+
+app.post('/api/smartlink/start', async (req, res) => {
     const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const link = String(req.body?.link || '').trim();
+    if (!userId) return res.status(400).json({success:false,error:'Thiếu userId.'});
+    if (!isAllowedSmartlinkUrl(link)) return res.status(400).json({success:false,error:'SmartLink không hợp lệ.'});
+    try {
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if (user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const count = Math.max(0, Number(user.smartlinksToday || user.smartlinkCount || 0));
+        if (count >= SMARTLINK_DAILY_LIMIT) {
+            return res.status(429).json({success:false,limitReached:true,smartlinksToday:count,error:'Đã hết 30 lượt SmartLink hôm nay.'});
+        }
+        const attemptId = crypto.randomBytes(18).toString('hex');
+        const startedAt = Date.now();
+        const attempt = {
+            userId, link, status:'started', used:false, startedAt,
+            expiresAt:startedAt + SMARTLINK_ATTEMPT_TTL_MS,
+            dayKey:vietnamDayKey()
+        };
+        const saved = await writePersistentEvent(smartlinkAttemptKey(attemptId), attempt, 3);
+        if (!saved) return res.status(503).json({success:false,retry:true,error:'Chưa tạo được phiên SmartLink. Vui lòng thử lại.'});
+        return res.json({success:true,attemptId,startedAt,expiresAt:attempt.expiresAt,minElapsedMs:SMARTLINK_MIN_ELAPSED_MS});
+    } catch (e) {
+        console.error('Lỗi bắt đầu SmartLink:', e);
+        return res.status(500).json({success:false,retry:true,error:e.message});
+    }
+});
+
+app.post('/api/smartlink/complete', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     const attemptId = String(req.body?.attemptId || '');
     if (!userId) return res.status(400).json({success:false,error:'Thiếu userId.'});
     if (!attemptId) return res.status(400).json({success:false,error:'Thiếu SmartLink attemptId.'});
     if (smartlinkProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Lượt SmartLink đang được xử lý.'});
     smartlinkProcessing.add(userId);
+    const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
     try {
-        const persistentSmartlinkKey = persistentEventKey('smartlink', `${userId}:${attemptId}`);
-        const existing = await readPersistentEvent(persistentSmartlinkKey);
-        if (existing?.success) return res.json({ ...existing, idempotent:true });
+        const legacyResultKey = persistentEventKey('smartlink', `${userId}:${attemptId}`);
+        const legacyResult = await readPersistentEvent(legacyResultKey);
+        if (legacyResult?.success) return res.json({...legacyResult,idempotent:true});
 
-        let { data:user } = await readUserRow(userId);
+        const attemptKey = smartlinkAttemptKey(attemptId);
+        let attempt = await readPersistentEvent(attemptKey);
+        if (!attempt || String(attempt.userId || '') !== userId) {
+            return res.status(400).json({success:false,invalidAttempt:true,error:'Không tìm thấy phiên SmartLink hợp lệ. Vui lòng thử lại.'});
+        }
+        if (attempt.status === 'completed' && attempt.result?.success) {
+            return res.json({...attempt.result,idempotent:true});
+        }
+        if (attempt.expiresAt && Date.now() >= Number(attempt.expiresAt)) {
+            return res.status(410).json({success:false,attemptExpired:true,error:'Phiên SmartLink đã hết hạn. Vui lòng thử lại.'});
+        }
+        const elapsed = Date.now() - Number(attempt.startedAt || 0);
+        if (!Number.isFinite(elapsed) || elapsed < SMARTLINK_MIN_ELAPSED_MS) {
+            const language = await getStoredUserLanguage(userId);
+            return res.status(425).json({
+                success:false,tooEarly:true,elapsed,minElapsedMs:SMARTLINK_MIN_ELAPSED_MS,
+                error:language === 'en'
+                    ? 'You must wait at least 5 seconds. Please try again!!'
+                    : 'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!'
+            });
+        }
+
+        let user = await loadCurrentDailyUser(userId);
         if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if (user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
         const fraudGate = await antiFraudRewardGate(userId);
         if (!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
 
-        if (!isCurrentVietnamDay(user.lastResetDate)) {
-            await saveUserFields(userId,{...dailyResetFields(),walletUpdatedAt:new Date().toISOString()});
-            ({ data:user } = await readUserRow(userId));
-            if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const finishAttempt = async (freshUser, recovered = false) => {
+            const response = {
+                success:true,
+                rewardCoins:SMARTLINK_REWARD_COINS,rewardOrders:SMARTLINK_REWARD_ORDERS,
+                smartlinkCount:Number(freshUser.smartlinkCount || 0),
+                smartlinksToday:Number(freshUser.smartlinksToday || 0),
+                lifetimeSmartlinks:Number(freshUser.lifetimeSmartlinks || 0),
+                coins:Number(freshUser.coins || 0),orders:Number(freshUser.orders || 0),
+                walletUpdatedAt:freshUser.walletUpdatedAt || null,
+                elapsed:Date.now()-Number(attempt.startedAt || Date.now())
+            };
+            const completedAttempt = {...attempt,status:'completed',used:true,completedAt:Date.now(),result:response};
+            const savedAttempt = await writePersistentEvent(attemptKey, completedAttempt, 4);
+            const savedLegacy = await writePersistentEvent(legacyResultKey,{...response,createdAt:Date.now()},3);
+            if (!savedAttempt && !savedLegacy) {
+                return {ok:false,response:null};
+            }
+            attempt = completedAttempt;
+            if (!recovered) {
+                await recordAntiFraudEvent(userId,'smartlink',{
+                    rewardEvent:true,coins:SMARTLINK_REWARD_COINS,orders:SMARTLINK_REWARD_ORDERS,
+                    ip:requestIp(req),sessionId:String(req.body?.sessionId || ''),attemptId
+                });
+                logTransaction(userId,'coin',SMARTLINK_REWARD_COINS,'Hoàn thành 1 SmartLink');
+                logTransaction(userId,'orders',SMARTLINK_REWARD_ORDERS,'Hoàn thành 1 SmartLink');
+                try { await tryFinalizeReferral(userId); } catch (_) {}
+            }
+            const risk = await getAntiFraudState(userId);
+            return {ok:true,response:{...response,riskScore:risk.stats.score,...(recovered?{recovered:true}: {})}};
+        };
+
+        // Recovery after a crash between wallet commit and completed marker.
+        if (attempt.status === 'processing' && attempt.claim) {
+            const c = attempt.claim;
+            const markerMatches = String(user.lastSmartlinkAttemptId || '') === attemptId;
+            // coins+orders are updated in the same Postgres UPDATE. If those wallet targets are already
+            // reached after a crash, NEVER add +25/+25 again; repair only the counters/marker below.
+            const walletTargetsReached = Number(user.coins || 0) >= Number(c.targetCoins || 0)
+                && Number(user.orders || 0) >= Number(c.targetOrders || 0);
+            if (markerMatches || walletTargetsReached) {
+                const repair = await atomicWalletMutationUnlocked(userId, {
+                    setFields:{
+                        smartlinkCount:Math.max(Number(user.smartlinkCount || 0),Number(c.targetSmartlinkCount || 0)),
+                        smartlinksToday:Math.max(Number(user.smartlinksToday || 0),Number(c.targetSmartlinksToday || 0)),
+                        lifetimeSmartlinks:Math.max(Number(user.lifetimeSmartlinks || 0),Number(c.targetLifetimeSmartlinks || 0)),
+                        lastSmartlinkTime:Number(c.completedAt || Date.now()),
+                        lastSmartlinkAttemptId:attemptId,
+                        lastResetDate:vietnamDayKey()
+                    }
+                });
+                if (repair.error) return res.status(409).json({success:false,retry:true,error:repair.error.message});
+                const flushed = await flushUserExtra();
+                if (!flushed) return res.status(503).json({success:false,retry:true,error:'SmartLink đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại.'});
+                const recovered = await readUserRow(userId);
+                if (!recovered.data) return res.status(503).json({success:false,retry:true,error:'Chưa đọc lại được trạng thái SmartLink.'});
+                const finished = await finishAttempt(recovered.data, true);
+                if (!finished.ok) return res.status(503).json({success:false,retry:true,error:'SmartLink đã hoàn tất nhưng marker đang đồng bộ. Vui lòng thử lại.'});
+                return res.json({...finished.response,idempotent:true});
+            }
+            // Wallet target chưa commit: giữ chính claim này và thử mutation ở dưới, không tạo target mới.
         }
 
         const currentCount = Math.max(0,Number(user.smartlinkCount || 0));
-        if (currentCount >= SMARTLINK_DAILY_LIMIT) {
-            return res.json({
-                success:true, alreadyComplete:true, smartlinkCount:SMARTLINK_DAILY_LIMIT,
-                smartlinksToday:Number(user.smartlinksToday || 0),
-                lifetimeSmartlinks:Number(user.lifetimeSmartlinks || 0),
-                coins:Number(user.coins || 0), orders:Number(user.orders || 0),
-                walletUpdatedAt:user.walletUpdatedAt
-            });
+        const todayCount = Math.max(0,Number(user.smartlinksToday || 0));
+        if (todayCount >= SMARTLINK_DAILY_LIMIT || currentCount >= SMARTLINK_DAILY_LIMIT) {
+            return res.status(429).json({success:false,limitReached:true,smartlinkCount:currentCount,smartlinksToday:todayCount,error:'Đã hết 30 lượt SmartLink hôm nay.'});
         }
 
-        const mutation = await atomicWalletMutation(userId,{
+        let claim = attempt.claim;
+        if (!claim || attempt.status !== 'processing') {
+            claim = {
+                status:'processing',reservedAt:Date.now(),completedAt:Date.now(),
+                preCoins:Number(user.coins || 0),preOrders:Number(user.orders || 0),
+                targetCoins:Number(user.coins || 0)+SMARTLINK_REWARD_COINS,
+                targetOrders:Number(user.orders || 0)+SMARTLINK_REWARD_ORDERS,
+                targetSmartlinkCount:currentCount+1,
+                targetSmartlinksToday:todayCount+1,
+                targetLifetimeSmartlinks:Math.max(0,Number(user.lifetimeSmartlinks || 0))+1
+            };
+            attempt = {...attempt,status:'processing',claim};
+            const reserved = await writePersistentEvent(attemptKey, attempt, 4);
+            if (!reserved) return res.status(503).json({success:false,retry:true,error:'Chưa giữ được phiên SmartLink. Vui lòng thử lại.'});
+        }
+
+        const mutation = await atomicWalletMutationUnlocked(userId,{
             deltaCoins:SMARTLINK_REWARD_COINS,
             deltaOrders:SMARTLINK_REWARD_ORDERS,
             setFields:{
-                smartlinkCount:currentCount+1,
-                smartlinksToday:Number(user.smartlinksToday || 0)+1,
-                lifetimeSmartlinks:Number(user.lifetimeSmartlinks || 0)+1,
-                lastSmartlinkTime:Date.now(),
+                smartlinkCount:Number(claim.targetSmartlinkCount),
+                smartlinksToday:Number(claim.targetSmartlinksToday),
+                lifetimeSmartlinks:Number(claim.targetLifetimeSmartlinks),
+                lastSmartlinkTime:Number(claim.completedAt || Date.now()),
+                lastSmartlinkAttemptId:attemptId,
                 lastResetDate:vietnamDayKey()
             }
         });
         if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
 
-        const fresh=await readUserRow(userId);
-        await recordAntiFraudEvent(userId,'smartlink',{
-            rewardEvent:true,coins:SMARTLINK_REWARD_COINS,orders:SMARTLINK_REWARD_ORDERS,
-            ip:requestIp(req),sessionId:String(req.body?.sessionId || ''),attemptId
-        });
-        logTransaction(userId,'coin',SMARTLINK_REWARD_COINS,'Hoàn thành 1 SmartLink');
-        logTransaction(userId,'orders',SMARTLINK_REWARD_ORDERS,'Hoàn thành 1 SmartLink');
+        const flushed = await flushUserExtra();
+        if (!flushed) return res.status(503).json({success:false,retry:true,error:'SmartLink đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại.'});
+        let fresh = await readUserRow(userId);
+        if (!fresh.data) return res.status(503).json({success:false,retry:true,error:'Chưa đọc lại được trạng thái SmartLink.'});
 
-        const response={
-            success:true,
-            rewardCoins:SMARTLINK_REWARD_COINS,rewardOrders:SMARTLINK_REWARD_ORDERS,
-            smartlinkCount:Number(fresh.data?.smartlinkCount || 0),
-            smartlinksToday:Number(fresh.data?.smartlinksToday || 0),
-            lifetimeSmartlinks:Number(fresh.data?.lifetimeSmartlinks || 0),
-            coins:Number(fresh.data?.coins || 0),orders:Number(fresh.data?.orders || 0),
-            walletUpdatedAt:fresh.data?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null,
-            riskScore:(await getAntiFraudState(userId)).stats.score
-        };
-        await writePersistentEvent(persistentSmartlinkKey,{...response,createdAt:Date.now()});
-        res.json(response);
+        const walletCommitted = Number(fresh.data.coins || 0) >= Number(claim.targetCoins)
+            && Number(fresh.data.orders || 0) >= Number(claim.targetOrders);
+        if (!walletCommitted) {
+            return res.status(503).json({success:false,retry:true,error:'Phần thưởng SmartLink chưa commit hoàn toàn. Vui lòng thử lại.'});
+        }
+        let stateCommitted = String(fresh.data.lastSmartlinkAttemptId || '') === attemptId
+            && Number(fresh.data.smartlinkCount || 0) >= Number(claim.targetSmartlinkCount)
+            && Number(fresh.data.smartlinksToday || 0) >= Number(claim.targetSmartlinksToday)
+            && Number(fresh.data.lifetimeSmartlinks || 0) >= Number(claim.targetLifetimeSmartlinks);
+        if (!stateCommitted) {
+            const repair = await atomicWalletMutationUnlocked(userId,{
+                setFields:{
+                    smartlinkCount:Number(claim.targetSmartlinkCount),
+                    smartlinksToday:Number(claim.targetSmartlinksToday),
+                    lifetimeSmartlinks:Number(claim.targetLifetimeSmartlinks),
+                    lastSmartlinkTime:Number(claim.completedAt || Date.now()),
+                    lastSmartlinkAttemptId:attemptId,
+                    lastResetDate:vietnamDayKey()
+                }
+            });
+            if (repair.error) return res.status(409).json({success:false,retry:true,error:repair.error.message});
+            if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,error:'SmartLink đang đồng bộ trạng thái. Vui lòng thử lại.'});
+            fresh = await readUserRow(userId);
+            stateCommitted = !!fresh.data && String(fresh.data.lastSmartlinkAttemptId || '') === attemptId
+                && Number(fresh.data.smartlinkCount || 0) >= Number(claim.targetSmartlinkCount)
+                && Number(fresh.data.smartlinksToday || 0) >= Number(claim.targetSmartlinksToday)
+                && Number(fresh.data.lifetimeSmartlinks || 0) >= Number(claim.targetLifetimeSmartlinks);
+        }
+        if (!stateCommitted) return res.status(503).json({success:false,retry:true,error:'SmartLink chưa commit đầy đủ. Vui lòng thử lại.'});
+
+        const finished = await finishAttempt(fresh.data, false);
+        if (!finished.ok) return res.status(503).json({success:false,retry:true,error:'SmartLink đã commit nhưng marker đang đồng bộ. Vui lòng thử lại.'});
+        return res.json(finished.response);
     } catch(e) {
         console.error('Lỗi hoàn tất SmartLink:',e);
-        res.status(500).json({success:false,retry:true,error:e.message});
+        return res.status(500).json({success:false,retry:true,error:e.message});
     } finally {
+        releaseUserStateWrite();
         smartlinkProcessing.delete(userId);
     }
 });
@@ -3839,7 +4288,7 @@ app.post('/api/delivery/claim', async (req,res)=>{
     const adToken=String(req.body?.adToken||'');
     if(!adToken) return res.status(400).json({success:false,error:'Thiếu adToken của Rewarded Interstitial.'});
     const key=`${userId}:${adToken}`;
-    if(deliveryProcessing.has(key)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý lượt giao hàng.'});
+    if(deliveryProcessing.has(key)) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:'Đang xử lý lượt giao hàng.'});
     deliveryProcessing.add(key);
     const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
     try{
@@ -3874,8 +4323,23 @@ app.post('/api/delivery/claim', async (req,res)=>{
             return res.json({success:true,...event.deliveryClaimResult,idempotent:true});
         }
 
-        // Khôi phục trường hợp DB đã giao thành công nhưng instance chết trước khi ghi marker "claimed".
-        // Dựa trên target counters/Orders đã lưu TRƯỚC mutation để tuyệt đối không cộng lần hai.
+        const persistClaimedDelivery = async (result, claimAttempt, recovered = false) => {
+            const claimedAttempt = {...claimAttempt,status:'claimed',...(recovered?{recoveredAt:Date.now()}:{committedAt:Date.now()})};
+            const claimedEvent = {...event,used:true,deliveryClaimResult:result,deliveryClaimAttempt:claimedAttempt};
+            const savedClaim = await writePersistentEvent(deliveryKey,{
+                userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claimed',
+                completedAt:Number(event.completedAt||Date.now()),used:true,
+                deliveryClaimResult:result,completionResult:event.completionResult||null,
+                deliveryClaimAttempt:claimedAttempt,expiresAt:Date.now()+30*60*1000
+            },4);
+            const savedCompleted = await persistCompletedAdEvent(adToken,claimedEvent);
+            if (!savedClaim && !savedCompleted) return false;
+            event = claimedEvent;
+            completedAdEvents.set(adToken, claimedEvent);
+            return true;
+        };
+
+        // Recovery: if Orders already reached target, never add them again. Repair only missing state.
         const pendingClaim = event.deliveryClaimAttempt || persisted?.deliveryClaimAttempt;
         if (pendingClaim?.status === 'claiming') {
             let recoveredUser = await loadCurrentDailyUser(userId);
@@ -3885,33 +4349,35 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 const targetLifetime = Number(pendingClaim.targetLifetime || 0);
                 const newBatchStartedAt = Number(pendingClaim.newBatchStartedAt || 0);
                 const ordersCommitted = Number(recoveredUser.orders || 0) >= targetOrders;
+                const productionAdvanced = Number(recoveredUser.lastProducedAt || 0) > newBatchStartedAt;
                 let stateCommitted =
                     Number(recoveredUser.deliveryCount || 0) >= targetDeliveryCount &&
                     Number(recoveredUser.deliveryCountLifetime || 0) >= targetLifetime &&
-                    Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt;
+                    Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt &&
+                    (productionAdvanced || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true));
 
-                // Crash-window quan trọng: atomicWalletMutation ghi orders/wallet vào bảng users trước,
-                // rồi mới merge các field schema-fallback vào user_extra_state. Nếu process chết đúng giữa
-                // hai bước, Orders ĐÃ cộng nhưng deliveryCount/currentProducts/lastProducedAt có thể chưa ghi.
-                // Khi retry tuyệt đối KHÔNG cộng Orders lần hai; chỉ hoàn tất phần state còn thiếu.
                 if (ordersCommitted && !stateCommitted) {
-                    const repair = await atomicWalletMutationUnlocked(userId, {
-                        setFields: {
-                            deliveryCount: targetDeliveryCount,
-                            deliveryCountLifetime: targetLifetime,
-                            currentProducts: 0,
-                            lastProducedAt: newBatchStartedAt,
-                            speedUpUsed: false,
-                            lastResetDate: vietnamDayKey()
-                        }
-                    });
-                    if (repair.error) return res.status(409).json({success:false,retry:true,error:repair.error.message});
-                    await flushUserExtra();
+                    const repairFields = {
+                        deliveryCount:Math.max(Number(recoveredUser.deliveryCount || 0),targetDeliveryCount),
+                        deliveryCountLifetime:Math.max(Number(recoveredUser.deliveryCountLifetime || 0),targetLifetime),
+                        lastResetDate:vietnamDayKey()
+                    };
+                    // Only restore the original batch-reset fields when no newer production batch has advanced.
+                    if (!productionAdvanced) {
+                        repairFields.currentProducts = 0;
+                        repairFields.lastProducedAt = newBatchStartedAt;
+                        repairFields.speedUpUsed = false;
+                    }
+                    const repair = await atomicWalletMutationUnlocked(userId,{setFields:repairFields});
+                    if (repair.error) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:repair.error.message});
+                    if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Đơn hàng đã commit nhưng trạng thái kho đang đồng bộ.'});
                     recoveredUser = await loadCurrentDailyUser(userId);
+                    const advancedAfterRepair = Number(recoveredUser?.lastProducedAt || 0) > newBatchStartedAt;
                     stateCommitted = !!recoveredUser &&
                         Number(recoveredUser.deliveryCount || 0) >= targetDeliveryCount &&
                         Number(recoveredUser.deliveryCountLifetime || 0) >= targetLifetime &&
-                        Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt;
+                        Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt &&
+                        (advancedAfterRepair || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true));
                 }
 
                 if (ordersCommitted && stateCommitted) {
@@ -3928,16 +4394,9 @@ app.post('/api/delivery/claim', async (req,res)=>{
                         speedUpUsed:!!recoveredUser.speedUpUsed,
                         walletUpdatedAt:recoveredUser.walletUpdatedAt || null
                     };
-                    event.used=true;
-                    event.deliveryClaimResult=recoveredResult;
-                    event.deliveryClaimAttempt={...pendingClaim,status:'claimed',recoveredAt:Date.now()};
-                    await persistCompletedAdEvent(adToken,event);
-                    await writePersistentEvent(deliveryKey,{
-                        userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claimed',
-                        completedAt:Number(event.completedAt||Date.now()),used:true,
-                        deliveryClaimResult:recoveredResult,completionResult:event.completionResult||null,
-                        deliveryClaimAttempt:event.deliveryClaimAttempt,expiresAt:Date.now()+30*60*1000
-                    });
+                    if (!(await persistClaimedDelivery(recoveredResult,pendingClaim,true))) {
+                        return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Giao hàng đã commit nhưng marker đang đồng bộ. Không cần xem lại QC.'});
+                    }
                     return res.json({success:true,...recoveredResult,idempotent:true,recovered:true});
                 }
             }
@@ -3954,7 +4413,6 @@ app.post('/api/delivery/claim', async (req,res)=>{
         const limit=DELIVERY_DAILY_LIMIT+extra;
         if(current>=limit) return res.status(429).json({success:false,limitReached:true,deliveryCount:current,limit,error:'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.'});
 
-        // SERVER là nguồn authoritative: Orders nhận đúng bằng số hàng THỰC đang có trong kho lúc claim.
         const deliveredProducts=Math.max(0,Number(user.currentProducts||0));
         if(deliveredProducts<=0) return res.status(400).json({success:false,error:'Kho chưa có hàng để giao.'});
 
@@ -3962,81 +4420,88 @@ app.post('/api/delivery/claim', async (req,res)=>{
         const lifetime=Math.max(0,Number(user.deliveryCountLifetime||0))+1;
         const newBatchStartedAt=Date.now();
         const claimAttempt={
-            status:'claiming',
-            startedAt:Date.now(),
-            deliveredProducts,
-            preOrders:Number(user.orders||0),
-            targetOrders:Number(user.orders||0)+deliveredProducts,
-            targetDeliveryCount:deliveryCount,
-            targetLifetime:lifetime,
-            newBatchStartedAt
+            status:'claiming',startedAt:Date.now(),deliveredProducts,
+            preOrders:Number(user.orders||0),targetOrders:Number(user.orders||0)+deliveredProducts,
+            preCurrentProducts:Number(user.currentProducts||0),preLastProducedAt:Number(user.lastProducedAt||0),
+            preDeliveryCount:current,preLifetime:Math.max(0,Number(user.deliveryCountLifetime||0)),
+            preSpeedUpUsed:!!user.speedUpUsed,
+            targetDeliveryCount:deliveryCount,targetLifetime:lifetime,newBatchStartedAt
         };
 
-        // Marker phải bền vững TRƯỚC mutation. Nếu process chết sau commit, retry cùng token sẽ phục hồi
-        // bằng marker này thay vì cộng Orders/deliveryCount lần hai.
         const claimReserved=await writePersistentEvent(deliveryKey,{
             userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claiming',
             completedAt:Number(event.completedAt||Date.now()),used:false,
             completionResult:event.completionResult||null,deliveryClaimResult:null,
             deliveryClaimAttempt:claimAttempt,expiresAt:Date.now()+30*60*1000
-        });
+        },4);
         if(!claimReserved) {
-            return res.status(503).json({success:false,retry:true,adVerified:true,error:'Rewarded đã được xác minh nhưng máy chủ chưa lưu được trạng thái giao hàng. Vui lòng thử lại, không cần xem QC.'});
+            return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Rewarded đã được xác minh nhưng máy chủ chưa lưu được trạng thái giao hàng. Vui lòng thử lại, không cần xem QC.'});
         }
         event.deliveryClaimAttempt=claimAttempt;
 
         const mutation=await atomicWalletMutationUnlocked(userId,{
             deltaOrders:deliveredProducts,
             setFields:{
-                deliveryCount,
-                deliveryCountLifetime:lifetime,
-                currentProducts:0,
-                lastProducedAt:newBatchStartedAt,
-                speedUpUsed:false,
-                lastResetDate:vietnamDayKey()
+                deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,
+                lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey()
             }
         });
-        if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        if(mutation.error) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:mutation.error.message});
 
-        // Nếu các field tương thích schema đang nằm ở user_extra_state, phải flush trước khi trả success.
-        // Nhờ đó reload/Render restart ngay sau delivery vẫn thấy kho=0 và đúng mốc mẻ mới.
-        await flushUserExtra();
-        const fresh=await readUserRow(userId);
-        if(!fresh.data) return res.status(500).json({success:false,retry:true,error:'Đã giao hàng nhưng chưa đọc lại được trạng thái mới.'});
+        if (!(await flushUserExtra())) {
+            return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Orders đã được xử lý nhưng trạng thái kho đang đồng bộ. Không cần xem lại QC.'});
+        }
+        let fresh=await readUserRow(userId);
+        if(!fresh.data) return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Đã xử lý giao hàng nhưng chưa đọc lại được trạng thái mới.'});
+
+        // ABSOLUTE COMMIT GATE: success:true is forbidden until Orders and all batch-reset state are confirmed.
+        const ordersCommitted = Number(fresh.data.orders || 0) >= Number(claimAttempt.targetOrders);
+        if (!ordersCommitted) {
+            return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Orders chưa commit hoàn toàn. Máy chủ sẽ thử lại bằng chính Rewarded đã xác minh.'});
+        }
+        let stateCommitted = Number(fresh.data.deliveryCount || 0) >= deliveryCount
+            && Number(fresh.data.deliveryCountLifetime || 0) >= lifetime
+            && Number(fresh.data.currentProducts || 0) === 0
+            && Number(fresh.data.lastProducedAt || 0) === newBatchStartedAt
+            && fresh.data.speedUpUsed !== true;
+        if (!stateCommitted) {
+            // Orders are already committed; repair only state, NEVER add Orders again.
+            const repair = await atomicWalletMutationUnlocked(userId,{
+                setFields:{deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey()}
+            });
+            if (repair.error) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:repair.error.message});
+            if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Orders đã commit nhưng trạng thái kho đang đồng bộ.'});
+            fresh = await readUserRow(userId);
+            stateCommitted = !!fresh.data && Number(fresh.data.orders || 0) >= Number(claimAttempt.targetOrders)
+                && Number(fresh.data.deliveryCount || 0) >= deliveryCount
+                && Number(fresh.data.deliveryCountLifetime || 0) >= lifetime
+                && Number(fresh.data.currentProducts || 0) === 0
+                && Number(fresh.data.lastProducedAt || 0) === newBatchStartedAt
+                && fresh.data.speedUpUsed !== true;
+        }
+        if (!stateCommitted) {
+            return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Delivery chưa commit đầy đủ. Không reset flow và không cần xem lại QC.'});
+        }
 
         const result={
-            deliveryCount:Number(fresh.data.deliveryCount ?? deliveryCount),
-            remaining:Math.max(0,limit-Number(fresh.data.deliveryCount ?? deliveryCount)),
-            limit,
-            bonusLimit:DELIVERY_MAX_BONUS,
-            extraDeliveryCount:extra,
-            deliveredProducts,
-            currentProducts:Number(fresh.data.currentProducts ?? 0),
-            orders:Number(fresh.data.orders ?? (Number(user.orders||0)+deliveredProducts)),
-            lastProducedAt:Number(fresh.data.lastProducedAt ?? newBatchStartedAt),
+            deliveryCount:Number(fresh.data.deliveryCount),
+            remaining:Math.max(0,limit-Number(fresh.data.deliveryCount)),
+            limit,bonusLimit:DELIVERY_MAX_BONUS,extraDeliveryCount:extra,
+            deliveredProducts,currentProducts:Number(fresh.data.currentProducts),
+            orders:Number(fresh.data.orders),lastProducedAt:Number(fresh.data.lastProducedAt),
             speedUpUsed:!!fresh.data.speedUpUsed,
             walletUpdatedAt:fresh.data.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
         };
 
-        event.used=true;
-        event.deliveryClaimResult=result;
-        event.deliveryClaimAttempt={...claimAttempt,status:'claimed',committedAt:Date.now()};
-        await persistCompletedAdEvent(adToken,event);
-        const savedClaim=await writePersistentEvent(deliveryKey,{
-            userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claimed',
-            completedAt:Number(event.completedAt||Date.now()),used:true,
-            deliveryClaimResult:result,completionResult:event.completionResult||null,
-            deliveryClaimAttempt:event.deliveryClaimAttempt,expiresAt:Date.now()+30*60*1000
-        });
-        if(!savedClaim) {
-            // Mutation đã commit. Marker "claiming" cũ vẫn đủ dữ liệu để recovery idempotent sau restart.
-            console.error('Không lưu được trạng thái claimed Delivery cho token',adToken);
+        if (!(await persistClaimedDelivery(result,claimAttempt,false))) {
+            return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Delivery đã commit nhưng marker idempotency đang đồng bộ. Không cần xem lại QC.'});
         }
         await recordAntiFraudEvent(userId,'delivery',{rewardEvent:true,ip:requestIp(req),adToken});
-        res.json({success:true,...result});
+        try { await tryFinalizeReferral(userId); } catch (_) {}
+        return res.json({success:true,...result});
     }catch(e){
         console.error('Lỗi claim Delivery:',e);
-        res.status(500).json({success:false,retry:true,error:e.message});
+        return res.status(500).json({success:false,retry:true,verified:true,adToken,error:e.message});
     }finally{
         releaseUserStateWrite();
         deliveryProcessing.delete(key);
@@ -4069,20 +4534,100 @@ app.post('/api/delivery/check-captcha', async (req, res) => {
     }
 });
 
-// API xác thực CAPTCHA trước khi cho phép rút tiền
-app.post('/api/withdraw/captcha-verify', async (req, res) => {
+// CAPTCHA rút tiền server-authoritative: challenge lưu hash, token ngắn hạn, single-use.
+const WITHDRAW_CAPTCHA_TTL_MS = 3 * 60 * 1000;
+const WITHDRAW_CAPTCHA_TOKEN_TTL_MS = 3 * 60 * 1000;
+const CAPTCHA_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function makeCaptchaCode(length = 5) {
+    let value = '';
+    for (let i = 0; i < length; i++) value += CAPTCHA_ALPHABET[crypto.randomInt(0, CAPTCHA_ALPHABET.length)];
+    return value;
+}
+function withdrawCaptchaAnswerHash(userId, challengeId, answer) {
+    const secret = String(BOT_TOKEN || ADMIN_PASS || 'withdraw-captcha');
+    return crypto.createHmac('sha256', secret)
+        .update(`${String(userId)}:${String(challengeId)}:${String(answer || '').trim().toUpperCase()}`)
+        .digest('hex');
+}
+function safeHashEqual(a, b) {
     try {
-        const { userId, captchaInput, captchaCode } = req.body;
-        const verified = captchaInput.toUpperCase() === captchaCode;
-        
-        if (verified) {
-            await saveUserFields(userId, { lastCaptchaAt: new Date().toISOString() });
+        const aa = Buffer.from(String(a || ''), 'hex');
+        const bb = Buffer.from(String(b || ''), 'hex');
+        return aa.length > 0 && aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+    } catch (_) { return false; }
+}
+
+app.post('/api/withdraw/captcha-challenge', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    try {
+        const { data:user } = await readUserRow(userId);
+        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if (user.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.'});
+        const challengeId = crypto.randomBytes(18).toString('hex');
+        const code = makeCaptchaCode(5);
+        const createdAt = Date.now();
+        const challenge = {
+            userId,status:'open',used:false,createdAt,expiresAt:createdAt+WITHDRAW_CAPTCHA_TTL_MS,
+            answerHash:withdrawCaptchaAnswerHash(userId,challengeId,code)
+        };
+        const saved = await writePersistentEvent(persistentEventKey('withdraw-captcha-challenge',challengeId),challenge,3);
+        if (!saved) return res.status(503).json({success:false,retry:true,error:'Không tạo được CAPTCHA. Vui lòng thử lại.'});
+        // The challenge text must be rendered to the human; only its expected answer hash is persisted server-side.
+        return res.json({success:true,challengeId,captchaCode:code,expiresAt:challenge.expiresAt});
+    } catch (e) {
+        console.error('Lỗi tạo CAPTCHA rút tiền:',e);
+        return res.status(500).json({success:false,retry:true,error:e.message});
+    }
+});
+
+app.post('/api/withdraw/captcha-verify', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const challengeId = String(req.body?.challengeId || '');
+    const captchaInput = String(req.body?.captchaInput || '').trim().toUpperCase();
+    if (!challengeId || !captchaInput) return res.status(400).json({success:false,verified:false,error:'Thiếu CAPTCHA.'});
+    try {
+        const challengeKey = persistentEventKey('withdraw-captcha-challenge',challengeId);
+        let challenge = await readPersistentEvent(challengeKey);
+        if (!challenge || String(challenge.userId || '') !== userId) {
+            return res.status(400).json({success:false,verified:false,error:'CAPTCHA không hợp lệ.'});
         }
-        
-        res.json({ verified });
+        if (challenge.expiresAt && Date.now() >= Number(challenge.expiresAt)) {
+            return res.status(410).json({success:false,verified:false,expired:true,error:'CAPTCHA đã hết hạn. Vui lòng tạo mã mới.'});
+        }
+        // Retry after token-persistence trouble returns/recreates the SAME reserved token, not multiple grants.
+        if (challenge.status === 'verified' && challenge.withdrawCaptchaToken) {
+            const token = String(challenge.withdrawCaptchaToken);
+            const tokenPayload = {
+                userId,status:'ready',used:false,createdAt:Number(challenge.verifiedAt || Date.now()),
+                expiresAt:Number(challenge.tokenExpiresAt || (Date.now()+WITHDRAW_CAPTCHA_TOKEN_TTL_MS))
+            };
+            const tokenSaved = await writePersistentEvent(persistentEventKey('withdraw-captcha-token',token),tokenPayload,3);
+            if (!tokenSaved) return res.status(503).json({success:false,verified:false,retry:true,error:'CAPTCHA đã đúng nhưng token đang đồng bộ. Vui lòng thử xác nhận lại.'});
+            return res.json({success:true,verified:true,withdrawCaptchaToken:token,expiresAt:tokenPayload.expiresAt,idempotent:true});
+        }
+        if (challenge.used) return res.status(409).json({success:false,verified:false,error:'CAPTCHA đã được sử dụng.'});
+
+        const actualHash = withdrawCaptchaAnswerHash(userId,challengeId,captchaInput);
+        if (!safeHashEqual(challenge.answerHash,actualHash)) {
+            return res.status(400).json({success:false,verified:false,error:'CAPTCHA không đúng. Vui lòng nhập lại!'});
+        }
+        const withdrawCaptchaToken = crypto.randomBytes(24).toString('hex');
+        const verifiedAt = Date.now();
+        const tokenExpiresAt = verifiedAt + WITHDRAW_CAPTCHA_TOKEN_TTL_MS;
+        challenge = {...challenge,status:'verified',used:true,verifiedAt,withdrawCaptchaToken,tokenExpiresAt};
+        const challengeSaved = await writePersistentEvent(challengeKey,challenge,3);
+        if (!challengeSaved) return res.status(503).json({success:false,verified:false,retry:true,error:'CAPTCHA đúng nhưng chưa lưu được trạng thái. Vui lòng thử lại.'});
+        const tokenSaved = await writePersistentEvent(persistentEventKey('withdraw-captcha-token',withdrawCaptchaToken),{
+            userId,status:'ready',used:false,createdAt:verifiedAt,expiresAt:tokenExpiresAt
+        },3);
+        if (!tokenSaved) return res.status(503).json({success:false,verified:false,retry:true,error:'CAPTCHA đúng nhưng token đang đồng bộ. Vui lòng xác nhận lại.'});
+        await saveUserFields(userId,{lastCaptchaAt:new Date().toISOString()});
+        return res.json({success:true,verified:true,withdrawCaptchaToken,expiresAt:tokenExpiresAt});
     } catch (e) {
         console.error('Lỗi xác thực CAPTCHA:', e.message);
-        res.status(500).json({ error: e.message });
+        return res.status(500).json({success:false,verified:false,retry:true,error:e.message});
     }
 });
 
@@ -4579,11 +5124,26 @@ const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatki
 app.post('/api/withdraw', async (req, res) => {
     const authUserId = String(req.body?.userId || req.params?.id || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const requestedCaptchaToken = String(req.body?.withdrawCaptchaToken || '');
+    if (!requestedCaptchaToken) return res.status(403).json({success:false,captchaRequired:true,error:'Vui lòng hoàn thành CAPTCHA trước khi rút tiền.'});
     const releaseWithdrawalQueue = await acquireWithdrawalQueue();
     let withdrawalUserId = '';
     try {
-        const { userId, method, bankName, accountName, accountNumber, ordersAmount, walletType } = req.body;
+        const { userId, method, bankName, accountName, accountNumber, ordersAmount, walletType, withdrawCaptchaToken } = req.body;
         withdrawalUserId = String(userId || '');
+        const captchaToken = String(withdrawCaptchaToken || '');
+        const captchaTokenKey = persistentEventKey('withdraw-captcha-token', captchaToken);
+        const captchaGrant = await readPersistentEvent(captchaTokenKey);
+        if (!captchaGrant || String(captchaGrant.userId || '') !== withdrawalUserId) {
+            return res.status(403).json({success:false,captchaRequired:true,error:'CAPTCHA rút tiền không hợp lệ. Vui lòng xác minh lại.'});
+        }
+        if (captchaGrant.expiresAt && Date.now() >= Number(captchaGrant.expiresAt)) {
+            return res.status(403).json({success:false,captchaRequired:true,captchaExpired:true,error:'CAPTCHA rút tiền đã hết hạn. Vui lòng xác minh lại.'});
+        }
+        if (captchaGrant.used) {
+            if (captchaGrant.result?.success) return res.json({...captchaGrant.result,idempotent:true});
+            return res.status(403).json({success:false,captchaRequired:true,error:'CAPTCHA rút tiền đã được sử dụng.'});
+        }
         if (withdrawalUserId && withdrawalProcessing.has(withdrawalUserId)) {
             return res.status(409).json({ error: 'Yêu cầu rút tiền đang được xử lý. Vui lòng thử lại sau ít giây.' });
         }
@@ -4667,7 +5227,30 @@ app.post('/api/withdraw', async (req, res) => {
     const methodLabel = normalizedMethod === 'bank' ? String(bankName).trim() : (normalizedWalletType === 'momo' ? 'Ví điện tử - MoMo' : 'Ví điện tử - ZaloPay');
     const accountInfoText = normalizedMethod === 'bank' ? `${String(bankName).trim()} - ${normalizedAccountName} - ${normalizedAccountNumber}` : `${normalizedWalletType} - ${normalizedAccountNumber}`;
 
+    let captchaReservation = null;
+    let ordersDebited = false;
+    const restoreCaptchaReservation = async () => {
+        if (!captchaReservation) return;
+        await writePersistentEvent(captchaTokenKey, {
+            ...captchaReservation,
+            used:false,
+            status:'verified',
+            processingAt:null,
+            result:null
+        }, 3);
+        captchaReservation = null;
+    };
+
     try {
+        // Reserve the verified CAPTCHA token BEFORE touching Orders. This closes the replay window where
+        // a successful withdrawal could be repeated if the final token-consume persistence failed.
+        captchaReservation = {...captchaGrant,used:true,status:'processing',processingAt:Date.now(),result:null};
+        const captchaReserved = await writePersistentEvent(captchaTokenKey,captchaReservation,4);
+        if (!captchaReserved) {
+            captchaReservation = null;
+            return res.status(503).json({success:false,retry:true,error:'Chưa khóa được CAPTCHA rút tiền. Vui lòng thử lại, không cần tạo CAPTCHA mới.'});
+        }
+
         // Mã giao dịch tuần tự cho TOÀN BỘ bot (đơn rút thứ 1, 2, 3...)
         const { count } = await supabase.from('withdrawals').select('*', { count: 'exact', head: true });
         const txCode = (count || 0) + 1;
@@ -4681,10 +5264,15 @@ app.post('/api/withdraw', async (req, res) => {
             .eq('id', userId)
             .eq('orders', userData.orders)
             .select('orders, walletUpdatedAt');
-        if (updErr) throw updErr;
+        if (updErr) {
+            await restoreCaptchaReservation();
+            throw updErr;
+        }
         if (!updatedRows || updatedRows.length === 0) {
+            await restoreCaptchaReservation();
             return res.status(409).json({ error: "Số dư của bạn vừa thay đổi, vui lòng thử lại." });
         }
+        ordersDebited = true;
 
         const { error: withdrawInsertError } = await insertRowSafe('withdrawals', {
             userId,
@@ -4703,10 +5291,14 @@ app.post('/api/withdraw', async (req, res) => {
             // CHỐNG MẤT ĐƠN HÀNG: đơn hàng đã bị trừ trước khi tạo đơn rút. Nếu tạo đơn rút thất bại
             // thì hoàn lại đúng số đã trừ, thay vì để người dùng mất trắng số dư như trước.
             const { data: afterFail } = await readUserRow(userId);
-            await saveUserFields(userId, {
+            const rollback = await saveUserFields(userId, {
                 orders: Number(afterFail?.orders || 0) + ordersAmount,
                 walletUpdatedAt: new Date().toISOString()
             });
+            if (!rollback.error) {
+                ordersDebited = false;
+                await restoreCaptchaReservation();
+            }
             throw withdrawInsertError;
         }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
@@ -4719,9 +5311,23 @@ app.post('/api/withdraw', async (req, res) => {
             `ID: ${maskedId}\nSố Tiền Rút: ${amountVnd.toLocaleString('vi-VN')} VNĐ\nThời Gian Rút: ${vietnamTimeText()}`
         );
 
+        // Consume CAPTCHA only AFTER the withdrawal row + Orders debit are both committed.
+        const withdrawResult = { success:true, txCode, orders:updatedRows[0].orders, walletUpdatedAt:updatedRows[0].walletUpdatedAt, withdrawRemain:0 };
+        const captchaConsumed = await writePersistentEvent(captchaTokenKey,{
+            ...captchaReservation,used:true,status:'consumed',consumedAt:Date.now(),result:withdrawResult
+        },4);
+        if (!captchaConsumed) {
+            // The pre-debit reservation remains used=true/status=processing, so the same token still cannot
+            // create another withdrawal even if this final result marker temporarily fails to persist.
+            console.error('Không lưu được trạng thái consume CAPTCHA token cho withdrawal', txCode);
+        } else {
+            captchaReservation = null;
+        }
+
         // Trả về ĐÚNG giá trị orders + walletUpdatedAt vừa lưu để client SET trực tiếp (không tự trừ cục bộ nữa)
-        res.json({ success: true, txCode, orders: updatedRows[0].orders, walletUpdatedAt: updatedRows[0].walletUpdatedAt });
+        res.json(withdrawResult);
         } catch (error) {
+            if (!ordersDebited && captchaReservation) await restoreCaptchaReservation();
             console.error("Lỗi trong quá trình rút tiền:", error);
             res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
         }
@@ -4929,13 +5535,15 @@ app.post('/api/admin/update-withdrawal', async (req, res) => {
         const refundOrders = current.ordersAmount || (Math.floor((current.amount || 0) / 1000) * 10000);
         const { data: u } = await supabase.from('users').select('orders').eq('id', current.userId).single();
         if (u) await touchWallet(current.userId, { orders: (u.orders || 0) + refundOrders });
-        await safeSendMessage(current.userId,
+        await safeSendLocalizedMessage(current.userId,
             `❌ Yêu cầu rút tiền #${current.txCode || current.id} đã bị *HỦY*.\n📝 Lý do: ${reason || 'Không có'}\n📦 Đã hoàn trả: ${refundOrders.toLocaleString()} Đơn Hàng`,
+            `❌ Withdrawal #${current.txCode || current.id} was *REJECTED*.\n📝 Reason: ${reason || 'Not provided'}\n📦 Refunded: ${refundOrders.toLocaleString()} Orders`,
             { parse_mode: 'Markdown' }
         );
     } else if (status === 'success') {
-        await safeSendMessage(current.userId,
+        await safeSendLocalizedMessage(current.userId,
             `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!\n💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
+            `✅ Withdrawal #${current.txCode || current.id} has been *APPROVED*!\n💰 Amount: ${(current.amount || 0).toLocaleString()} VND`,
             { parse_mode: 'Markdown' }
         );
     }
