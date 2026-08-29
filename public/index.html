@@ -456,12 +456,16 @@
             if (window.__appBootOk) return; // Alpine đã khởi động app bình thường -> không cần làm gì thêm
             var el = document.getElementById('appLoadingScreen');
             if (!el) return;
+            var __bootLang = (localStorage.getItem('shipper_language') === 'en') ? 'en' : 'vi';
+            var __bootText = __bootLang === 'en'
+                ? { title: 'Could not load the app', desc: 'Your network may be blocking some required resources. Please check your connection and try reloading.', btn: 'Reload page' }
+                : { title: 'Không thể tải ứng dụng', desc: 'Mạng của bạn có thể đang chặn một số tài nguyên cần thiết. Vui lòng kiểm tra kết nối mạng rồi thử tải lại.', btn: 'Tải lại trang' };
             el.innerHTML =
                 '<div style="position:relative;text-align:center;padding:24px;">' +
                 '<div style="font-size:44px;margin-bottom:12px;">⚠️</div>' +
-                '<h2 style="color:#fbbf24;font-weight:900;font-size:16px;margin-bottom:8px;text-transform:uppercase;">Không thể tải ứng dụng</h2>' +
-                '<p style="color:#cbd5e1;font-size:13px;max-width:280px;margin:0 auto 16px;">Mạng của bạn có thể đang chặn một số tài nguyên cần thiết. Vui lòng kiểm tra kết nối mạng rồi thử tải lại.</p>' +
-                '<button onclick="window.location.reload()" style="background:#2563eb;color:#fff;font-weight:800;font-size:13px;padding:10px 20px;border-radius:12px;border:none;text-transform:uppercase;">Tải lại trang</button>' +
+                '<h2 style="color:#fbbf24;font-weight:900;font-size:16px;margin-bottom:8px;text-transform:uppercase;">' + __bootText.title + '</h2>' +
+                '<p style="color:#cbd5e1;font-size:13px;max-width:280px;margin:0 auto 16px;">' + __bootText.desc + '</p>' +
+                '<button onclick="window.location.reload()" style="background:#2563eb;color:#fff;font-weight:800;font-size:13px;padding:10px 20px;border-radius:12px;border:none;text-transform:uppercase;">' + __bootText.btn + '</button>' +
                 '</div>';
         }, 15000);
     </script>
@@ -518,7 +522,7 @@
             <div class="modal-content">
                 <div class="text-5xl mb-2">🔐</div>
                 <h3 class="text-base font-black text-yellow-400 mb-1" x-text="captchaShow && captchaAction === 'withdraw' ? texts.captchaWithdraw : texts.captchaDelivery"></h3>
-                <p class="text-[11px] text-slate-400 mb-3">Nhập chính xác mã bên dưới để tiếp tục</p>
+                <p class="text-[11px] text-slate-400 mb-3" x-text="texts.captchaEnterCode"></p>
                 <div class="captcha-box mb-3" :class="{ 'refreshing': captchaRefreshing }" @click="newCaptchaCode()">
                     <template x-for="(ch, i) in captchaChars" :key="i">
                         <span :style="'--rot:' + ch.rot + 'deg; animation-delay:' + (i * 0.13) + 's'" x-text="ch.ch"></span>
@@ -527,8 +531,8 @@
                 <input type="text" x-model="captchaInput" @keyup.enter="verifyCaptcha()" placeholder="Enter code..." maxlength="5" autocomplete="off"
                        class="w-full bg-slate-800 rounded-xl px-3 py-2.5 text-center text-lg font-black tracking-[6px] border border-white/10 uppercase mb-3" />
                 <div class="flex gap-2">
-                    <button @click="newCaptchaCode()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-xs">🔄 Đổi mã</button>
-                    <button @click="verifyCaptcha()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-xs">✅ Xác nhận</button>
+                    <button @click="newCaptchaCode()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-xs" x-text="texts.captchaRefresh"></button>
+                    <button @click="verifyCaptcha()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-xs" x-text="texts.captchaConfirm"></button>
                 </div>
                 <p x-show="captchaError" class="text-red-400 text-[11px] font-bold mt-2" x-text="captchaError"></p>
             </div>
@@ -538,8 +542,8 @@
         <div x-show="quizModalShow" class="modal-overlay" x-cloak @click.self="quizModalShow = false">
             <div class="modal-content" style="max-width: 340px;">
                 <div class="text-5xl mb-2">🧠</div>
-                <h3 class="text-base font-black text-yellow-400 mb-1">TRẢ LỜI CÂU HỎI</h3>
-                <p class="text-[10px] text-slate-400 mb-3">✅ Trả lời đúng: <span class="text-yellow-400 font-black">+150 💰 +1 🎁</span> · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng</p>
+                <h3 class="text-base font-black text-yellow-400 mb-1" x-text="texts.quizTitle"></h3>
+                <p class="text-[10px] text-slate-400 mb-3" x-text="texts.quizRulesText"></p>
                 <p class="text-sm font-black text-white text-left leading-relaxed mb-4" x-text="quizCurrent ? quizCurrent.q : ''"></p>
                 <div class="space-y-2">
                     <template x-for="(opt, i) in (quizCurrent ? quizCurrent.options : [])" :key="i">
@@ -551,8 +555,8 @@
                     </template>
                 </div>
                 <div class="flex gap-2 mt-4">
-                    <button @click="skipQuiz()" :disabled="quizChosen !== null" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-[11px] disabled:opacity-40">⏭️ Bỏ qua (Xem QC)</button>
-                    <button x-show="quizChosen !== null" @click="quizModalShow = false" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-[11px]">Đóng</button>
+                    <button @click="skipQuiz()" :disabled="quizChosen !== null" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-[11px] disabled:opacity-40" x-text="texts.quizSkip"></button>
+                    <button x-show="quizChosen !== null" @click="quizModalShow = false" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-[11px]" x-text="texts.close"></button>
                 </div>
             </div>
         </div>
@@ -742,7 +746,6 @@
                                 <div class="text-left flex-1 min-w-0">
                                     <p class="text-xs font-black flex items-center gap-1 flex-wrap">
                                         <span x-text="task.name"></span>
-                                        <span x-show="task.once" class="task-once-badge" x-text="texts.onceOnly"></span>
                                     </p>
                                     <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
                                         <span x-text="'+' + task.reward + ' 💰'"></span>
@@ -904,7 +907,13 @@
                             <p x-show="qcRankList.length === 0" class="text-center text-slate-500 text-xs italic py-3">Chưa có ai xem QC trong tuần này</p>
                         </div>
                     </template>
-                    <div class="mt-2 text-center text-[7px] text-slate-400 italic" x-text="texts.resetSunday"></div>
+                    <div class="mt-2 p-2 bg-slate-800/50 rounded-xl border border-white/5 space-y-1">
+                        <p class="text-[8px] font-black uppercase text-yellow-400" x-text="texts.rankConditionsTitle"></p>
+                        <p class="text-[7px] font-bold text-slate-400 leading-relaxed" x-text="leaderboardMode === 'invite' ? texts.rankInviteCondText : texts.rankAdsCondText"></p>
+                        <p class="text-[7px] font-bold text-slate-300 leading-relaxed" x-text="texts.rankRewardsText"></p>
+                        <p class="text-[7px] text-slate-500 italic leading-relaxed" x-text="texts.rankResetText"></p>
+                    </div>
+                    <div class="mt-1 text-center text-[7px] text-slate-400 italic" x-text="texts.resetSunday"></div>
                 </div>
             </div>
 
@@ -1322,6 +1331,7 @@
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
+                rankConditionsTitle: 'Điều kiện Top thưởng', rankInviteCondText: 'Xếp hạng theo số lượt mời HỢP LỆ trong tuần. Cần đạt tối thiểu 5 lượt mời hợp lệ trong tuần để Top 1-3 được nhận thưởng (đứng hạng nhưng chưa đủ điều kiện thì vẫn hiện trên BXH nhưng KHÔNG được thưởng).', rankAdsCondText: 'Xếp hạng theo số Rewarded Interstitial hợp lệ đã xem trong tuần, chỉ tính khi server xác nhận hoàn thành quảng cáo. Cần đạt tối thiểu 20 lượt xem hợp lệ trong tuần để Top 1-3 được nhận thưởng.', rankRewardsText: '🥇 Top 1: +75.000 Đơn Hàng + 8 Lượt Mở Rương · 🥈 Top 2: +45.000 Đơn Hàng + 5 Lượt Mở Rương · 🥉 Top 3: +25.000 Đơn Hàng + 3 Lượt Mở Rương', rankResetText: 'BXH tự động reset vào đúng 00:00 Chủ Nhật (giờ Việt Nam) mỗi tuần, thưởng Top 1-3 (nếu đủ điều kiện) được cộng thẳng và thông báo qua Telegram ngay khi reset.',
                 refCode: 'Mã giới thiệu', inviteFriends: 'Mời Bạn Bè\nCùng Kiếm Tiền!',
                 copy: 'Copy', share: 'CHIA SẺ CHO MN', invited: 'Đã mời', valid: 'Hợp lệ',
                 withdraw: 'Rút Tiền', withdrawHistory: 'Lịch sử rút', noTransactions: 'Chưa có giao dịch',
@@ -1368,7 +1378,9 @@
                 adError: 'Không thể hoàn tất quảng cáo Rewarded. Vui lòng thử lại.', deliveryLimitReached: 'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.',
                 captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
                 accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.', streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
-                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt'
+                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +2 lượt giao hàng!',
+                captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận',
+                quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
             },
             en: {
                 verifyTitle: 'Verify Transport Team', verifyDesc: 'Join our community to start your journey.',
@@ -1385,6 +1397,7 @@
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
+                rankConditionsTitle: 'Reward eligibility', rankInviteCondText: 'Ranked by the number of VALID invites this week. You need at least 5 valid invites this week for Top 1-3 to receive a reward (you can still appear on the board without enough invites, but you will NOT receive the reward).', rankAdsCondText: 'Ranked by the number of valid Rewarded Interstitial ads watched this week, counted only once the server confirms the ad was completed. You need at least 20 valid views this week for Top 1-3 to receive a reward.', rankRewardsText: '🥇 Top 1: +75,000 Orders + 8 Chest Spins · 🥈 Top 2: +45,000 Orders + 5 Chest Spins · 🥉 Top 3: +25,000 Orders + 3 Chest Spins', rankResetText: 'The leaderboard automatically resets at 00:00 (Vietnam time) every Sunday. Top 1-3 rewards (if eligible) are credited instantly and announced via Telegram right when the reset happens.',
                 refCode: 'Referral code', inviteFriends: 'Invite shippers\nEarn together!',
                 copy: 'Copy', share: 'SHARE', invited: 'Invited', valid: 'Valid',
                 withdraw: 'Withdraw', withdrawHistory: 'Withdraw history', noTransactions: 'No transactions',
@@ -1431,7 +1444,9 @@
                 adError: 'Could not complete the Rewarded ad. Please try again.', deliveryLimitReached: 'You have used all available delivery attempts today.',
                 captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
                 accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.', streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
-                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings'
+                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +2 delivery slots!',
+                captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm',
+                quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
             }
         };
 
@@ -1452,7 +1467,9 @@
             '✅ Đúng:': '✅ Correct:',
             '· ❌ Sai: không nhận gì · ⏭️ Bỏ qua (sau QC): 0 thưởng': '· ❌ Wrong: no reward · ⏭️ Skip (after ad): 0 reward',
             '🆓 TRẢ LỜI CÂU MIỄN PHÍ (1/NGÀY)': '🆓 ANSWER FREE QUESTION (1/DAY)',
-            '➕ THÊM CÂU HỎI (XEM QC MỞ KHÓA)': '➕ ADD QUESTION (WATCH AD TO UNLOCK)',
+            '➕ THÊM CÂU HỎI (XEM QC MỞ KHÓA) (': '➕ ADD QUESTION (WATCH AD TO UNLOCK) (',
+            '📺 Xem QC': '📺 Watch Ads',
+            'Chưa có ai xem QC trong tuần này': 'No one has watched ads this week yet',
             '🧠 ĐANG CÓ CÂU HỎI - TRẢ LỜI NGAY!': '🧠 QUESTION READY - ANSWER NOW!',
             '🎉 Bạn đã dùng hết 5 câu hỏi hôm nay. Quay lại vào ngày mai!': '🎉 You used all 5 questions today. Come back tomorrow!',
             '🔗 NHẬN THÊM QC / SMARTLINK': '🔗 GET MORE ADS / SMARTLINK',
@@ -1504,7 +1521,51 @@
                 .replace('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.','⚠️ The server is temporarily slow; the latest local backup was restored.')
                 .replace('⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!','⚠️ Failed to load data. Please reload the page.')
                 .replace('Đang xử lý...','Processing...')
-                .replace('Đã gửi yêu cầu rút tiền thành công.','Withdrawal request submitted successfully.');
+                .replace('Đã gửi yêu cầu rút tiền thành công.','Withdrawal request submitted successfully.')
+                // ===== Bổ sung dịch runtime cho các thông báo động còn sót tiếng Việt khi ở chế độ English =====
+                .replace('Chưa thể nhận thưởng mốc.','Milestone reward is not available yet.')
+                .replace('Lỗi kết nối server khi nhận thưởng mốc.','Server connection error while claiming the milestone reward.')
+                .replace('Nhận thưởng mốc',"Milestone reward for")
+                .replace(' bạn: ',' friends: ')
+                .replace('Kho đã đầy, không cần tăng tốc!','The warehouse is full; no need to speed up!')
+                .replace('Bạn chỉ được Tăng Tốc X2 1 lần cho mỗi mẻ hàng đang sản xuất!','You can only use X2 Speed-Up once per production batch!')
+                .replace('Mẻ hàng đã sẵn sàng, không cần tăng tốc nữa!','The batch is already ready — no need to speed up anymore!')
+                .replace('Đã sẵn sàng, không cần tăng tốc!','Already ready — no need to speed up!')
+                .replace('Không xác định được lượt quảng cáo, vui lòng thử lại.','Could not identify the ad session. Please try again.')
+                .replace('Tăng Tốc X2 thất bại, vui lòng thử lại.','X2 Speed-Up failed. Please try again.')
+                .replace('Tăng Tốc X2 thành công! Đã giảm 1 nửa thời gian chờ.','X2 Speed-Up successful! The wait time has been halved.')
+                .replace('Không kết nối được máy chủ để Tăng Tốc X2, vui lòng thử lại.','Could not connect to the server for X2 Speed-Up. Please try again.')
+                .replace('Không đủ Coin để nâng cấp xe.','Not enough Coins to upgrade the truck.')
+                .replace('Vui lòng chờ giao hàng hoàn tất.','Please wait for the delivery to finish.')
+                .replace('Xe đã đạt cấp tối đa.','The truck has reached the maximum level.')
+                .replace('Nâng cấp xe thất bại, vui lòng thử lại.','Truck upgrade failed. Please try again.')
+                .replace('Không kết nối được máy chủ để nâng cấp xe, vui lòng thử lại.','Could not connect to the server to upgrade the truck. Please try again.')
+                .replace('Lên cấp ','Leveled up to ')
+                .replace('! Xe: ','! Truck: ')
+                .replace('Không thể nhận phần thưởng Hộp Coin lúc này.','Could not claim the Coin Box reward right now.')
+                .replace('Bạn không còn lượt mở rương miễn phí!','You have no free chest spins left!')
+                .replace('CHÚC MỪNG! JACKPOT 75.000 Đơn Hàng!','CONGRATULATIONS! JACKPOT 75,000 Orders!')
+                .replace('Không thể mở rương lúc này, vui lòng thử lại.','Could not open the chest right now. Please try again.')
+                .replace('Bạn đã xem đủ QC hôm nay (tối đa ','You have watched enough ads today (max ')
+                .replace('+1 Lượt Mở Rương!','+1 Chest Spin!')
+                .replace('Cần ít nhất 500 Đơn Hàng để đổi lượt mở rương.','You need at least 500 Orders to exchange for a chest spin.')
+                .replace('Đổi thành công! +1 Lượt Mở Rương','Exchange successful! +1 Chest Spin')
+                .replace('Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.','You have reached today\u2019s limit of 30 Rewarded ads.')
+                .replace('+50 Coin +25 Đơn Hàng (','+50 Coin +25 Orders (')
+                .replace('Đã copy link mời!','Invite link copied!')
+                .replace('Lỗi chia sẻ. Vui lòng copy thủ công.','Sharing failed. Please copy manually.')
+                .replace('Vui lòng nhập mã code!','Please enter a code!')
+                .replace('Mã không hợp lệ!','Invalid code!')
+                .replace('Lỗi kết nối server khi đổi code.','Server connection error while redeeming the code.')
+                .replace('Không cấp được lượt câu hỏi.','Could not grant a quiz slot.')
+                .replace('Hãy dùng câu miễn phí trước.','Please use your free question first.')
+                .replace('Bạn đã dùng đủ 5 câu hỏi hôm nay.','You have used all 5 questions today.')
+                .replace('Chính xác! +150 Coin +1 Lượt Mở Rương','Correct! +150 Coin +1 Chest Spin')
+                .replace('Sai rồi! Câu này không nhận thưởng.','Incorrect! This question earns no reward.')
+                .replace('Không thể xác minh câu trả lời, vui lòng thử lại.','Could not verify the answer. Please try again.')
+                .replace('Đã bỏ qua câu hỏi sau khi xem QC. Không nhận thưởng.','The question was skipped after watching the ad. No reward earned.')
+                .replace('Không thể xác minh thao tác bỏ qua, vui lòng thử lại.','Could not verify the skip action. Please try again.')
+                .replace('Nhận ','Received ');
         }
 
         // 5 CÂU HỎI QUIZ MỖI NGÀY (answer = index đáp án đúng trong mảng options)
@@ -1567,11 +1628,11 @@
                     { id:'deliver10', name:'🚚 Giao hàng 10 lần', icon:'🚚', max:10, reward:100, rewardOrders:100, rewardSpins:0, done:false, claimable:false },
                     { id:'deliver15', name:'🚚 Giao hàng 15 lần', icon:'🚚', max:15, reward:200, rewardOrders:200, rewardSpins:0, done:false, claimable:false },
                     { id:'deliver20', name:'🚚 Giao hàng 20 lần', icon:'🚚', max:20, reward:250, rewardOrders:300, rewardSpins:0, done:false, claimable:false },
-                    { id:'x2Once', name:'⚡ Dùng X2 một lần', icon:'⚡', max:1, reward:50, rewardOrders:25, rewardSpins:0, done:false, claimable:false, once:true },
-                    { id:'upgradeOnce', name:'⬆️ Nâng cấp xe một lần', icon:'⬆️', max:1, reward:100, rewardOrders:50, rewardSpins:0, done:false, claimable:false, once:true },
+                    { id:'x2Once', name:'⚡ Dùng X2', icon:'⚡', max:1, reward:50, rewardOrders:25, rewardSpins:0, done:false, claimable:false, once:true },
+                    { id:'upgradeOnce', name:'⬆️ Nâng cấp xe', icon:'⬆️', max:1, reward:100, rewardOrders:50, rewardSpins:0, done:false, claimable:false, once:true },
                     { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, reward:150, rewardOrders:50, rewardSpins:0, done:false, claimable:false },
                     { id:'smartlink5', name:'🔗 Hoàn thành 5 SmartLink', icon:'🔗', max:5, reward:75, rewardOrders:75, rewardSpins:0, done:false, claimable:false },
-                    { id:'spin1', name:'🎁 Mở rương 1 lần', icon:'🎁', max:1, reward:50, rewardOrders:0, rewardSpins:0, done:false, claimable:false, once:true },
+                    { id:'spin1', name:'🎁 Mở rương', icon:'🎁', max:1, reward:50, rewardOrders:0, rewardSpins:0, done:false, claimable:false, once:true },
                     { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, reward:350, rewardOrders:25, rewardSpins:0, done:false, claimable:false },
                     { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, reward:500, rewardOrders:100, rewardSpins:1, done:false, claimable:false }
                 ],
@@ -2717,13 +2778,13 @@
                     const names = {
                         vi: {
                             deliver5:'🚚 Giao hàng 5 lần', deliver10:'🚚 Giao hàng 10 lần', deliver15:'🚚 Giao hàng 15 lần', deliver20:'🚚 Giao hàng 20 lần',
-                            x2Once:'⚡ Dùng X2 một lần', upgradeOnce:'⬆️ Nâng cấp xe một lần', watch3rewarded:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)',
-                            smartlink5:'🔗 Hoàn thành 5 SmartLink', spin1:'🎁 Mở rương 1 lần', invite1:'👥 Mời 1 bạn thành công', invite5:'👥 Mời 5 bạn thành công'
+                            x2Once:'⚡ Dùng X2', upgradeOnce:'⬆️ Nâng cấp xe', watch3rewarded:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)',
+                            smartlink5:'🔗 Hoàn thành 5 SmartLink', spin1:'🎁 Mở rương', invite1:'👥 Mời 1 bạn thành công', invite5:'👥 Mời 5 bạn thành công'
                         },
                         en: {
                             deliver5:'🚚 Deliver 5 times', deliver10:'🚚 Deliver 10 times', deliver15:'🚚 Deliver 15 times', deliver20:'🚚 Deliver 20 times',
-                            x2Once:'⚡ Use X2 once', upgradeOnce:'⬆️ Upgrade the truck once', watch3rewarded:'📺 Watch 3 ads (Rewarded Interstitial only)',
-                            smartlink5:'🔗 Complete 5 SmartLinks', spin1:'🎁 Open 1 chest', invite1:'👥 Successfully invite 1 friend', invite5:'👥 Successfully invite 5 friends'
+                            x2Once:'⚡ Use X2', upgradeOnce:'⬆️ Upgrade the truck', watch3rewarded:'📺 Watch 3 ads (Rewarded Interstitial only)',
+                            smartlink5:'🔗 Complete 5 SmartLinks', spin1:'🎁 Open chest', invite1:'👥 Successfully invite 1 friend', invite5:'👥 Successfully invite 5 friends'
                         }
                     };
                     return { ...task, name: names[this.language]?.[task.id] || task.name };
@@ -2824,7 +2885,7 @@
                 },
                 async openSmartlinkAd1() {
                     window.open(THATLOBSTER_SMARTLINK_1, '_blank');
-                    this.showNotification('🔗 SmartLink quảng cáo đã mở.');
+                    this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink quảng cáo đã mở.');
                 },
                 inAppResetKey() {
                     const now = new Date();
@@ -2996,7 +3057,7 @@
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         await this.syncDailyTasksFromServer();
                         this.saveState().catch(() => {});
-                        this.showNotification('🚚 +2 delivery slots.');
+                        this.showNotification(this.texts.extraDeliverySuccess || '🚚 +2 lượt giao hàng!');
                     }, this.texts.adError, 'extra-delivery');
                 },
                 async syncStreakStatus() {
