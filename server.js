@@ -137,14 +137,16 @@ async function getUserExtraAll() {
     return userExtraCache;
 }
 async function flushUserExtra() {
-    if (!userExtraDirty || !userExtraCache) return;
+    if (!userExtraDirty || !userExtraCache) return true;
     userExtraDirty = false;
     const { error } = await supabase.from('app_settings')
         .upsert({ key: USER_EXTRA_KEY, value: userExtraCache }, { onConflict: 'key' });
     if (error) {
         userExtraDirty = true; // Giữ lại cờ để lần ghi sau thử lại, không mất dữ liệu
         console.error('Không lưu được user_extra_state:', error.message);
+        return false;
     }
+    return true;
 }
 function scheduleUserExtraFlush() {
     if (userExtraFlushTimer) return;
@@ -3031,7 +3033,9 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
 
 const taskClaimProcessing = new Set();
 async function claimServerTask(userId, taskId) {
-    const lockKey = `${String(userId)}:${String(taskId)}`;
+    // Khoá theo USER thay vì theo từng task: 2 task khác nhau được claim gần như cùng lúc trước đây
+    // có thể cùng đọc serverTaskClaims cũ rồi ghi đè object của nhau, làm một task "mất trạng thái đã nhận".
+    const lockKey = `daily:${String(userId)}`;
     if (taskClaimProcessing.has(lockKey)) return { ok:false, reason:'processing' };
     taskClaimProcessing.add(lockKey);
     try {
@@ -3087,7 +3091,11 @@ app.post('/api/task/claim', async (req,res) => {
         if (!userId || !taskId) return res.status(400).json({success:false,error:'Thiếu userId/taskId.'});
         const result = await claimServerTask(userId,taskId);
         if (!result.ok) {
-            if (result.reason==='already_claimed') return res.json({success:true,alreadyClaimed:true,taskId});
+            if (result.reason==='already_claimed') {
+                const {data:user}=await readUserRow(userId);
+                const tasks=dailyTaskDefinitions(user||{},await getServerTaskClaims(userId),await getDailyActionFlags(userId));
+                return res.json({success:true,alreadyClaimed:true,taskId,tasks,coins:user?.coins||0,orders:user?.orders||0,spins:user?.spins||0,walletUpdatedAt:user?.walletUpdatedAt||null});
+            }
             if (result.reason==='processing') return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý.'});
             if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
             return res.status(400).json({success:false,error:result.reason});
@@ -3101,7 +3109,7 @@ app.post('/api/task/claim', async (req,res) => {
 app.post('/api/task/claim-all', async (req,res) => {
     const userId=String(req.body?.userId||'');
     if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    const lockKey=`all:${userId}`; if(taskClaimProcessing.has(lockKey)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý phần thưởng.'});
+    const lockKey=`daily:${userId}`; if(taskClaimProcessing.has(lockKey)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý phần thưởng.'});
     taskClaimProcessing.add(lockKey);
     try {
         const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
@@ -3624,7 +3632,12 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 completedAdEvents.set(adToken, event);
             }
         }
-        if(!event || event.userId!==userId || event.purpose!=='delivery') return res.status(400).json({success:false,error:'Không tìm thấy phiên Rewarded giao hàng đã được xác minh. Vui lòng thử lại.'});
+        if(!event || event.userId!==userId || event.purpose!=='delivery') {
+            return res.status(400).json({
+                success:false,retry:false,sessionMissing:true,canStartNewAd:true,
+                error:'Không tìm thấy phiên Rewarded giao hàng đã được xác minh. Vui lòng thử lại.'
+            });
+        }
         if(event.used && event.deliveryClaimResult) return res.json({success:true,...event.deliveryClaimResult,idempotent:true});
         const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
         const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
@@ -3768,10 +3781,32 @@ app.post('/api/ad/session/start', async (req, res) => {
         const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const normalizedUserId = String(userId);
+        const normalizedActionId = String(actionId || '');
         const existingToken = activeAdByUser.get(normalizedUserId);
         if (existingToken) {
-            const existing = adSessions.get(existingToken);
-            if (existing && Date.now() - existing.startedAt < 120000) {
+            let existing = adSessions.get(existingToken);
+            if (!existing) {
+                const persistedExisting = await readPersistentEvent(persistentEventKey('ad-session', existingToken));
+                if (persistedExisting && (!persistedExisting.expiresAt || Date.now() < Number(persistedExisting.expiresAt))) {
+                    existing = {
+                        userId:String(persistedExisting.userId || ''),
+                        adType:persistedExisting.adType || 'rewarded',
+                        purpose:persistedExisting.purpose || 'generic',
+                        sessionId:String(persistedExisting.sessionId || ''),
+                        actionId:String(persistedExisting.actionId || ''),
+                        startedAt:Number(persistedExisting.startedAt || Date.now())
+                    };
+                    adSessions.set(existingToken, existing);
+                }
+            }
+            if (existing && Date.now() - Number(existing.startedAt || 0) < 120000) {
+                // Retry của CHÍNH request start trước đó (response bị mất/timeout) phải nhận lại cùng token,
+                // không trả 409 khiến frontend đợi rồi tạo một phiên mới.
+                if (normalizedActionId && existing.actionId === normalizedActionId
+                    && existing.userId === normalizedUserId && existing.adType === adType
+                    && existing.purpose === sessionPurpose) {
+                    return res.json({success:true,token:existingToken,idempotent:true,recovered:true});
+                }
                 return res.status(409).json({success:false,retry:true,active:true,token:existingToken,error:'Đang có một quảng cáo được xử lý cho tài khoản này.'});
             }
             activeAdByUser.delete(normalizedUserId);
@@ -3779,19 +3814,26 @@ app.post('/api/ad/session/start', async (req, res) => {
         }
         const token = makeAdToken();
         const startedAt = Date.now();
-        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), actionId:String(actionId || ''), startedAt });
+        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), actionId:normalizedActionId, startedAt });
         activeAdByUser.set(normalizedUserId, token);
         // Persist session metadata so a server restart / multiple instance does not turn a valid
         // Rewarded completion into "session not found".
-        await writePersistentEvent(persistentEventKey('ad-session', token), {
+        const sessionPersisted = await writePersistentEvent(persistentEventKey('ad-session', token), {
             userId: normalizedUserId,
             adType,
             purpose: sessionPurpose,
             sessionId: String(sessionId || ''),
-            actionId: String(actionId || ''),
+            actionId: normalizedActionId,
             startedAt,
             expiresAt: startedAt + 10 * 60 * 1000
         });
+        // Với giao hàng, phải lưu được session BỀN VỮNG trước khi client mở QC. Nếu chưa lưu được,
+        // trả retry ngay lúc này để user không phải xem một quảng cáo mà server có thể mất token sau restart.
+        if (sessionPurpose === 'delivery' && !sessionPersisted) {
+            adSessions.delete(token);
+            if (activeAdByUser.get(normalizedUserId) === token) activeAdByUser.delete(normalizedUserId);
+            return res.status(503).json({success:false,retry:true,error:'Máy chủ chưa lưu được phiên Rewarded giao hàng. Vui lòng thử lại.'});
+        }
         recordAntiFraudEvent(String(userId), 'ad_start', {
             ip: requestIp(req),
             sessionId: String(sessionId || ''),
@@ -3803,6 +3845,32 @@ app.post('/api/ad/session/start', async (req, res) => {
         }, 120000);
         res.json({ success:true, token });
     } catch (e) { res.status(500).json({success:false,error:e.message}); }
+});
+
+// Hủy CHỈ phiên chưa complete khi SDK không mở được quảng cáo. Việc này giải phóng activeAdByUser
+// ngay để lần bấm kế tiếp có thể tạo Rewarded mới, thay vì bị kẹt 409 tới 120 giây.
+app.post('/api/ad/session/cancel', async (req, res) => {
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const token=String(req.body?.token||'');
+    const actionId=String(req.body?.actionId||'');
+    if(!token) return res.status(400).json({success:false,error:'Thiếu token.'});
+    const completed=completedAdEvents.get(token);
+    if(completed) return res.json({success:true,alreadyCompleted:true});
+    let session=adSessions.get(token);
+    if(!session) {
+        const persisted=await readPersistentEvent(persistentEventKey('ad-session',token));
+        if(persisted) session={...persisted,userId:String(persisted.userId||''),actionId:String(persisted.actionId||'')};
+    }
+    if(!session || session.userId!==userId) return res.json({success:true,alreadyGone:true});
+    if(actionId && session.actionId && actionId!==session.actionId) return res.status(400).json({success:false,error:'Action quảng cáo không khớp.'});
+    adSessions.delete(token);
+    if(activeAdByUser.get(userId)===token) activeAdByUser.delete(userId);
+    // Không xóa persistent row bằng DELETE để tránh rủi ro xoá nhầm dữ liệu; đánh dấu cancelled + hết hạn ngay.
+    await writePersistentEvent(persistentEventKey('ad-session',token),{
+        ...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1
+    }).catch(()=>{});
+    return res.json({success:true,cancelled:true});
 });
 
 app.post('/api/ad/session/complete', async (req, res) => {
@@ -3835,6 +3903,13 @@ app.post('/api/ad/session/complete', async (req, res) => {
             }
         }
         if (!s || s.userId!==String(userId) || s.adType!==adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
+        const requestActionId=String(req.body?.actionId||'');
+        if (s.actionId && requestActionId && s.actionId!==requestActionId) {
+            return res.status(400).json({success:false,error:'Action Rewarded không khớp với phiên đã tạo.'});
+        }
+        if (s.sessionId && sessionId && s.sessionId!==String(sessionId)) {
+            return res.status(400).json({success:false,error:'Telegram Mini App session không khớp.'});
+        }
         const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
         let deliveryPersistentKey = null;
         if (purpose === 'delivery') {
@@ -3853,11 +3928,18 @@ app.post('/api/ad/session/complete', async (req, res) => {
                     return res.json({ ...persistedDelivery.completionResult, idempotent:true, recovered:true });
                 }
                 if (persistedDelivery.status === 'processing' || persistedDelivery.verificationReady === true) {
+                    const processingAge = Date.now() - Number(persistedDelivery.processingAt || persistedDelivery.completedAt || Date.now());
+                    // Request complete trước có thể vẫn đang ghi reward/counter. Đợi ngắn rồi retry cùng token,
+                    // thay vì trả "success giả" khiến frontend lao sang delivery claim khi bước complete chưa chốt.
+                    if (processingAge < 12000) {
+                        return res.status(409).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',verificationReady:true,error:'Rewarded đã xác minh, máy chủ đang hoàn tất đồng bộ.'});
+                    }
+                    // Marker processing đã cũ (request trước có thể chết giữa chừng): tiếp tục finalize bằng
+                    // chính token này. Không yêu cầu user xem lại quảng cáo.
                     completedAdEvents.set(String(token), {
                         userId:String(userId), adType, purpose:'delivery', completedAt:Number(persistedDelivery.completedAt || Date.now()),
                         used:false, deliveryClaimResult:null, completionResult:null, verificationReady:true
                     });
-                    return res.json({success:true, adToken:String(token), purpose:'delivery', verificationReady:true, recovered:true, rewardCoins:0, rewardOrders:0, rewardSpins:0, elapsed});
                 }
             }
         }
