@@ -2753,89 +2753,90 @@ app.post('/api/user/:id', async (req, res) => {
 });
 
 // ==================== SMARTLINK ====================
-// Mỗi lần bấm SmartLink hợp lệ được +50 Coin và +25 Đơn hàng, do SERVER cộng và lưu thẳng vào
-// Supabase (không tính ở máy người dùng) nên tải lại app hay tắt/mở bot đều không đổi số lượt.
+// Each valid SmartLink completion = +25 Coin +25 Orders.
+// Daily SmartLink limit = 30. Daily task "5 SmartLinks" is only a reward milestone.
 const smartlinkProcessing = new Set();
 const SMARTLINK_DAILY_LIMIT = 30;
-const SMARTLINK_REWARD_COINS = 50;
+const SMARTLINK_REWARD_COINS = 25;
 const SMARTLINK_REWARD_ORDERS = 25;
 app.post('/api/smartlink/complete', async (req, res) => {
     const authUserId = String(req.body?.userId || req.params?.id || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     const userId = String(req.body?.userId || '');
-    if (!userId) return res.status(400).json({ success: false, error: 'Thiếu userId.' });
-    if (smartlinkProcessing.has(userId)) {
-        return res.status(409).json({ success: false, retry: true, error: 'Lượt SmartLink đang được xử lý.' });
-    }
+    const attemptId = String(req.body?.attemptId || '');
+    if (!userId) return res.status(400).json({success:false,error:'Thiếu userId.'});
+    if (!attemptId) return res.status(400).json({success:false,error:'Thiếu SmartLink attemptId.'});
+    if (smartlinkProcessing.has(userId)) return res.status(409).json({success:false,retry:true,error:'Lượt SmartLink đang được xử lý.'});
     smartlinkProcessing.add(userId);
     try {
-        let { data: user } = await readUserRow(userId);
-        if (!user) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
-        if (user.isBanned) return res.status(403).json({ success: false, isBanned: true, error: 'Tài khoản đã bị khóa.' });
+        const persistentSmartlinkKey = persistentEventKey('smartlink', `${userId}:${attemptId}`);
+        const existing = await readPersistentEvent(persistentSmartlinkKey);
+        if (existing?.success) return res.json({ ...existing, idempotent:true });
 
+        let { data:user } = await readUserRow(userId);
+        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if (user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
         const fraudGate = await antiFraudRewardGate(userId);
         if (!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
 
-        const newDay = !isCurrentVietnamDay(user.lastResetDate);
-        if (newDay) {
-            await saveUserFields(userId, { ...dailyResetFields(), walletUpdatedAt: new Date().toISOString() });
-            ({ data: user } = await readUserRow(userId));
-            if (!user) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
+        if (!isCurrentVietnamDay(user.lastResetDate)) {
+            await saveUserFields(userId,{...dailyResetFields(),walletUpdatedAt:new Date().toISOString()});
+            ({ data:user } = await readUserRow(userId));
+            if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         }
 
-        const currentCount = Number(user.smartlinkCount || 0);
+        const currentCount = Math.max(0,Number(user.smartlinkCount || 0));
         if (currentCount >= SMARTLINK_DAILY_LIMIT) {
             return res.json({
-                success: true, alreadyComplete: true, smartlinkCount: SMARTLINK_DAILY_LIMIT,
-                smartlinksToday: Number(user.smartlinksToday || 0),
-                lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0),
-                coins: Number(user.coins || 0), orders: Number(user.orders || 0),
-                walletUpdatedAt: user.walletUpdatedAt
+                success:true, alreadyComplete:true, smartlinkCount:SMARTLINK_DAILY_LIMIT,
+                smartlinksToday:Number(user.smartlinksToday || 0),
+                lifetimeSmartlinks:Number(user.lifetimeSmartlinks || 0),
+                coins:Number(user.coins || 0), orders:Number(user.orders || 0),
+                walletUpdatedAt:user.walletUpdatedAt
             });
         }
 
-        const mutation = await atomicWalletMutation(userId, {
-            deltaCoins: SMARTLINK_REWARD_COINS,
-            deltaOrders: SMARTLINK_REWARD_ORDERS,
-            setFields: {
-                smartlinkCount: currentCount + 1,
-                smartlinksToday: Number(user.smartlinksToday || 0) + 1,
-                lifetimeSmartlinks: Number(user.lifetimeSmartlinks || 0) + 1,
-                lastSmartlinkTime: Date.now(),
-                lastResetDate: vietnamDayKey()
+        const mutation = await atomicWalletMutation(userId,{
+            deltaCoins:SMARTLINK_REWARD_COINS,
+            deltaOrders:SMARTLINK_REWARD_ORDERS,
+            setFields:{
+                smartlinkCount:currentCount+1,
+                smartlinksToday:Number(user.smartlinksToday || 0)+1,
+                lifetimeSmartlinks:Number(user.lifetimeSmartlinks || 0)+1,
+                lastSmartlinkTime:Date.now(),
+                lastResetDate:vietnamDayKey()
             }
         });
-        if (mutation.error) return res.status(409).json({ success:false, retry:true, error:mutation.error.message });
+        if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
 
-        const fresh = await readUserRow(userId);
-        await recordAntiFraudEvent(userId, 'smartlink', {
-            rewardEvent:true,
-            coins:SMARTLINK_REWARD_COINS,
-            orders:SMARTLINK_REWARD_ORDERS,
-            ip:requestIp(req),
-            sessionId:String(req.body?.sessionId || '')
+        const fresh=await readUserRow(userId);
+        await recordAntiFraudEvent(userId,'smartlink',{
+            rewardEvent:true,coins:SMARTLINK_REWARD_COINS,orders:SMARTLINK_REWARD_ORDERS,
+            ip:requestIp(req),sessionId:String(req.body?.sessionId || ''),attemptId
         });
-        logTransaction(userId, 'coin', SMARTLINK_REWARD_COINS, 'Hoàn thành 1 SmartLink');
-        logTransaction(userId, 'orders', SMARTLINK_REWARD_ORDERS, 'Hoàn thành 1 SmartLink');
+        logTransaction(userId,'coin',SMARTLINK_REWARD_COINS,'Hoàn thành 1 SmartLink');
+        logTransaction(userId,'orders',SMARTLINK_REWARD_ORDERS,'Hoàn thành 1 SmartLink');
 
-        res.json({
-            success: true,
-            rewardCoins: SMARTLINK_REWARD_COINS, rewardOrders: SMARTLINK_REWARD_ORDERS,
-            smartlinkCount: Number(fresh.data?.smartlinkCount || 0),
-            smartlinksToday: Number(fresh.data?.smartlinksToday || 0),
-            lifetimeSmartlinks: Number(fresh.data?.lifetimeSmartlinks || 0),
-            coins: Number(fresh.data?.coins || 0),
-            orders: Number(fresh.data?.orders || 0),
-            walletUpdatedAt: fresh.data?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null,
-            riskScore: (await getAntiFraudState(userId)).stats.score
-        });
-    } catch (e) {
-        console.error('Lỗi hoàn tất SmartLink:', e);
-        res.status(500).json({ success: false, error: e.message });
+        const response={
+            success:true,
+            rewardCoins:SMARTLINK_REWARD_COINS,rewardOrders:SMARTLINK_REWARD_ORDERS,
+            smartlinkCount:Number(fresh.data?.smartlinkCount || 0),
+            smartlinksToday:Number(fresh.data?.smartlinksToday || 0),
+            lifetimeSmartlinks:Number(fresh.data?.lifetimeSmartlinks || 0),
+            coins:Number(fresh.data?.coins || 0),orders:Number(fresh.data?.orders || 0),
+            walletUpdatedAt:fresh.data?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null,
+            riskScore:(await getAntiFraudState(userId)).stats.score
+        };
+        await writePersistentEvent(persistentSmartlinkKey,{...response,createdAt:Date.now()});
+        res.json(response);
+    } catch(e) {
+        console.error('Lỗi hoàn tất SmartLink:',e);
+        res.status(500).json({success:false,retry:true,error:e.message});
     } finally {
         smartlinkProcessing.delete(userId);
     }
 });
+
 // ==================== QUIZ: SERVER CẤP LƯỢT, RELOAD KHÔNG THỂ NHẬN LẠI ====================
 const QUIZ_DAILY_LIMIT = 5;
 const QUIZ_AD_LIMIT = 4;
@@ -3607,8 +3608,23 @@ app.post('/api/delivery/claim', async (req,res)=>{
     const key=`${userId}:${adToken}`; if(deliveryProcessing.has(key)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý lượt giao hàng.'});
     deliveryProcessing.add(key);
     try{
-        const event=completedAdEvents.get(adToken);
-        if(!event || event.userId!==userId || event.purpose!=='delivery') return res.status(400).json({success:false,error:'Lượt Rewarded dùng cho giao hàng không hợp lệ hoặc đã hết hạn.'});
+        let event=completedAdEvents.get(adToken);
+        if (!event) {
+            const persisted = await readPersistentEvent(persistentEventKey('delivery-verified', adToken));
+            if (persisted && (!persisted.expiresAt || Date.now() < Number(persisted.expiresAt))) {
+                event = {
+                    userId:String(persisted.userId || ''),
+                    adType:persisted.adType || 'rewarded',
+                    purpose:persisted.purpose || 'delivery',
+                    completedAt:Number(persisted.completedAt || Date.now()),
+                    used:!!persisted.used,
+                    deliveryClaimResult:persisted.deliveryClaimResult || null,
+                    completionResult:persisted.completionResult || null
+                };
+                completedAdEvents.set(adToken, event);
+            }
+        }
+        if(!event || event.userId!==userId || event.purpose!=='delivery') return res.status(400).json({success:false,error:'Không tìm thấy phiên Rewarded giao hàng đã được xác minh. Vui lòng thử lại.'});
         if(event.used && event.deliveryClaimResult) return res.json({success:true,...event.deliveryClaimResult,idempotent:true});
         const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
         const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
@@ -3634,6 +3650,12 @@ app.post('/api/delivery/claim', async (req,res)=>{
             walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
         };
         event.used=true; event.deliveryClaimResult=result;
+        await writePersistentEvent(persistentEventKey('delivery-verified', adToken), {
+            userId:userId, adType:event.adType || 'rewarded', purpose:'delivery',
+            completedAt:Number(event.completedAt || Date.now()), used:true,
+            deliveryClaimResult:result, completionResult:event.completionResult || null,
+            expiresAt:Date.now() + 30 * 60 * 1000
+        });
         await recordAntiFraudEvent(userId,'delivery',{rewardEvent:true,ip:requestIp(req),adToken});
         res.json({success:true,...result});
     }catch(e){res.status(500).json({success:false,error:e.message});}finally{deliveryProcessing.delete(key);}
@@ -3702,6 +3724,36 @@ const activeAdByUser = new Map();
 const completedAdEvents = new Map();
 const adRewardProcessing = new Set();
 function makeAdToken() { return `${Date.now()}_${Math.random().toString(36).slice(2,12)}`; }
+
+// Persistent idempotency records for Delivery and SmartLink actions.
+const PERSISTENT_EVENT_PREFIX = 'reward_event:';
+async function readPersistentEvent(key) {
+    try {
+        const { data, error } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
+        if (error || !data?.value) return null;
+        if (typeof data.value === 'string') {
+            try { return JSON.parse(data.value); } catch (_) { return null; }
+        }
+        return (typeof data.value === 'object' && !Array.isArray(data.value)) ? data.value : null;
+    } catch (e) {
+        console.error('Persistent reward event read failed:', e.message);
+        return null;
+    }
+}
+async function writePersistentEvent(key, value, retries = 2) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const { error } = await supabase.from('app_settings').upsert({ key, value }, { onConflict: 'key' });
+            if (!error) return true;
+        } catch (_) {}
+        if (attempt < retries) await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+    }
+    console.error('Persistent reward event write failed:', key);
+    return false;
+}
+function persistentEventKey(type, id) {
+    return `${PERSISTENT_EVENT_PREFIX}${type}:${String(id)}`;
+}
 app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -3793,9 +3845,15 @@ app.post('/api/ad/session/complete', async (req, res) => {
         completedAdEvents.set(String(token),completed);
         const response={success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
         completed.completionResult=response;
+        if (purpose === 'delivery') {
+            await writePersistentEvent(persistentEventKey('delivery-verified', token), {
+                userId:String(userId), adType, purpose, completedAt:Date.now(), used:false,
+                completionResult:response, expiresAt:Date.now() + 30 * 60 * 1000
+            });
+        }
         adSessions.delete(token);
         if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
-        setTimeout(()=>completedAdEvents.delete(String(token)),10*60*1000);
+        setTimeout(()=>completedAdEvents.delete(String(token)), purpose === 'delivery' ? 30*60*1000 : 10*60*1000);
         res.json(response);
     } catch(e){res.status(500).json({success:false,error:e.message});} finally{adRewardProcessing.delete(key);}
 });
