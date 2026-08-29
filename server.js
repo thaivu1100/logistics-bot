@@ -3650,12 +3650,17 @@ app.post('/api/delivery/claim', async (req,res)=>{
             walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
         };
         event.used=true; event.deliveryClaimResult=result;
-        await writePersistentEvent(persistentEventKey('delivery-verified', adToken), {
-            userId:userId, adType:event.adType || 'rewarded', purpose:'delivery',
+        const savedClaim = await writePersistentEvent(persistentEventKey('delivery-verified', adToken), {
+            userId:userId, adType:event.adType || 'rewarded', purpose:'delivery', status:'claimed',
             completedAt:Number(event.completedAt || Date.now()), used:true,
             deliveryClaimResult:result, completionResult:event.completionResult || null,
             expiresAt:Date.now() + 30 * 60 * 1000
         });
+        if (!savedClaim) {
+            // The wallet mutation already succeeded and remains authoritative in Supabase. Do not
+            // fail the user or make them watch another ad just because the idempotency record is delayed.
+            console.error('Không lưu được trạng thái claimed Delivery cho token', adToken);
+        }
         await recordAntiFraudEvent(userId,'delivery',{rewardEvent:true,ip:requestIp(req),adToken});
         res.json({success:true,...result});
     }catch(e){res.status(500).json({success:false,error:e.message});}finally{deliveryProcessing.delete(key);}
@@ -3813,6 +3818,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (existingCompleted && existingCompleted.userId === String(userId) && existingCompleted.adType === adType) {
             if (existingCompleted.completionResult) return res.json({ ...existingCompleted.completionResult, idempotent:true });
         }
+
         let s=adSessions.get(token);
         if (!s) {
             const persistedSession = await readPersistentEvent(persistentEventKey('ad-session', token));
@@ -3830,6 +3836,31 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         if (!s || s.userId!==String(userId) || s.adType!==adType) return res.status(400).json({success:false,error:'Phiên quảng cáo không hợp lệ.'});
         const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
+        let deliveryPersistentKey = null;
+        if (purpose === 'delivery') {
+            deliveryPersistentKey = persistentEventKey('delivery-verified', token);
+            const persistedDelivery = await readPersistentEvent(deliveryPersistentKey);
+            if (persistedDelivery && (!persistedDelivery.expiresAt || Date.now() < Number(persistedDelivery.expiresAt))) {
+                if (persistedDelivery.userId && String(persistedDelivery.userId) !== String(userId)) {
+                    return res.status(400).json({success:false,error:'Phiên Rewarded không thuộc user hiện tại.'});
+                }
+                if (persistedDelivery.completionResult) {
+                    completedAdEvents.set(String(token), {
+                        userId:String(userId), adType, purpose:'delivery', completedAt:Number(persistedDelivery.completedAt || Date.now()),
+                        used:!!persistedDelivery.used, deliveryClaimResult:persistedDelivery.deliveryClaimResult || null,
+                        completionResult:persistedDelivery.completionResult
+                    });
+                    return res.json({ ...persistedDelivery.completionResult, idempotent:true, recovered:true });
+                }
+                if (persistedDelivery.status === 'processing' || persistedDelivery.verificationReady === true) {
+                    completedAdEvents.set(String(token), {
+                        userId:String(userId), adType, purpose:'delivery', completedAt:Number(persistedDelivery.completedAt || Date.now()),
+                        used:false, deliveryClaimResult:null, completionResult:null, verificationReady:true
+                    });
+                    return res.json({success:true, adToken:String(token), purpose:'delivery', verificationReady:true, recovered:true, rewardCoins:0, rewardOrders:0, rewardSpins:0, elapsed});
+                }
+            }
+        }
         if (purpose!=='passive' && elapsed<5000) {
             await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,retry:true,ip:requestIp(req),rewardEvent:false,sessionId});
             return res.status(400).json({success:false,error:'QC chưa đủ 5 giây.'});
@@ -3846,6 +3877,16 @@ app.post('/api/ad/session/complete', async (req, res) => {
             return res.json(passiveResponse);
         }
         let user=await loadCurrentDailyUser(String(userId)); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if (purpose==='delivery') {
+            const reserved = await writePersistentEvent(deliveryPersistentKey, {
+                userId:String(userId), adType, purpose:'delivery', sessionId:String(sessionId || ''), actionId:String(req.body?.actionId || ''),
+                completedAt:Date.now(), processingAt:Date.now(), status:'processing', verificationReady:true, used:false,
+                completionResult:null, deliveryClaimResult:null, expiresAt:Date.now() + 30 * 60 * 1000
+            });
+            if (!reserved) {
+                return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Đã xác minh Rewarded giao hàng nhưng chưa lưu được trạng thái. Vui lòng thử lại, không cần xem lại quảng cáo.'});
+            }
+        }
         if (purpose==='extra-delivery') {
             if (Number(user.deliveryCount||0)<20) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 20 lượt cơ bản hôm nay.'});
             if (Number(user.extraDeliveryAdsToday||0)>=5) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 5 quảng cáo nhận thêm lượt giao hôm nay.'});
@@ -3872,10 +3913,16 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const response={success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
         completed.completionResult=response;
         if (purpose === 'delivery') {
-            await writePersistentEvent(persistentEventKey('delivery-verified', token), {
-                userId:String(userId), adType, purpose, completedAt:Date.now(), used:false,
-                completionResult:response, expiresAt:Date.now() + 30 * 60 * 1000
+            const persisted = await writePersistentEvent(persistentEventKey('delivery-verified', token), {
+                userId:String(userId), adType, purpose, completedAt:Date.now(), used:false, status:'verified',
+                completionResult:response, deliveryClaimResult:null, expiresAt:Date.now() + 30 * 60 * 1000
             });
+            if (!persisted) {
+                // The user must not be forced to watch the Rewarded again. Keep the in-memory
+                // completion and leave the server session alive long enough for a retry of this request.
+                completedAdEvents.set(String(token), completed);
+                return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Quảng cáo đã được xác minh nhưng máy chủ chưa lưu xong trạng thái. Đang chờ đồng bộ, không cần xem lại quảng cáo.'});
+            }
         }
         adSessions.delete(token);
         if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
