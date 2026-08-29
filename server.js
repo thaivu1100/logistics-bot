@@ -3889,7 +3889,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         if (purpose==='extra-delivery') {
             if (Number(user.deliveryCount||0)<20) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 20 lượt cơ bản hôm nay.'});
-            if (Number(user.extraDeliveryAdsToday||0)>=5) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 5 quảng cáo nhận thêm lượt giao hôm nay.'});
+            if (Number(user.extraDeliveryAdsToday||0)>=8) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 8 quảng cáo nhận thêm lượt giao hôm nay.'});
         }
         if (purpose==='chest-spin' && Number(user.spinAdCount||0)>=10) return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
         const next=await incrementWeeklyAds(String(userId)); if(next===null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
@@ -3899,7 +3899,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
         if(purpose==='extra-delivery'){
             updateFields.extraDeliveryAdsToday=Number(user.extraDeliveryAdsToday||0)+1;
-            updateFields.extraDeliveryCount=Math.min(10,Number(user.extraDeliveryCount||0)+2);
+            updateFields.extraDeliveryCount=Math.min(16,Number(user.extraDeliveryCount||0)+2);
         }
         const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
