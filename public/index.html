@@ -10,6 +10,13 @@
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
     <script src="https://www.youtube.com/iframe_api"></script>
+    <script>
+        // ===== TEMP NATIONAL DAY 02/09 START =====
+        // Theme trình bày tạm thời: đổi true -> false để tắt toàn bộ trang trí Quốc khánh.
+        window.NATIONAL_DAY_THEME_ENABLED = true;
+        if (window.NATIONAL_DAY_THEME_ENABLED) document.documentElement.classList.add('national-day-theme');
+        // ===== TEMP NATIONAL DAY 02/09 END =====
+    </script>
     <!-- Rewarded Interstitial uses the existing zone 11457064. Passive fullscreen uses the same flow. -->
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
@@ -469,6 +476,70 @@
                         linear-gradient(transparent 49.6%, rgba(56,189,248,.06) 50%, transparent 50.4%);
             background-size: 54px 54px;
         }
+
+        /* ===== TEMP NATIONAL DAY 02/09 START ===== */
+        .national-day-only, .national-day-banner { display: none; }
+        .national-day-theme body {
+            background-image:
+                radial-gradient(circle at 12% 4%, rgba(218,37,29,.18), transparent 28%),
+                radial-gradient(circle at 88% 15%, rgba(255,205,0,.08), transparent 24%),
+                linear-gradient(rgba(218,37,29,.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,205,0,.022) 1px, transparent 1px),
+                radial-gradient(circle at 15% 0%, #1f2635 0%, #0b1728 44%, #06101d 100%);
+            background-size: auto, auto, 24px 24px, 24px 24px, auto;
+        }
+        .national-day-theme .national-day-only { display: block; }
+        .national-day-theme .national-day-banner {
+            display: flex; width: calc(100% - 16px); margin: 8px auto 0; min-height: 38px;
+            padding: 8px 10px; align-items: center; justify-content: center; gap: 7px;
+            border-radius: 15px; border: 1px solid rgba(255,205,0,.42);
+            background: linear-gradient(135deg, rgba(178,20,20,.92), rgba(218,37,29,.78));
+            color: #fff7c2; text-align: center; font-size: 10px; font-weight: 900;
+            line-height: 1.3; letter-spacing: .025em; box-shadow: 0 8px 20px rgba(100,0,0,.20); overflow: hidden;
+        }
+        .national-day-banner .national-star { color: #ffdf33; font-size: 13px; flex: 0 0 auto; }
+        .national-day-theme header.glass {
+            border-bottom-color: rgba(255,205,0,.22) !important;
+            background-image: linear-gradient(110deg, rgba(150,18,18,.20), rgba(15,23,42,.72));
+        }
+        .national-day-loading-bg {
+            position: absolute; inset: 0; pointer-events: none; opacity: 0;
+            background: radial-gradient(circle at 50% 24%, rgba(255,205,0,.20), transparent 30%),
+                        linear-gradient(160deg, #8f1212 0%, #b91c1c 48%, #5f1010 100%);
+        }
+        .national-day-theme .national-day-loading-bg { opacity: 1; }
+        .national-day-flag-card {
+            display: none; position: relative; width: min(164px, 58vw); margin: 0 auto 12px;
+            border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,223,51,.55);
+            box-shadow: 0 10px 28px rgba(66,0,0,.28);
+        }
+        .national-day-theme .national-day-flag-card { display: block; }
+        .national-day-flag-card svg { width: 100%; height: auto; }
+        .national-day-title {
+            display: none; position: relative; margin: 0 0 5px; padding: 0 8px; color: #ffe45c;
+            font-size: 14px; line-height: 1.3; font-weight: 900; letter-spacing: .025em;
+            text-transform: uppercase; text-shadow: 0 2px 10px rgba(91,0,0,.45);
+        }
+        .national-day-theme .national-day-title { display: block; }
+        .national-day-theme #appLoadingScreen .simple-spinner {
+            width: 42px; height: 42px; border-color: rgba(255,255,255,.22); border-top-color: #ffdf33;
+        }
+        .national-day-theme #appLoadingScreen .loading-warehouse-title { color: #fff7c2 !important; }
+        .national-day-theme #appLoadingScreen .loading-status-text { color: rgba(255,255,255,.82) !important; }
+        @media (max-width: 340px) {
+            .national-day-banner { font-size: 9px; padding-inline: 7px; }
+            .national-day-title { font-size: 12px; }
+            .national-day-flag-card { width: min(144px, 55vw); }
+        }
+        .low-graphics .national-day-banner, .low-graphics .national-day-flag-card, .low-graphics .national-day-title {
+            animation: none !important; box-shadow: none !important; text-shadow: none !important; filter: none !important;
+        }
+        .national-day-theme.low-graphics body { background-image: none !important; background-color: #0b1120 !important; }
+        .national-day-theme.low-graphics .national-day-banner {
+            background-image: none !important; background-color: #991b1b !important; box-shadow: none !important;
+        }
+        /* ===== TEMP NATIONAL DAY 02/09 END ===== */
+
 </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -526,12 +597,20 @@
     không có nguy cơ làm treo/crash WebView trên thiết bị yếu. -->
     <div id="appLoadingScreen" x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="loading-screen-center bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
         <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
+        <div class="national-day-loading-bg"></div>
+        <div class="national-day-flag-card" aria-hidden="true">
+            <svg viewBox="0 0 300 200" role="img" aria-label="Cờ Việt Nam">
+                <rect width="300" height="200" fill="#da251d"></rect>
+                <polygon fill="#ffdf00" points="150,42 164,83 207,83 172,108 185,150 150,125 115,150 128,108 93,83 136,83"></polygon>
+            </svg>
+        </div>
+        <div class="national-day-title">🇻🇳 MỪNG QUỐC KHÁNH 02/09 🇻🇳</div>
         <div class="relative simple-spinner mb-4"></div>
         <div class="relative flex gap-2 text-xl mb-3 loading-dots">
             <span>🚚</span><span>📦</span><span>🏭</span>
         </div>
-        <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1">Kho Hàng Kiếm Tiền</h2>
-        <p class="relative text-xs text-slate-400" x-text="texts.loadingText || 'Loading warehouse data...'"></p>
+        <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1 loading-warehouse-title">Kho Hàng Kiếm Tiền</h2>
+        <p class="relative text-xs text-slate-400 loading-status-text" x-text="texts.loadingText || 'Loading warehouse data...'"></p>
     </div>
 
     <div x-show="notification.show" x-transition class="banner-notification" x-text="notification.text" @click="notification.show = false"></div>
@@ -668,7 +747,7 @@
     <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
         <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
-                <div class="w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦</div>
+                <div class="relative w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
                 <div>
                     <p class="font-bold text-xs tracking-tight flex items-center header-text"><span x-text="user.name || 'Shipper'"></span><span class="bg-blue-500/20 text-blue-400 text-[8px] px-2 py-0.5 rounded-full ml-2" x-text="'LV.' + truckLevel"></span></p>
                     <p class="text-[7px] font-bold text-slate-500 tracking-widest mt-0.5 italic" x-text="'ID: ' + user.id"></p>
@@ -679,6 +758,9 @@
                 <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></span></div>
             </div>
         </header>
+        <div class="national-day-banner" aria-label="Mừng Quốc khánh Việt Nam 02/09">
+            <span class="national-star">★</span><span>🇻🇳 MỪNG QUỐC KHÁNH 02/09</span><span class="national-star">★</span>
+        </div>
 
         <!-- Banner 320x50 nằm trong normal flow, không che bottom nav/nút/modal. Script provider được render trễ sau 8s. -->
         <div id="banner320x50-shell" class="hidden px-2 pt-2" aria-label="Advertisement">
@@ -924,7 +1006,7 @@
                         <div class="flex-shrink-0 pl-2">
                             <span x-show="groupTaskClaimed" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
                             <div x-show="!groupTaskClaimed" class="flex flex-col items-end gap-1">
-                                <a href="https://t.me/sharekeotonghop" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
+                                <a href="https://t.me/Vua_Dao_Quang" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
                                 <button @click="claimGroupTask()" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.groupTaskCheckBtn"></button>
                             </div>
                         </div>
@@ -953,20 +1035,20 @@
                     <div class="space-y-2">
                         <div class="rank-1 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top1"></p><p class="text-[10px] text-white/80" x-text="texts.director"></p></div>
-                            <div class="text-right text-xs font-black"><p>📦75.000</p><p>🎁8</p></div>
+                            <div class="text-right text-xs font-black"><p x-text="leaderboardMode === 'invite' ? '📦75.000' : '📦50.000'"></p><p x-text="leaderboardMode === 'invite' ? '🎁5' : '🎁3'"></p></div>
                         </div>
                         <div class="rank-2 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top2"></p><p class="text-[10px] text-white/80" x-text="texts.headDept"></p></div>
-                            <div class="text-right text-xs font-black"><p>📦45.000</p><p>🎁5</p></div>
+                            <div class="text-right text-xs font-black"><p x-text="leaderboardMode === 'invite' ? '📦50.000' : '📦30.000'"></p><p x-text="leaderboardMode === 'invite' ? '🎁3' : '🎁2'"></p></div>
                         </div>
                         <div class="rank-3 p-3 rounded-xl flex justify-between items-center">
                             <div><p class="font-black text-white" x-text="texts.top3"></p><p class="text-[10px] text-white/80" x-text="texts.warehouseMgr"></p></div>
-                            <div class="text-right text-xs font-black"><p>📦25.000</p><p>🎁3</p></div>
+                            <div class="text-right text-xs font-black"><p x-text="leaderboardMode === 'invite' ? '📦25.000' : '📦20.000'"></p><p x-text="leaderboardMode === 'invite' ? '🎁2' : '🎁1'"></p></div>
                         </div>
                     </div>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <!-- Chuyển đổi giữa BXH Mời Bạn và BXH Xem QC (cùng phần thưởng Top 1-3 hàng tuần) -->
+                    <!-- Chuyển đổi giữa BXH Mời Bạn và BXH Xem QC (mỗi board có bộ thưởng riêng) -->
                     <div class="flex gap-1.5 p-1 bg-slate-800/60 rounded-2xl border border-white/5">
                         <button @click="switchLeaderboard('invite')" class="lb-toggle-btn" :class="leaderboardMode === 'invite' ? 'active' : 'text-slate-400'">👥 Mời Bạn</button>
                         <button @click="switchLeaderboard('ads')" class="lb-toggle-btn" :class="leaderboardMode === 'ads' ? 'active' : 'text-slate-400'">📺 Xem QC</button>
@@ -1012,7 +1094,7 @@
                     <div class="mt-2 p-2 bg-slate-800/50 rounded-xl border border-white/5 space-y-1">
                         <p class="text-[8px] font-black uppercase text-yellow-400" x-text="texts.rankConditionsTitle"></p>
                         <p class="text-[7px] font-bold text-slate-400 leading-relaxed" x-text="leaderboardMode === 'invite' ? texts.rankInviteCondText : texts.rankAdsCondText"></p>
-                        <p class="text-[7px] font-bold text-slate-300 leading-relaxed" x-text="texts.rankRewardsText"></p>
+                        <p class="text-[7px] font-bold text-slate-300 leading-relaxed" x-text="leaderboardMode === 'invite' ? texts.rankInviteRewardsText : texts.rankAdsRewardsText"></p>
                         <p class="text-[7px] text-slate-500 italic leading-relaxed" x-text="texts.rankResetText"></p>
                     </div>
                     <div class="mt-1 text-center text-[7px] text-slate-400 italic" x-text="texts.resetSunday"></div>
@@ -1580,7 +1662,7 @@
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
-                rankConditionsTitle: 'Điều kiện Top thưởng', rankInviteCondText: 'Xếp hạng theo số lượt mời HỢP LỆ trong tuần. Cần đạt tối thiểu 5 lượt mời hợp lệ trong tuần để Top 1-3 được nhận thưởng (đứng hạng nhưng chưa đủ điều kiện thì vẫn hiện trên BXH nhưng KHÔNG được thưởng).', rankAdsCondText: 'Xếp hạng theo số Rewarded Interstitial hợp lệ đã xem trong tuần, chỉ tính khi server xác nhận hoàn thành quảng cáo. Cần đạt tối thiểu 50 lượt xem hợp lệ trong tuần để Top 1-3 được nhận thưởng.', rankRewardsText: '🥇 Top 1: +75.000 Đơn Hàng + 8 Lượt Mở Rương · 🥈 Top 2: +45.000 Đơn Hàng + 5 Lượt Mở Rương · 🥉 Top 3: +25.000 Đơn Hàng + 3 Lượt Mở Rương', rankResetText: 'BXH tự động reset vào đúng 00:00 Chủ Nhật (giờ Việt Nam) mỗi tuần, thưởng Top 1-3 (nếu đủ điều kiện) được cộng thẳng và thông báo qua Telegram ngay khi reset.',
+                rankConditionsTitle: 'Điều kiện Top thưởng', rankInviteCondText: 'Xếp hạng theo số lượt mời HỢP LỆ trong tuần. Cần đạt tối thiểu 5 lượt mời hợp lệ trong tuần để Top 1-3 được nhận thưởng (đứng hạng nhưng chưa đủ điều kiện thì vẫn hiện trên BXH nhưng KHÔNG được thưởng).', rankAdsCondText: 'Cần đạt tối thiểu 70 lượt xem hợp lệ trong tuần để Top 1-3 được nhận thưởng.', rankInviteRewardsText: '🥇 Top 1: +75.000 Đơn Hàng +5 Lượt Mở Rương · 🥈 Top 2: +50.000 Đơn Hàng +3 Lượt Mở Rương · 🥉 Top 3: +25.000 Đơn Hàng +2 Lượt Mở Rương', rankAdsRewardsText: '🥇 Top 1: +50.000 Đơn Hàng +3 Lượt Mở Rương · 🥈 Top 2: +30.000 Đơn Hàng +2 Lượt Mở Rương · 🥉 Top 3: +20.000 Đơn Hàng +1 Lượt Mở Rương', rankResetText: 'BXH tự động reset vào đúng 00:00 Chủ Nhật (giờ Việt Nam) mỗi tuần, thưởng Top 1-3 (nếu đủ điều kiện) được cộng thẳng và thông báo qua Telegram ngay khi reset.',
                 refCode: 'Mã giới thiệu', inviteFriends: 'Mời Bạn Bè\nCùng Kiếm Tiền!',
                 copy: 'Copy', share: 'CHIA SẺ CHO MN', invited: 'Đã mời', valid: 'Hợp lệ',
                 withdraw: 'Rút Tiền', withdrawHistory: 'Lịch sử rút', noTransactions: 'Chưa có giao dịch',
@@ -1626,7 +1708,7 @@
                 quizCorrect: 'Đúng', quizWrong: 'Sai', quizSkip: 'Bỏ qua', quizFree: 'Trả lời câu miễn phí', quizMore: 'Thêm câu hỏi', quizAnswerNow: 'Đang có câu hỏi - trả lời ngay!',
                 adError: 'Không thể hoàn tất quảng cáo Rewarded. Vui lòng thử lại.', deliveryLimitReached: 'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.',
                 captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
-                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.',
+                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupMembershipCheckFailed:'Telegram chưa thể xác minh thành viên. Vui lòng thử lại sau hoặc liên hệ Admin.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.',
                  smartlinkSectionTitle:'🔗 Làm SmartLink',
                  smartlinkSectionDesc:'Hoàn thành SmartLink để nhận thưởng trực tiếp. Tối đa 30 lượt mỗi ngày.',
                  smartlinkProgressLabel:'Tiến độ hôm nay',
@@ -1656,7 +1738,7 @@
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
-                rankConditionsTitle: 'Reward eligibility', rankInviteCondText: 'Ranked by the number of VALID invites this week. You need at least 5 valid invites this week for Top 1-3 to receive a reward (you can still appear on the board without enough invites, but you will NOT receive the reward).', rankAdsCondText: 'Ranked by the number of valid Rewarded Interstitial ads watched this week, counted only once the server confirms the ad was completed. You need at least 50 valid Rewarded Interstitial views this week for Top 1-3 to receive a reward.', rankRewardsText: '🥇 Top 1: +75,000 Orders + 8 Chest Spins · 🥈 Top 2: +45,000 Orders + 5 Chest Spins · 🥉 Top 3: +25,000 Orders + 3 Chest Spins', rankResetText: 'The leaderboard automatically resets at 00:00 (Vietnam time) every Sunday. Top 1-3 rewards (if eligible) are credited instantly and announced via Telegram right when the reset happens.',
+                rankConditionsTitle: 'Reward eligibility', rankInviteCondText: 'Ranked by the number of VALID invites this week. You need at least 5 valid invites this week for Top 1-3 to receive a reward (you can still appear on the board without enough invites, but you will NOT receive the reward).', rankAdsCondText: 'You need at least 70 valid Rewarded Interstitial views this week for Top 1-3 to receive a reward.', rankInviteRewardsText: '🥇 Top 1: +75,000 Orders +5 Chest Spins · 🥈 Top 2: +50,000 Orders +3 Chest Spins · 🥉 Top 3: +25,000 Orders +2 Chest Spins', rankAdsRewardsText: '🥇 Top 1: +50,000 Orders +3 Chest Spins · 🥈 Top 2: +30,000 Orders +2 Chest Spins · 🥉 Top 3: +20,000 Orders +1 Chest Spin', rankResetText: 'The leaderboard automatically resets at 00:00 (Vietnam time) every Sunday. Top 1-3 rewards (if eligible) are credited instantly and announced via Telegram right when the reset happens.',
                 refCode: 'Referral code', inviteFriends: 'Invite shippers\nEarn together!',
                 copy: 'Copy', share: 'SHARE', invited: 'Invited', valid: 'Valid',
                 withdraw: 'Withdraw', withdrawHistory: 'Withdraw history', noTransactions: 'No transactions',
@@ -1702,7 +1784,7 @@
                 quizCorrect: 'Correct', quizWrong: 'Wrong', quizSkip: 'Skip', quizFree: 'Answer free question', quizMore: 'More questions', quizAnswerNow: 'A question is ready - answer now!',
                 adError: 'Could not complete the Rewarded ad. Please try again.', deliveryLimitReached: 'You have used all available delivery attempts today.',
                 captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
-                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.',
+                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupMembershipCheckFailed:'Telegram could not verify your membership. Please try again later or contact Admin.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.',
                  smartlinkSectionTitle:'🔗 SmartLink Tasks',
                  smartlinkSectionDesc:'Complete SmartLinks to earn direct rewards. Maximum 30 per day.',
                  smartlinkProgressLabel:"Today's progress",
@@ -1922,7 +2004,7 @@
                 ],
                 allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:20,
                 smartlinkCount:0, lastSmartlinkTime:0,
-                groupTaskClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Nhiệm vụ "Tham gia nhóm" - 1 lần duy nhất, không reset theo ngày
+                groupTaskClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
@@ -1945,7 +2027,7 @@
                 // ===== CAPTCHA: bắt buộc MỖI lần giao hàng + MỖI lần rút tiền =====
                 captchaShow: false, captchaCode: '', captchaChars: [], captchaInput: '', captchaError: '',
                 captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null, captchaChallengeId: '', withdrawCaptchaToken: '',
-                // ===== NHẠC NỀN: chỉ bật/tắt, 4 bài phát lặp lại tuần tự =====
+                // ===== NHẠC NỀN: chỉ bật/tắt, danh sách YouTube phát lặp lại tuần tự =====
                 musicOn: false, _musicUserEnabledThisSession: false, musicTrack: 0, _musicEl: null, _ytPlayer: null, _ytReady: false, _ambientAdLast: 0, _musicWatchdog: null, _musicArmed: false,
                 // ===== BXH XEM QC (hàng tuần, reset Chủ Nhật 00:00 cùng BXH mời bạn) =====
                 leaderboardMode: 'invite', qcRankList: [],
@@ -3515,9 +3597,13 @@
                         });
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
-                            this.showNotification(result.error === 'not_member'
-                                ? (this.texts.groupNotMember || 'Please join the group, then check again.')
-                                : (this.texts.taskClaimFailed || 'The task is not eligible or an error occurred.'));
+                            if (result.error === 'not_member') {
+                                this.showNotification(this.texts.groupNotMember || 'Please join the group, then check again.');
+                            } else if (result.error === 'membership_check_failed') {
+                                this.showNotification('❌ ' + (result.message || this.texts.groupMembershipCheckFailed || 'Telegram could not verify group membership.'));
+                            } else {
+                                this.showNotification('❌ ' + (result.message || this.texts.taskClaimFailed || 'The task is not eligible or an error occurred.'));
+                            }
                             return;
                         }
                         this.groupTaskClaimed = true;
@@ -4543,7 +4629,7 @@
                 },
 
                 // ==================== NHẠC NỀN ====================
-                musicVideoIds: ['2ShEgpIibzQ','xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
+                musicVideoIds: ['JDL0_Gpoq_o','2ShEgpIibzQ','xnIIoan7ft8','gJAbDSse5WM','4jjOH2FR6-E','OuNo8Tkb3lI'],
                 // FIX LỖI "NHẠC NỀN LÚC PHÁT ĐƯỢC LÚC KHÔNG": bản cũ tạo YT.Player rồi coi như đã sẵn sàng
                 // sau 250ms và gọi playVideo() ngay. Thực tế iframe YouTube cần thời gian khởi tạo (mạng chậm,
                 // Telegram WebView nạp API muộn), nên rất nhiều lần playVideo() bị gọi khi player CHƯA sẵn sàng
@@ -4638,8 +4724,10 @@
                     this._musicUserEnabledThisSession = this.musicOn;
                     localStorage.setItem('shipper_music', this.musicOn ? '1' : '0');
                     if (this.musicOn) {
-                        // Đây là user gesture hợp lệ -> mở tiếng được ngay
-                        await this.resumeMusic(true);
+                        // Chỉ thao tác OFF -> ON của user mới reset về bài Quốc khánh ở index 0.
+                        // Resume sau QC/SmartLink/foreground vẫn dùng resumeMusic() và giữ nguyên musicTrack hiện tại.
+                        this.musicTrack = 0;
+                        await this.playMusicTrack(0);
                         this.startMusicWatchdog();
                     } else {
                         this.stopMusic();
