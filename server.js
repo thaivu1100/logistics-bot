@@ -300,6 +300,7 @@ const TASK_GROUP_USERNAME = process.env.TASK_GROUP_USERNAME || '@sharekeotonghop
 const ADMIN_ID = 6327666718;
 const ADMIN_PASS = process.env.ADMIN_PASS;
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
+const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -396,7 +397,7 @@ Vào bằng link
 
 Mỗi bạn hợp lệ nhận ngay:
 
-*+500 Coin +1.000 Đơn Hàng*
+*+750 Coin +1.500 Đơn Hàng*
 
 🏆 *9. BXH*
 Vào *BXH* để xem thứ hạng và điều kiện nhận thưởng tuần.
@@ -468,7 +469,7 @@ Opening the Mini App through your link
 
 Each valid friend gives:
 
-*+500 Coins +1,000 Orders*
+*+750 Coins +1,500 Orders*
 
 🏆 *9. Ranking*
 Open *Ranking* to view your position and weekly reward conditions.
@@ -1382,8 +1383,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         return { ok: false, reason: 'referrer_not_found' };
     }
 
-    const INSTANT_REF_COINS = 500;
-    const INSTANT_REF_ORDERS = 1000;
+    const INSTANT_REF_COINS = 750;
+    const INSTANT_REF_ORDERS = 1500;
 
     // FIX LỖI "SỐ BẠN HỢP LỆ CAO HƠN SỐ BẠN ĐÃ MỜI": tăng validInvites bằng atomicIncrement (thay vì
     // đọc-rồi-ghi) để không bị mất lượt tăng khi nhiều referral của CÙNG 1 người mời hoàn tất gần như
@@ -1969,8 +1970,8 @@ bot.command('truspin', async (ctx) => {
 // /addref <userId> <số_ref> - Cộng thêm N lượt mời BẠN HỢP LỆ cho user (dùng khi cần bù thủ công, vd bạn
 // bè lỡ không tự xác nhận được, hoặc tri ân sự kiện...). Cộng validInvites VÀ invitedCount (đảm bảo
 // invitedCount luôn >= validInvites, đúng bất biến của hệ thống mời bạn), đồng thời cộng thẳng vào ví TOÀN
-// BỘ phần thưởng "hợp lệ tức thì" mà user sẽ nhận được TỰ ĐỘNG cho mỗi lượt mời hợp lệ thật (1.000 Coin +
-// 2.000 Đơn Hàng / bạn) nhân với N. Các mốc thưởng lớn hơn (5/10/20/30/50/75/100 bạn) vẫn do chính user tự
+// BỘ phần thưởng "hợp lệ tức thì" mà user sẽ nhận được TỰ ĐỘNG cho mỗi lượt mời hợp lệ thật (750 Coin +
+// 1.500 Đơn Hàng / bạn) nhân với N. Các mốc thưởng lớn hơn (5/10/20/30/50/75/100 bạn) vẫn do chính user tự
 // bấm "Nhận" trong Mini App như bình thường khi validInvites chạm mốc, không tự phát ở đây để không phá vỡ
 // luồng nhận mốc thưởng đã có sẵn.
 bot.command('addref', async (ctx) => {
@@ -1985,8 +1986,8 @@ bot.command('addref', async (ctx) => {
         .select('validInvites, invitedCount, coins, orders').eq('id', targetId).single();
     if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
 
-    const INSTANT_REF_COINS = 500;
-    const INSTANT_REF_ORDERS = 1000;
+    const INSTANT_REF_COINS = 750;
+    const INSTANT_REF_ORDERS = 1500;
     const newValid = (data.validInvites || 0) + amount;
     const newInvited = Math.max(data.invitedCount || 0, newValid);
     const bonusCoins = INSTANT_REF_COINS * amount;
@@ -1999,6 +2000,8 @@ bot.command('addref', async (ctx) => {
         orders: (data.orders || 0) + bonusOrders
     });
     if (!ok) return ctx.reply("❌ Lỗi khi cập nhật dữ liệu user.");
+    logTransaction(targetId, 'coin', bonusCoins, `Admin cộng ${amount} lượt mời hợp lệ`);
+    logTransaction(targetId, 'orders', bonusOrders, `Admin cộng ${amount} lượt mời hợp lệ`);
 
     ctx.reply(`✅ Đã cộng ${amount} lượt mời hợp lệ cho ${targetId}.\n📊 Tổng hợp lệ mới: ${newValid}\n🎁 Đã cộng thưởng: +${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng`);
     safeSendLocalizedMessage(targetId, `🎉 Admin vừa cộng thêm *${amount}* lượt mời bạn hợp lệ cho bạn!\n🎁 Nhận thêm: *+${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ hiện tại: *${newValid}*`, `🎉 Admin added *${amount}* valid invite(s) to your account!\n🎁 Reward: *+${bonusCoins.toLocaleString()} Coins + ${bonusOrders.toLocaleString()} Orders*\n📊 Current valid invites: *${newValid}*`, { parse_mode: 'Markdown' });
@@ -2519,7 +2522,7 @@ bot.command('duyet', async (ctx) => {
     const targetId = ctx.message.text.split(' ')[1];
     if (!targetId) return ctx.reply("❌ Sử dụng: /duyet <userId>");
     
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
+    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('*').eq('userId', targetId).eq('status', 'pending');
     if (withdrawError) {
         console.error("Lỗi lấy đơn rút để duyệt:", withdrawError);
         return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
@@ -2527,13 +2530,29 @@ bot.command('duyet', async (ctx) => {
     if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt cho user này.");
     
     let totalApprovedAmount = 0;
+    let approvedCount = 0;
     for (const w of withdrawals) {
-        await supabase.from('withdrawals').update({ status: 'success', reason: 'Đã duyệt bởi admin' }).eq('id', w.id);
-        totalApprovedAmount += w.amount;
+        const { data: approvedRows, error: approveError } = await supabase.from('withdrawals')
+            .update({ status: 'success', reason: 'Đã duyệt bởi admin' })
+            .eq('id', w.id).eq('status', 'pending').select('*');
+        if (approveError) {
+            console.error(`Lỗi duyệt withdrawal ${w.id}:`,approveError.message);
+            continue;
+        }
+        const approved=approvedRows?.[0];
+        if (!approved) continue; // request/admin flow khác vừa duyệt trước đó
+        approvedCount += 1;
+        totalApprovedAmount += Number(approved.amount || 0);
+        await notifyWithdrawalSuccessToGroup(approved);
     }
+    if (approvedCount <= 0) return ctx.reply("ℹ️ Các đơn rút này đã được xử lý bởi một thao tác khác.");
     
-    await safeSendLocalizedMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!\n💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ\nTiền sẽ sớm được chuyển vào tài khoản.`, `✅ Your withdrawal request has been *APPROVED*!\n💰 Total amount: ${totalApprovedAmount.toLocaleString()} VND\nThe funds will be transferred to your account soon.`, { parse_mode: 'Markdown' });
-    ctx.reply(`✅ Đã duyệt ${withdrawals.length} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
+    await safeSendLocalizedMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!
+💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ
+Tiền sẽ sớm được chuyển vào tài khoản.`, `✅ Your withdrawal request has been *APPROVED*!
+💰 Total amount: ${totalApprovedAmount.toLocaleString()} VND
+The funds will be transferred to your account soon.`, { parse_mode: 'Markdown' });
+    ctx.reply(`✅ Đã duyệt ${approvedCount} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
 });
 
 // /huy + ID + lý do
@@ -3447,7 +3466,7 @@ const SMARTLINK_DAILY_LIMIT = 30;
 const SMARTLINK_REWARD_COINS = 25;
 const SMARTLINK_REWARD_ORDERS = 25;
 const SMARTLINK_MIN_ELAPSED_MS = 5000;
-const SMARTLINK_COOLDOWN_MS = 3 * 60 * 1000;
+const SMARTLINK_COOLDOWN_MS = 30 * 1000;
 const SMARTLINK_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 function isAllowedSmartlinkUrl(value) {
     try {
@@ -3484,7 +3503,7 @@ app.post('/api/smartlink/start', async (req, res) => {
                 retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),
                 nextAllowedAt,
                 smartlinksToday:count,
-                error:'SmartLink đang trong thời gian chờ 3 phút.'
+                error:'SmartLink đang trong thời gian chờ 30 giây.'
             });
         }
         const attemptId = crypto.randomBytes(18).toString('hex');
@@ -4728,11 +4747,17 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 if (ordersCommitted && stateCommitted) {
                     const extra = Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(recoveredUser.extraDeliveryCount||0)));
                     const limit = DELIVERY_DAILY_LIMIT + extra;
+                    const recoveredBaseOrders=Number(pendingClaim.baseOrders ?? pendingClaim.deliveredProducts ?? 0);
+                    const recoveredRewardedOrders=Number(pendingClaim.rewardedOrders ?? recoveredBaseOrders);
+                    const recoveredMultiplier=Number(pendingClaim.goldenHourMultiplier || 1);
                     const recoveredResult = {
                         deliveryCount:Number(recoveredUser.deliveryCount || targetDeliveryCount || 0),
                         remaining:Math.max(0, limit - Number(recoveredUser.deliveryCount || 0)),
                         limit, bonusLimit:DELIVERY_MAX_BONUS, extraDeliveryCount:extra,
-                        deliveredProducts:Number(pendingClaim.deliveredProducts || 0),
+                        deliveredProducts:Number(pendingClaim.deliveredProducts || recoveredBaseOrders),
+                        baseOrders:recoveredBaseOrders,rewardedOrders:recoveredRewardedOrders,
+                        goldenHourActive:!!pendingClaim.goldenHourActive,goldenHourMultiplier:recoveredMultiplier,
+                        goldenHourEventId:pendingClaim.goldenHourEventId||null,
                         currentProducts:Number(recoveredUser.currentProducts || 0),
                         orders:Number(recoveredUser.orders || 0),
                         lastProducedAt:Number(recoveredUser.lastProducedAt || newBatchStartedAt || Date.now()),
@@ -4761,12 +4786,21 @@ app.post('/api/delivery/claim', async (req,res)=>{
         const deliveredProducts=Math.max(0,Number(user.currentProducts||0));
         if(deliveredProducts<=0) return res.status(400).json({success:false,error:'Kho chưa có hàng để giao.'});
 
+        // Snapshot Golden Hour exactly once for this delivery token. Retries always reuse these values,
+        // even if the event starts/ends after the first claim request.
+        const goldenHour=await getGoldenHourSnapshot(Date.now());
+        const baseOrders=deliveredProducts;
+        const goldenHourMultiplier=goldenHour.active ? 2 : 1;
+        const rewardedOrders=baseOrders*goldenHourMultiplier;
+
         const deliveryCount=current+1;
         const lifetime=Math.max(0,Number(user.deliveryCountLifetime||0))+1;
         const newBatchStartedAt=Date.now();
         const claimAttempt={
-            status:'claiming',startedAt:Date.now(),deliveredProducts,
-            preOrders:Number(user.orders||0),targetOrders:Number(user.orders||0)+deliveredProducts,
+            status:'claiming',startedAt:Date.now(),deliveredProducts,baseOrders,rewardedOrders,
+            goldenHourActive:!!goldenHour.active,goldenHourMultiplier,goldenHourEventId:goldenHour.eventId||null,
+            goldenHourStartAt:goldenHour.startAt||null,goldenHourEndAt:goldenHour.endAt||null,
+            preOrders:Number(user.orders||0),targetOrders:Number(user.orders||0)+rewardedOrders,
             preCurrentProducts:Number(user.currentProducts||0),preLastProducedAt:Number(user.lastProducedAt||0),
             preDeliveryCount:current,preLifetime:Math.max(0,Number(user.deliveryCountLifetime||0)),
             preSpeedUpUsed:!!user.speedUpUsed,
@@ -4785,7 +4819,7 @@ app.post('/api/delivery/claim', async (req,res)=>{
         event.deliveryClaimAttempt=claimAttempt;
 
         const mutation=await atomicWalletMutationUnlocked(userId,{
-            deltaOrders:deliveredProducts,
+            deltaOrders:rewardedOrders,
             setFields:{
                 deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,
                 lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey()
@@ -4832,7 +4866,9 @@ app.post('/api/delivery/claim', async (req,res)=>{
             deliveryCount:Number(fresh.data.deliveryCount),
             remaining:Math.max(0,limit-Number(fresh.data.deliveryCount)),
             limit,bonusLimit:DELIVERY_MAX_BONUS,extraDeliveryCount:extra,
-            deliveredProducts,currentProducts:Number(fresh.data.currentProducts),
+            deliveredProducts,baseOrders,rewardedOrders,
+            goldenHourActive:!!goldenHour.active,goldenHourMultiplier,goldenHourEventId:goldenHour.eventId||null,
+            currentProducts:Number(fresh.data.currentProducts),
             orders:Number(fresh.data.orders),lastProducedAt:Number(fresh.data.lastProducedAt),
             speedUpUsed:!!fresh.data.speedUpUsed,
             walletUpdatedAt:fresh.data.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
@@ -5042,6 +5078,218 @@ function persistentEventKey(type, id) {
     return `${PERSISTENT_EVENT_PREFIX}${type}:${String(id)}`;
 }
 
+// ==================== GIỜ VÀNG X2 DELIVERY (SERVER AUTHORITATIVE) ====================
+const GOLDEN_HOUR_DURATION_MS = 15 * 60 * 1000;
+const GOLDEN_HOUR_PRE_NOTIFY_MS = 5 * 60 * 1000;
+const GOLDEN_HOUR_WATCHDOG_MS = 45 * 1000;
+const GOLDEN_HOUR_MIN_START_MINUTE = 7 * 60;
+const GOLDEN_HOUR_MAX_START_MINUTE = 20 * 60 + 45;
+const GOLDEN_HOUR_MIN_GAP_MINUTES = 4 * 60;
+const GOLDEN_HOUR_RANDOM_MAX_ATTEMPTS = 200;
+let goldenHourScheduleCache = null;
+let goldenHourSchedulePromise = null;
+let goldenHourSchedulePromiseDay = '';
+let goldenHourExactTimers = [];
+let goldenHourWatchdogTimer = null;
+let goldenHourSchedulerQueue = Promise.resolve();
+
+function goldenHourScheduleKey(dayKey) {
+    return `golden_hour:${String(dayKey)}`;
+}
+function goldenHourNotificationKey(eventId, type) {
+    return `golden_hour_notify:${String(eventId)}:${String(type)}`;
+}
+function vietnamDayStartMs(dayKey) {
+    const value = Date.parse(`${String(dayKey)}T00:00:00+07:00`);
+    return Number.isFinite(value) ? value : Date.now();
+}
+function isValidGoldenHourSchedule(schedule, dayKey) {
+    if (!schedule || schedule.dayKey !== dayKey || !Array.isArray(schedule.events) || schedule.events.length !== 3) return false;
+    const dayStart = vietnamDayStartMs(dayKey);
+    const events = schedule.events.map(e => ({...e,startAt:Number(e?.startAt||0),endAt:Number(e?.endAt||0)})).sort((a,b)=>a.startAt-b.startAt);
+    for (let i=0;i<events.length;i++) {
+        const e=events[i];
+        const startMinute=Math.round((e.startAt-dayStart)/60000);
+        if (!e.id || !Number.isFinite(e.startAt) || !Number.isFinite(e.endAt)) return false;
+        if (e.endAt-e.startAt !== GOLDEN_HOUR_DURATION_MS) return false;
+        if (startMinute < GOLDEN_HOUR_MIN_START_MINUTE || startMinute > GOLDEN_HOUR_MAX_START_MINUTE) return false;
+        if (e.endAt > dayStart + 21*60*60*1000) return false;
+        if (vietnamDayKey(new Date(e.startAt)) !== dayKey) return false;
+        if (i>0 && e.startAt-events[i-1].startAt < GOLDEN_HOUR_MIN_GAP_MINUTES*60000) return false;
+    }
+    return true;
+}
+function buildGoldenHourSchedule(dayKey) {
+    let starts = null;
+    const range = GOLDEN_HOUR_MAX_START_MINUTE - GOLDEN_HOUR_MIN_START_MINUTE + 1;
+    for (let attempt=0; attempt<GOLDEN_HOUR_RANDOM_MAX_ATTEMPTS; attempt++) {
+        const candidate = Array.from({length:3},()=>GOLDEN_HOUR_MIN_START_MINUTE + crypto.randomInt(range)).sort((a,b)=>a-b);
+        if (candidate[1]-candidate[0] >= GOLDEN_HOUR_MIN_GAP_MINUTES && candidate[2]-candidate[1] >= GOLDEN_HOUR_MIN_GAP_MINUTES) {
+            starts = candidate;
+            break;
+        }
+    }
+    // Bounded fallback: 08:00, 12:30, 18:00 always satisfies all constraints.
+    if (!starts) starts = [8*60, 12*60+30, 18*60];
+    const dayStart = vietnamDayStartMs(dayKey);
+    return {
+        dayKey,
+        createdAt:Date.now(),
+        events:starts.map((minute,index)=>{
+            const startAt=dayStart+minute*60000;
+            return {id:`${dayKey}-${index+1}-${minute}`,startAt,endAt:startAt+GOLDEN_HOUR_DURATION_MS};
+        })
+    };
+}
+async function ensureGoldenHourSchedule(dayKey = vietnamDayKey()) {
+    if (goldenHourScheduleCache && isValidGoldenHourSchedule(goldenHourScheduleCache, dayKey)) return goldenHourScheduleCache;
+    if (goldenHourSchedulePromise && goldenHourSchedulePromiseDay === dayKey) return goldenHourSchedulePromise;
+    goldenHourSchedulePromiseDay = dayKey;
+    goldenHourSchedulePromise = (async()=>{
+        const key = goldenHourScheduleKey(dayKey);
+        const existing = await readPersistentEvent(key);
+        if (isValidGoldenHourSchedule(existing, dayKey)) {
+            goldenHourScheduleCache = {...existing,events:[...existing.events].sort((a,b)=>Number(a.startAt)-Number(b.startAt))};
+            return goldenHourScheduleCache;
+        }
+        const generated = buildGoldenHourSchedule(dayKey);
+        let chosen = generated;
+        if (existing) {
+            // Corrupt/legacy value under today's key: repair only this dedicated setting, never user data.
+            const repaired = await writePersistentEvent(key, generated, 4);
+            if (!repaired) throw new Error('Không lưu được Golden Hour schedule đã repair.');
+            const readBack = await readPersistentEvent(key);
+            if (isValidGoldenHourSchedule(readBack, dayKey)) chosen = readBack;
+        } else {
+            const created = await createPersistentEventOnce(key, generated);
+            if (created.error) throw created.error;
+            if (isValidGoldenHourSchedule(created.value, dayKey)) chosen = created.value;
+        }
+        goldenHourScheduleCache = {...chosen,events:[...chosen.events].sort((a,b)=>Number(a.startAt)-Number(b.startAt))};
+        return goldenHourScheduleCache;
+    })();
+    try { return await goldenHourSchedulePromise; }
+    finally {
+        if (goldenHourSchedulePromiseDay === dayKey) {
+            goldenHourSchedulePromise = null;
+            goldenHourSchedulePromiseDay = '';
+        }
+    }
+}
+async function getGoldenHourSnapshot(nowMs = Date.now()) {
+    const schedule = await ensureGoldenHourSchedule(vietnamDayKey(new Date(nowMs)));
+    const now = Number(nowMs);
+    const activeEvent = schedule.events.find(e => Number(e.startAt) <= now && now < Number(e.endAt)) || null;
+    const nextEvent = schedule.events.find(e => Number(e.startAt) > now) || null;
+    return {
+        active:!!activeEvent,
+        multiplier:activeEvent ? 2 : 1,
+        eventId:activeEvent?.id || null,
+        startAt:activeEvent ? Number(activeEvent.startAt) : null,
+        endAt:activeEvent ? Number(activeEvent.endAt) : null,
+        nextStartAt:nextEvent ? Number(nextEvent.startAt) : null,
+        nextEndAt:nextEvent ? Number(nextEvent.endAt) : null
+    };
+}
+async function sendGoldenHourPreNotification(event, now = Date.now()) {
+    const startAt=Number(event?.startAt||0);
+    if (!startAt || now < startAt-GOLDEN_HOUR_PRE_NOTIFY_MS || now >= startAt) return false;
+    const markerKey=goldenHourNotificationKey(event.id,'pre');
+    const reserved=await createPersistentEventOnce(markerKey,{status:'reserved',eventId:event.id,type:'pre',reservedAt:Date.now()});
+    if (reserved.error || !reserved.created) return false;
+    const remainingMinutes=Math.max(1,Math.ceil((startAt-now)/60000));
+    const remainingText=remainingMinutes===5 ? `Còn *5 phút*` : `Còn khoảng *${remainingMinutes} phút*`;
+    const ok=await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
+        `🔥 *GIỜ VÀNG SẮP BẮT ĐẦU!*
+
+⏰ ${remainingText}
+🚚 Trong *15 phút*, mọi chuyến giao thành công nhận *X2 Đơn Hàng*!
+📦 Chuẩn bị giao hàng nào!`,
+        {parse_mode:'Markdown'}
+    );
+    await writePersistentEvent(markerKey,{status:ok?'sent':'failed',eventId:event.id,type:'pre',attemptedAt:Date.now(),startAt},2).catch(()=>{});
+    return ok;
+}
+async function sendGoldenHourEndNotification(event, now = Date.now()) {
+    const endAt=Number(event?.endAt||0);
+    if (!endAt || now < endAt) return false;
+    const markerKey=goldenHourNotificationKey(event.id,'end');
+    const reserved=await createPersistentEventOnce(markerKey,{status:'reserved',eventId:event.id,type:'end',reservedAt:Date.now()});
+    if (reserved.error || !reserved.created) return false;
+    const ok=await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
+        `🏁🔥 *GIỜ VÀNG ĐÃ KẾT THÚC!*
+
+🚚 X2 Đơn Hàng đã kết thúc.
+📦 Các chuyến giao tiếp theo nhận phần thưởng bình thường.
+✨ Hẹn gặp lại ở Giờ Vàng tiếp theo!`,
+        {parse_mode:'Markdown'}
+    );
+    await writePersistentEvent(markerKey,{status:ok?'sent':'failed',eventId:event.id,type:'end',attemptedAt:Date.now(),endAt},2).catch(()=>{});
+    return ok;
+}
+async function reconcileGoldenHourNotifications() {
+    const dayKey=vietnamDayKey();
+    const schedule=await ensureGoldenHourSchedule(dayKey);
+    const now=Date.now();
+    for (const event of schedule.events) {
+        if (now >= Number(event.startAt)-GOLDEN_HOUR_PRE_NOTIFY_MS && now < Number(event.startAt)) {
+            await sendGoldenHourPreNotification(event, now);
+        }
+        // If this feature is deployed for the first time after an event already ended, do not send a
+        // fake historical "ended" message. Existing schedules survive restart, so real missed end events
+        // still recover normally because their createdAt predates the event.
+        if (now >= Number(event.endAt) && Number(schedule.createdAt || 0) <= Number(event.endAt)) {
+            await sendGoldenHourEndNotification(event, now);
+        }
+    }
+    return schedule;
+}
+function clearGoldenHourExactTimers() {
+    goldenHourExactTimers.forEach(timer=>clearTimeout(timer));
+    goldenHourExactTimers=[];
+}
+function queueGoldenHourReconcile() {
+    goldenHourSchedulerQueue=goldenHourSchedulerQueue.then(async()=>{
+        const oldDay=goldenHourScheduleCache?.dayKey || '';
+        const schedule=await reconcileGoldenHourNotifications();
+        if (oldDay !== schedule.dayKey) scheduleGoldenHourExactTimers(schedule);
+    }).catch(e=>console.error('Golden Hour scheduler:',e.message));
+    return goldenHourSchedulerQueue;
+}
+function scheduleGoldenHourExactTimers(schedule) {
+    clearGoldenHourExactTimers();
+    const now=Date.now();
+    const points=[];
+    for (const event of schedule?.events || []) {
+        points.push(Number(event.startAt)-GOLDEN_HOUR_PRE_NOTIFY_MS,Number(event.startAt),Number(event.endAt));
+    }
+    for (const at of points) {
+        if (!Number.isFinite(at) || at <= now) continue;
+        goldenHourExactTimers.push(setTimeout(()=>{ queueGoldenHourReconcile(); },Math.max(1,at-Date.now())));
+    }
+}
+async function startGoldenHourScheduler() {
+    try {
+        const schedule=await reconcileGoldenHourNotifications();
+        scheduleGoldenHourExactTimers(schedule);
+    } catch (e) {
+        console.error('Không khởi tạo được Golden Hour:',e.message);
+    }
+    if (goldenHourWatchdogTimer) clearInterval(goldenHourWatchdogTimer);
+    goldenHourWatchdogTimer=setInterval(()=>{ queueGoldenHourReconcile(); },GOLDEN_HOUR_WATCHDOG_MS);
+}
+
+app.get('/api/golden-hour/status', async (_req,res)=>{
+    try {
+        const serverNow=Date.now();
+        const state=await getGoldenHourSnapshot(serverNow);
+        res.setHeader('Cache-Control','no-store');
+        return res.json({success:true,serverNow,...state});
+    } catch (e) {
+        return res.status(500).json({success:false,serverNow:Date.now(),active:false,multiplier:1,error:e.message});
+    }
+});
+
 const PERSISTENT_AD_ACTION_PURPOSES = new Set(['delivery','truck-upgrade','x2','coinbox','streak-recovery','bonus-task']);
 
 function completedAdEventKey(token) {
@@ -5116,12 +5364,25 @@ app.post('/api/ad/session/start', async (req, res) => {
             }
         }
 
-        const existingToken = activeAdByUser.get(normalizedUserId);
+        let existingToken = activeAdByUser.get(normalizedUserId);
+        // Recover the per-user active token after a Render restart. This index is only an active-session
+        // locator; actionId/session validation below remains mandatory and the client never gets another action's token.
+        if (!existingToken) {
+            const persistedActive = await readPersistentEvent(persistentEventKey('ad-active-user', normalizedUserId));
+            if (persistedActive?.status === 'active'
+                && Number(persistedActive.expiresAt || 0) > Date.now()
+                && persistedActive.token) {
+                existingToken = String(persistedActive.token);
+                activeAdByUser.set(normalizedUserId, existingToken);
+            }
+        }
         if (existingToken) {
             let existing = adSessions.get(existingToken);
+            let persistedExisting = null;
             if (!existing) {
-                const persistedExisting = await readPersistentEvent(persistentEventKey('ad-session', existingToken));
-                if (persistedExisting && (!persistedExisting.expiresAt || Date.now() < Number(persistedExisting.expiresAt))) {
+                persistedExisting = await readPersistentEvent(persistentEventKey('ad-session', existingToken));
+                if (persistedExisting && persistedExisting.status !== 'cancelled'
+                    && (!persistedExisting.expiresAt || Date.now() < Number(persistedExisting.expiresAt))) {
                     existing = {
                         userId:String(persistedExisting.userId || ''),
                         adType:persistedExisting.adType || 'rewarded',
@@ -5133,15 +5394,21 @@ app.post('/api/ad/session/start', async (req, res) => {
                     adSessions.set(existingToken, existing);
                 }
             }
-            if (existing && Date.now() - Number(existing.startedAt || 0) < 120000) {
-                // Retry của CHÍNH request start trước đó (response bị mất/timeout) phải nhận lại cùng token,
-                // không trả 409 khiến frontend đợi rồi tạo một phiên mới.
+            // A completed/cancelled/expired token belongs to the previous action and must never block or leak
+            // into the next action. Same-action retries below still recover the exact same live token.
+            const completedExisting = await loadCompletedAdEvent(existingToken);
+            const existingAge = existing ? Date.now() - Number(existing.startedAt || 0) : Number.POSITIVE_INFINITY;
+            const staleExisting = !!completedExisting || persistedExisting?.status === 'cancelled'
+                || !existing || existingAge >= 120000;
+            if (!staleExisting && existing) {
+                // Retry của CHÍNH request start trước đó (response bị mất/timeout) phải nhận lại cùng token.
                 if (normalizedActionId && existing.actionId === normalizedActionId
                     && existing.userId === normalizedUserId && existing.adType === adType
                     && existing.purpose === sessionPurpose) {
                     return res.json({success:true,token:existingToken,idempotent:true,recovered:true});
                 }
-                return res.status(409).json({success:false,retry:true,active:true,token:existingToken,error:'Đang có một quảng cáo được xử lý cho tài khoản này.'});
+                // Different action: keep security boundary and DO NOT return TOKEN_A to ACTION_B.
+                return res.status(409).json({success:false,retry:true,active:true,error:'Đang có một quảng cáo được xử lý cho tài khoản này.'});
             }
             activeAdByUser.delete(normalizedUserId);
             adSessions.delete(existingToken);
@@ -5161,11 +5428,21 @@ app.post('/api/ad/session/start', async (req, res) => {
             startedAt,
             expiresAt: startedAt + 10 * 60 * 1000
         });
-        // Với giao hàng, phải lưu được session BỀN VỮNG trước khi client mở QC. Nếu chưa lưu được,
-        // trả retry ngay lúc này để user không phải xem một quảng cáo mà server có thể mất token sau restart.
-        if (PERSISTENT_AD_ACTION_PURPOSES.has(sessionPurpose) && !sessionPersisted) {
+        const activeIndexPersisted = PERSISTENT_AD_ACTION_PURPOSES.has(sessionPurpose)
+            ? await writePersistentEvent(persistentEventKey('ad-active-user', normalizedUserId), {
+                status:'active',token,userId:normalizedUserId,adType,purpose:sessionPurpose,
+                actionId:normalizedActionId,startedAt,expiresAt:startedAt+120000
+            },3)
+            : true;
+        // Với action có reward nghiệp vụ, phải lưu được cả session + active index trước khi client mở QC.
+        // Nếu chưa lưu được, client retry cùng actionId thay vì xem một QC có thể mất phiên sau restart.
+        if (PERSISTENT_AD_ACTION_PURPOSES.has(sessionPurpose) && (!sessionPersisted || !activeIndexPersisted)) {
             adSessions.delete(token);
             if (activeAdByUser.get(normalizedUserId) === token) activeAdByUser.delete(normalizedUserId);
+            if (sessionPersisted) await writePersistentEvent(persistentEventKey('ad-session', token), {
+                userId:normalizedUserId,adType,purpose:sessionPurpose,sessionId:String(sessionId||''),
+                actionId:normalizedActionId,startedAt,status:'cancelled',expiresAt:Date.now()-1
+            },1).catch(()=>{});
             return res.status(503).json({success:false,retry:true,error:'Máy chủ chưa lưu được phiên Rewarded cho thao tác này. Vui lòng thử lại.'});
         }
         recordAntiFraudEvent(String(userId), 'ad_start', {
@@ -5204,6 +5481,12 @@ app.post('/api/ad/session/cancel', async (req, res) => {
     await writePersistentEvent(persistentEventKey('ad-session',token),{
         ...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1
     }).catch(()=>{});
+    const activeMarker=await readPersistentEvent(persistentEventKey('ad-active-user',userId));
+    if (String(activeMarker?.token||'')===token) {
+        await writePersistentEvent(persistentEventKey('ad-active-user',userId),{
+            ...activeMarker,status:'released',releasedAt:Date.now(),expiresAt:Date.now()-1
+        },1).catch(()=>{});
+    }
     return res.json({success:true,cancelled:true});
 });
 
@@ -5364,9 +5647,17 @@ app.post('/api/ad/session/complete', async (req, res) => {
         completed.completionResult=response;
         const completedPersisted = await persistCompletedAdEvent(String(token), completed);
         if (!completedPersisted && PERSISTENT_AD_ACTION_PURPOSES.has(purpose)) {
-            // Rewarded đã được server xác minh và counters đã commit. Trả token verified để client
-            // tiếp tục action bằng CHÍNH token này; không biến lỗi persistence thành "QC lỗi".
+            // Rewarded đã được server xác minh và counters đã commit. Phiên này KHÔNG còn được phép chặn
+            // action mới; retry /complete vẫn recover bằng completedAdEvents/lastBonusAdToken/persistent marker.
             completedAdEvents.set(String(token), completed);
+            adSessions.delete(token);
+            if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+            const activeMarker=await readPersistentEvent(persistentEventKey('ad-active-user',String(userId)));
+            if (String(activeMarker?.token||'')===String(token)) {
+                await writePersistentEvent(persistentEventKey('ad-active-user',String(userId)),{
+                    ...activeMarker,status:'released',releasedAt:Date.now(),expiresAt:Date.now()-1
+                },1).catch(()=>{});
+            }
             return res.status(503).json({
                 success:false,retry:true,verified:true,adToken:String(token),purpose,
                 error:'Quảng cáo đã được xác minh nhưng máy chủ đang đồng bộ trạng thái thao tác. Không cần xem lại quảng cáo.'
@@ -5378,9 +5669,11 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 completionResult:response, deliveryClaimResult:null, expiresAt:Date.now() + 30 * 60 * 1000
             });
             if (!persisted) {
-                // The user must not be forced to watch the Rewarded again. Keep the in-memory
-                // completion and leave the server session alive long enough for a retry of this request.
+                // Rewarded đã xác minh; giữ completion trong memory nhưng giải phóng active session để token
+                // cũ không thể chặn/action-mismatch với lần Rewarded mới. Retry /complete vẫn dùng đúng token.
                 completedAdEvents.set(String(token), completed);
+                adSessions.delete(token);
+                if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
                 return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Quảng cáo đã được xác minh nhưng máy chủ chưa lưu xong trạng thái. Đang chờ đồng bộ, không cần xem lại quảng cáo.'});
             }
         }
@@ -5534,7 +5827,47 @@ async function acquireWithdrawalQueue() {
     return release;
 }
 // Nhóm nhận thông báo rút tiền: https://t.me/khohangchatkiemtien
-const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
+function maskTelegramIdForPublic(userId) {
+    const id=String(userId || '');
+    if (id.length <= 3) return id;
+    return id.slice(0,3)+'*'.repeat(id.length-3);
+}
+function formatVndPublic(amount) {
+    return `${Math.max(0,Number(amount||0)).toLocaleString('vi-VN')} VNĐ`;
+}
+async function notifyWithdrawalRequestToGroup({userId,amount,txCode}) {
+    const markerKey=persistentEventKey('withdraw-request-notify',`${String(userId)}:${String(txCode||'')}`);
+    const reserved=await createPersistentEventOnce(markerKey,{status:'reserved',txCode:String(txCode||''),reservedAt:Date.now()});
+    if (reserved.error || !reserved.created) return false;
+    const ok=await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
+        `💸📤 *YÊU CẦU RÚT TIỀN MỚI*
+
+🆔 ID: \`${maskTelegramIdForPublic(userId)}\`
+💰 Số Tiền Rút: *${formatVndPublic(amount)}*
+🕒 Thời Gian Rút: *${vietnamTimeText()}*`,
+        {parse_mode:'Markdown'}
+    );
+    await writePersistentEvent(markerKey,{status:ok?'sent':'failed',txCode:String(txCode||''),attemptedAt:Date.now()},2).catch(()=>{});
+    return ok;
+}
+async function notifyWithdrawalSuccessToGroup(withdrawal) {
+    const notificationId=String(withdrawal?.id || withdrawal?.txCode || '');
+    if (!notificationId) return false;
+    const markerKey=persistentEventKey('withdraw-success-notify',notificationId);
+    const reserved=await createPersistentEventOnce(markerKey,{status:'reserved',withdrawalId:notificationId,reservedAt:Date.now()});
+    if (reserved.error || !reserved.created) return false;
+    const ok=await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
+        `✅💸 *LỆNH RÚT TIỀN THÀNH CÔNG*
+
+🆔 ID: \`${maskTelegramIdForPublic(withdrawal.userId)}\`
+💰 Số Tiền: *${formatVndPublic(withdrawal.amount)}*
+🕒 Thời Gian Duyệt: *${vietnamTimeText()}*`,
+        {parse_mode:'Markdown'}
+    );
+    await writePersistentEvent(markerKey,{status:ok?'sent':'failed',withdrawalId:notificationId,attemptedAt:Date.now()},2).catch(()=>{});
+    return ok;
+}
+
 app.post('/api/withdraw', async (req, res) => {
     const authUserId = String(req.body?.userId || req.params?.id || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -5717,13 +6050,8 @@ app.post('/api/withdraw', async (req, res) => {
         }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
-        // Thông báo rút tiền lên nhóm https://t.me/khohangchatkiemtien
-        // ID chỉ hiện 3 số đầu, phần còn lại che bằng dấu sao để không lộ danh tính người dùng.
-        const idText = String(userId);
-        const maskedId = idText.length > 3 ? idText.slice(0, 3) + '*'.repeat(idText.length - 3) : idText;
-        await safeSendMessage(WITHDRAW_NOTIFY_CHAT,
-            `ID: ${maskedId}\nSố Tiền Rút: ${amountVnd.toLocaleString('vi-VN')} VNĐ\nThời Gian Rút: ${vietnamTimeText()}`
-        );
+        // Public group notification contains only masked Telegram ID, amount and Vietnam server time.
+        await notifyWithdrawalRequestToGroup({userId,amount:amountVnd,txCode});
 
         // Consume CAPTCHA only AFTER the withdrawal row + Orders debit are both committed.
         const withdrawResult = { success:true, txCode, orders:updatedRows[0].orders, walletUpdatedAt:updatedRows[0].walletUpdatedAt, withdrawRemain:0 };
@@ -5940,11 +6268,21 @@ app.post('/api/admin/update-withdrawal', async (req, res) => {
     const { data: current, error: fetchErr } = await supabase.from('withdrawals').select('*').eq('id', id).single();
     if (fetchErr || !current) return res.status(404).json({ success: false, error: "Không tìm thấy đơn rút." });
 
-    const { error } = await supabase.from('withdrawals').update({ status, reason }).eq('id', id);
+    if (!['pending','success','rejected','refunded'].includes(status)) return res.status(400).json({success:false,error:'Trạng thái withdrawal không hợp lệ.'});
+    if (current.status === status) {
+        if (status === 'success') await notifyWithdrawalSuccessToGroup(current);
+        return res.json({success:true,idempotent:true});
+    }
+    const { data: updatedRows, error } = await supabase.from('withdrawals')
+        .update({ status, reason }).eq('id', id).eq('status', current.status).select('*');
     if (error) {
         console.error("Lỗi cập nhật trạng thái rút tiền:", error);
         return res.status(500).json({ success: false, error: error.message });
     }
+    if (!updatedRows || updatedRows.length === 0) {
+        return res.status(409).json({success:false,retry:true,error:'Đơn rút vừa được xử lý bởi thao tác khác.'});
+    }
+    const updatedWithdrawal=updatedRows[0];
 
     // Hoàn trả đơn hàng nếu đơn đang Chờ duyệt bị chuyển sang Từ chối/Hoàn trả
     if (current.status === 'pending' && (status === 'rejected' || status === 'refunded')) {
@@ -5958,10 +6296,13 @@ app.post('/api/admin/update-withdrawal', async (req, res) => {
         );
     } else if (status === 'success') {
         await safeSendLocalizedMessage(current.userId,
-            `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!\n💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
-            `✅ Withdrawal #${current.txCode || current.id} has been *APPROVED*!\n💰 Amount: ${(current.amount || 0).toLocaleString()} VND`,
+            `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!
+💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
+            `✅ Withdrawal #${current.txCode || current.id} has been *APPROVED*!
+💰 Amount: ${(current.amount || 0).toLocaleString()} VND`,
             { parse_mode: 'Markdown' }
         );
+        await notifyWithdrawalSuccessToGroup(updatedWithdrawal);
     }
 
     res.json({ success: true });
@@ -6066,4 +6407,7 @@ app.get('/admin', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+    startGoldenHourScheduler().catch(e=>console.error('Golden Hour startup:',e.message));
+});
