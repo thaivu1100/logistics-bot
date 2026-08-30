@@ -296,7 +296,7 @@ const GROUP_1_ID = parseInt(process.env.GROUP_1_ID); // Kênh thông báo
 const GROUP_2_ID = parseInt(process.env.GROUP_2_ID); // Nhóm chat
 // Nhóm dành riêng cho nhiệm vụ "Tham gia nhóm" (mục Nhiệm Vụ) - KHÁC 2 nhóm bắt buộc GROUP_1_ID/GROUP_2_ID
 // ở trên (điều kiện referral/vào Mini App không đổi). Dùng username public nên không cần thêm ID số.
-const TASK_GROUP_USERNAME = process.env.TASK_GROUP_USERNAME || '@sharekeotonghop';
+const TASK_GROUP_USERNAME = '@Vua_Dao_Quang';
 const ADMIN_ID = 6327666718;
 const ADMIN_PASS = process.env.ADMIN_PASS;
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
@@ -2712,14 +2712,22 @@ bot.command('broadcast', async (ctx) => {
 const VIETNAM_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 const WEEKLY_ADS_KEY = 'weekly_ads_counts';
 const WEEKLY_INVITE_MIN = 5;
-const WEEKLY_ADS_MIN = 50;
+const WEEKLY_ADS_MIN = 70;
 const WEEKLY_WATCHDOG_MS = 45 * 1000;
 const WEEKLY_PROCESS_ID = crypto.randomBytes(8).toString('hex');
-const WEEKLY_TOP_REWARDS = [
-    { rank: 1, orders: 75000, spins: 8, label: '🥇 Hạng 1' },
-    { rank: 2, orders: 45000, spins: 5, label: '🥈 Hạng 2' },
-    { rank: 3, orders: 25000, spins: 3, label: '🥉 Hạng 3' }
+const WEEKLY_INVITE_TOP_REWARDS = [
+    { rank: 1, orders: 75000, spins: 5, label: '🥇 Hạng 1' },
+    { rank: 2, orders: 50000, spins: 3, label: '🥈 Hạng 2' },
+    { rank: 3, orders: 25000, spins: 2, label: '🥉 Hạng 3' }
 ];
+const WEEKLY_ADS_TOP_REWARDS = [
+    { rank: 1, orders: 50000, spins: 3, label: '🥇 Hạng 1' },
+    { rank: 2, orders: 30000, spins: 2, label: '🥈 Hạng 2' },
+    { rank: 3, orders: 20000, spins: 1, label: '🥉 Hạng 3' }
+];
+function weeklyRewardsForBoard(boardType) {
+    return boardType === 'invite' ? WEEKLY_INVITE_TOP_REWARDS : WEEKLY_ADS_TOP_REWARDS;
+}
 
 let weeklyLeaderboardQueue = Promise.resolve();
 let weeklyExactTimer = null;
@@ -2951,14 +2959,24 @@ async function ensureWeeklyPayout(boardType, endedWeekKey, entry, prize) {
     }
 
     // Transaction log: query trước khi insert để retry sau crash không tạo dòng thứ hai.
+    // reason luôn chứa đủ board/rank/orders/spins; nếu schema có các cột metadata tương ứng thì insertRowSafe
+    // sẽ ghi luôn, còn schema cũ vẫn hoạt động mà không cần SQL.
     if (!marker.transactionLogged) {
-        const reason = `${prize.label} BXH ${boardType === 'invite' ? 'mời bạn' : 'Xem QC'} tuần ${endedWeekKey}`;
+        const boardName = boardType === 'invite' ? 'mời bạn' : 'Xem QC';
+        const reason = `${prize.label} BXH ${boardName} tuần ${endedWeekKey} | board=${boardType} rank=${prize.rank} orders=${prize.orders} spins=${prize.spins}`;
         const { data: existingTx, error: txReadError } = await supabase.from('transactions')
             .select('*').eq('userId', String(entry.id)).eq('reason', reason).limit(1);
         if (txReadError) return false;
         if (!existingTx || existingTx.length === 0) {
             const tx = await insertRowSafe('transactions', {
-                userId: String(entry.id), type: 'orders', amount: prize.orders, reason
+                userId: String(entry.id),
+                type: 'orders',
+                amount: prize.orders,
+                reason,
+                board: boardType,
+                rank: prize.rank,
+                orders: prize.orders,
+                spins: prize.spins
             });
             if (tx.error) return false;
         }
@@ -3044,9 +3062,10 @@ async function processWeeklyBoard(boardType, stateId, currentWeek) {
     const snapshot = await loadOrCreateWeeklySnapshot(boardType, endedWeekKey);
     if (!snapshot || !Array.isArray(snapshot.entries)) return false;
 
-    // Snapshot bất biến -> payout Top 1-3 theo đúng tuần vừa kết thúc.
+    // Snapshot bất biến -> payout Top 1-3 theo đúng tuần vừa kết thúc, mỗi board dùng reward riêng.
+    const boardRewards = weeklyRewardsForBoard(boardType);
     for (let i = 0; i < Math.min(3, snapshot.entries.length); i++) {
-        const prize = WEEKLY_TOP_REWARDS[i];
+        const prize = boardRewards[i];
         const ok = await ensureWeeklyPayout(boardType, endedWeekKey, snapshot.entries[i], prize);
         if (!ok) return false; // không reset nếu payout/DB chưa ở trạng thái an toàn
     }
@@ -3340,6 +3359,11 @@ app.get('/api/user/:id', async (req, res) => {
         try { data.referralMilestones = JSON.parse(data.referralMilestones); } catch (_) { data.referralMilestones = []; }
     }
     
+    // Frontend cũ vẫn đọc boolean groupTaskClaimed, nhưng từ campaign mới trở đi boolean này phải phản ánh
+    // RIÊNG campaign @Vua_Dao_Quang, không được để claim nhóm cũ chặn nhiệm vụ mới.
+    data.groupTaskClaimed = await isGroupTaskCampaignClaimed(req.params.id);
+    data.groupTaskCampaignId = GROUP_TASK_CAMPAIGN_ID;
+
     // Thêm level stats vào response
     const levelStats = calculateLevelStats(data.truckLevel || 1);
     
@@ -3387,7 +3411,8 @@ app.post('/api/user/:id', async (req, res) => {
             'lastSmartlinkTime','lastSmartlinkAttemptId',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds',
             'dailyTasks', 'allTasksClaimed', 'lastResetDate',
-            'weeklyAdsCount', 'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed'
+            'weeklyAdsCount', 'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed',
+            'groupTaskCampaignClaims', 'groupTaskCampaignId'
         ].forEach(f => { delete updateData[f]; });
 
         // Handle referralMilestones as JSON string
@@ -4001,29 +4026,85 @@ app.post('/api/task/claim-all', async (req,res) => {
     } catch(e) { res.status(500).json({success:false,error:e.message}); } finally { taskClaimProcessing.delete(lockKey); }
 });
 
-// ==================== NHIỆM VỤ "THAM GIA NHÓM" (1 LẦN DUY NHẤT, KHÔNG RESET THEO NGÀY) ====================
-// Khác hẳn TASK_REWARDS/claimServerTask() ở trên (dùng chung "serverTaskClaims" bị XOÁ mỗi khi sang ngày
-// mới - xem dailyResetFields/claims.__date), nhiệm vụ này chỉ được thưởng ĐÚNG 1 LẦN trong toàn bộ vòng
-// đời tài khoản nên PHẢI dùng cờ riêng "groupTaskClaimed", không được lẫn vào object claims theo ngày đó.
-// Ưu tiên CAS (compare-and-swap) trực tiếp trên cột thật của bảng users (an toàn tuyệt đối với 2 request
-// song song, giống hệt cách tryFinalizeReferral() đang khoá referrerCounted). Nếu cột "groupTaskClaimed"
-// CHƯA tồn tại trên Supabase (chưa chạy SQL migration optional bên dưới) thì tự động rơi về kho lưu tạm
-// user_extra_state kèm khoá bộ nhớ theo user - vẫn chống được double-claim ở mức tương đương cách hệ thống
-// đang dùng cho serverReferralMilestones, và sẽ tự chuyển sang dùng cột thật ngay khi migration được chạy.
-//
-// SQL migration TÙY CHỌN (không bắt buộc để tính năng hoạt động):
-//   alter table users add column if not exists "groupTaskClaimed" boolean default false;
+// ==================== NHIỆM VỤ "THAM GIA NHÓM" — VERSIONED CAMPAIGN ====================
+// Campaign mới KHÔNG dùng boolean groupTaskClaimed cũ làm source-of-truth. Claim cũ vẫn được giữ nguyên,
+// còn campaign @Vua_Dao_Quang có marker riêng trong app_settings + mirror groupTaskCampaignClaims trong
+// user_extra_state. Marker persistent được reserve trước khi cộng ví để chống double reward qua double-click,
+// nhiều instance Render, retry API và crash đúng cửa sổ sau wallet mutation.
 const TASK_GROUP_REWARD = { coins: 500, orders: 500 };
+const GROUP_TASK_CAMPAIGN_ID = 'vua_dao_quang_2026_09';
+const GROUP_TASK_PROCESS_ID = crypto.randomBytes(8).toString('hex');
+
+function groupTaskCampaignEventKey(userId) {
+    return persistentEventKey('group-task-campaign', `${GROUP_TASK_CAMPAIGN_ID}:${String(userId)}`);
+}
+
+function normalizeGroupTaskCampaignClaims(value) {
+    return (value && typeof value === 'object' && !Array.isArray(value)) ? { ...value } : {};
+}
+
+async function markGroupTaskCampaignClaimed(userId) {
+    const extra = await getUserExtra(userId);
+    const claims = normalizeGroupTaskCampaignClaims(extra?.groupTaskCampaignClaims);
+    if (claims[GROUP_TASK_CAMPAIGN_ID] === true) return true;
+    claims[GROUP_TASK_CAMPAIGN_ID] = true;
+    await saveUserExtra(userId, { groupTaskCampaignClaims: claims });
+    return flushUserExtra();
+}
+
+async function isGroupTaskCampaignClaimed(userId) {
+    const extra = await getUserExtra(userId);
+    const claims = normalizeGroupTaskCampaignClaims(extra?.groupTaskCampaignClaims);
+    if (claims[GROUP_TASK_CAMPAIGN_ID] === true) return true;
+
+    // Persistent marker là source-of-truth crash/restart-safe. Nếu mirror user_extra_state chưa kịp flush
+    // trước khi instance chết thì lần đọc sau tự khôi phục lại mirror, không làm user nhận thưởng lần hai.
+    const marker = await readPersistentEvent(groupTaskCampaignEventKey(userId));
+    if (marker?.status === 'committed') {
+        await markGroupTaskCampaignClaimed(userId);
+        return true;
+    }
+    return false;
+}
+
 async function checkTaskGroupMembership(userId) {
     try {
-        const m = await bot.telegram.getChatMember(TASK_GROUP_USERNAME, userId).catch(() => ({ status: 'left' }));
-        return ['member', 'administrator', 'creator'].includes(m.status);
+        const member = await bot.telegram.getChatMember(TASK_GROUP_USERNAME, userId);
+        return {
+            checked: true,
+            isMember: ['member', 'administrator', 'creator'].includes(member?.status),
+            status: member?.status || 'unknown'
+        };
     } catch (e) {
-        console.error(`Lỗi check thành viên nhóm nhiệm vụ ${userId}:`, e.message);
-        return false;
+        console.error(`Lỗi check thành viên ${TASK_GROUP_USERNAME} cho ${userId}:`, e?.message || e);
+        return {
+            checked: false,
+            isMember: false,
+            status: 'error',
+            error: e?.message || 'Telegram Bot API không thể xác minh thành viên.'
+        };
     }
 }
+
 const groupTaskProcessing = new Set();
+
+async function ensureGroupTaskTransactionLog(userId, reward) {
+    const reason = `Nhiệm vụ Tham gia nhóm ${TASK_GROUP_USERNAME} | campaign=${GROUP_TASK_CAMPAIGN_ID}`;
+    for (const [type, amount] of [['coin', reward.coins], ['orders', reward.orders]]) {
+        const { data: rows, error } = await supabase.from('transactions')
+            .select('userId').eq('userId', String(userId)).eq('type', type).eq('reason', reason).limit(1);
+        if (error) return false;
+        if (!rows || rows.length === 0) {
+            const written = await insertRowSafe('transactions', {
+                userId: String(userId), type, amount, reason,
+                campaignId: GROUP_TASK_CAMPAIGN_ID
+            });
+            if (written.error) return false;
+        }
+    }
+    return true;
+}
+
 async function claimGroupTask(userId) {
     const key = String(userId);
     if (groupTaskProcessing.has(key)) return { ok:false, reason:'processing' };
@@ -4035,75 +4116,189 @@ async function claimGroupTask(userId) {
         const { data:user, error:userErr } = await readUserRow(userId);
         if (userErr || !user) return { ok:false, reason:'user_not_found' };
         if (user.isBanned) return { ok:false, reason:'banned' };
-        if (user.groupTaskClaimed === true) return { ok:false, reason:'already_claimed' };
 
-        const isMember = await checkTaskGroupMembership(userId);
-        if (!isMember) return { ok:false, reason:'not_member' };
+        // Chỉ kiểm tra claim campaign MỚI. Tuyệt đối không đọc groupTaskClaimed cũ để chặn.
+        if (await isGroupTaskCampaignClaimed(userId)) return { ok:false, reason:'already_claimed' };
 
-        // Thử CAS trên cột thật trước (an toàn tuyệt đối với 2 request song song)
-        const { data: claimRows, error: claimError } = await supabase.from('users')
-            .update({ groupTaskClaimed: true })
-            .eq('id', userId)
-            .eq('groupTaskClaimed', false)
-            .select('id');
-        let usedFallbackStore = false;
-        if (claimError) {
-            const missingCol = extractMissingColumn(claimError);
-            if (missingCol !== 'groupTaskClaimed') {
-                console.error('Lỗi claim nhiệm vụ nhóm:', claimError);
-                return { ok:false, reason:'claim_error' };
-            }
-            // Cột chưa tồn tại trên Supabase -> dùng kho lưu tạm với double-check trước khi ghi
-            usedFallbackStore = true;
-            const extra = await getUserExtra(userId);
-            if (extra?.groupTaskClaimed === true) return { ok:false, reason:'already_claimed' };
-            await saveUserExtra(userId, { groupTaskClaimed: true });
-            await flushUserExtra();
-        } else if (!claimRows || claimRows.length === 0) {
-            // Một request khác đã claim xong trong lúc hàm này đang kiểm tra ở trên
+        const membership = await checkTaskGroupMembership(userId);
+        if (!membership.checked) {
+            return { ok:false, reason:'membership_check_failed', membershipError:membership.error };
+        }
+        if (!membership.isMember) return { ok:false, reason:'not_member', memberStatus:membership.status };
+
+        const markerKey = groupTaskCampaignEventKey(userId);
+        const payoutId = `group-task:${GROUP_TASK_CAMPAIGN_ID}:${key}`;
+        let marker = await readPersistentEvent(markerKey);
+        let createdByThisProcess = false;
+
+        if (!marker) {
+            const { data:current, error:currentError } = await readUserRow(userId);
+            if (currentError || !current) return { ok:false, reason:'user_not_found' };
+            const reservation = {
+                status:'reserved',
+                payoutId,
+                campaignId:GROUP_TASK_CAMPAIGN_ID,
+                userId:key,
+                coins:TASK_GROUP_REWARD.coins,
+                orders:TASK_GROUP_REWARD.orders,
+                preCoins:Number(current.coins || 0),
+                preOrders:Number(current.orders || 0),
+                targetCoins:Number(current.coins || 0) + TASK_GROUP_REWARD.coins,
+                targetOrders:Number(current.orders || 0) + TASK_GROUP_REWARD.orders,
+                owner:GROUP_TASK_PROCESS_ID,
+                reservedAt:Date.now(),
+                leaseUntil:Date.now() + 20 * 1000,
+                fraudLogged:false,
+                transactionLogged:false
+            };
+            const once = await createPersistentEventOnce(markerKey, reservation);
+            if (once.error) return { ok:false, reason:'claim_marker_error', error:once.error };
+            marker = once.value || reservation;
+            createdByThisProcess = !!once.created;
+        }
+
+        if (marker.status === 'committed') {
+            await markGroupTaskCampaignClaimed(userId);
             return { ok:false, reason:'already_claimed' };
         }
 
-        const mutation = await atomicWalletMutation(userId, {
-            deltaCoins: TASK_GROUP_REWARD.coins,
-            deltaOrders: TASK_GROUP_REWARD.orders
-        });
-        if (mutation.error) {
-            // Ghi ví thất bại -> hoàn tác cờ claim để không mất vĩnh viễn cơ hội nhận thưởng, cho phép
-            // user bấm kiểm tra lại ở lần sau.
-            if (usedFallbackStore) await saveUserExtra(userId, { groupTaskClaimed: false });
-            else await supabase.from('users').update({ groupTaskClaimed: false }).eq('id', userId);
-            return { ok:false, reason:'wallet_update_failed', error:mutation.error };
+        if (!createdByThisProcess && marker.owner && marker.owner !== GROUP_TASK_PROCESS_ID
+            && Number(marker.leaseUntil || 0) > Date.now()) {
+            return { ok:false, reason:'processing' };
         }
 
-        await recordAntiFraudEvent(userId, 'task', { rewardEvent:true, coins:TASK_GROUP_REWARD.coins, orders:TASK_GROUP_REWARD.orders });
-        logTransaction(userId, 'coin', TASK_GROUP_REWARD.coins, 'Nhiệm vụ Tham gia nhóm');
-        logTransaction(userId, 'orders', TASK_GROUP_REWARD.orders, 'Nhiệm vụ Tham gia nhóm');
-        const { data: fresh } = await readUserRow(userId);
-        return { ok:true, reward:TASK_GROUP_REWARD, coins:fresh?.coins||0, orders:fresh?.orders||0, walletUpdatedAt:fresh?.walletUpdatedAt||null };
+        const { data:current, error:currentError } = await readUserRow(userId);
+        if (currentError || !current) return { ok:false, reason:'user_not_found' };
+
+        // Crash recovery: marker luôn được đổi sang "mutating" TRƯỚC atomicWalletMutation.
+        // Nếu process chết sau khi ví đã tăng nhưng trước "committed", target balance ngăn cộng lại lần hai.
+        const alreadyApplied = String(current.lastGroupTaskCampaignPayoutId || '') === payoutId
+            || (marker.status === 'mutating'
+                && Number(current.coins || 0) >= Number(marker.targetCoins || Number.MAX_SAFE_INTEGER)
+                && Number(current.orders || 0) >= Number(marker.targetOrders || Number.MAX_SAFE_INTEGER));
+
+        if (!alreadyApplied) {
+            marker = {
+                ...marker,
+                status:'mutating',
+                owner:GROUP_TASK_PROCESS_ID,
+                mutatingAt:Date.now(),
+                leaseUntil:Date.now() + 20 * 1000
+            };
+            if (!(await writePersistentEvent(markerKey, marker, 4))) {
+                return { ok:false, reason:'claim_marker_error' };
+            }
+
+            const mutation = await atomicWalletMutation(userId, {
+                deltaCoins:TASK_GROUP_REWARD.coins,
+                deltaOrders:TASK_GROUP_REWARD.orders,
+                setFields:{ lastGroupTaskCampaignPayoutId:payoutId }
+            });
+            if (mutation.error) {
+                // Marker giữ trạng thái mutating để retry/recovery an toàn; KHÔNG xoá marker rồi mở cửa double reward.
+                console.error('Lỗi cộng thưởng nhiệm vụ nhóm campaign:', mutation.error.message);
+                return { ok:false, reason:'wallet_update_failed', error:mutation.error };
+            }
+        }
+
+        const { data:verified, error:verifyError } = await readUserRow(userId);
+        if (verifyError || !verified
+            || Number(verified.coins || 0) < Number(marker.targetCoins || 0)
+            || Number(verified.orders || 0) < Number(marker.targetOrders || 0)) {
+            return { ok:false, reason:'wallet_verify_failed' };
+        }
+
+        marker = {
+            ...marker,
+            status:'committed',
+            owner:GROUP_TASK_PROCESS_ID,
+            committedAt:marker.committedAt || Date.now(),
+            leaseUntil:0
+        };
+        if (!(await writePersistentEvent(markerKey, marker, 4))) {
+            return { ok:false, reason:'claim_marker_error' };
+        }
+
+        // Mirror trạng thái campaign mới vào user_extra_state để reload/đổi máy đọc nhanh, nhưng marker phía trên
+        // vẫn là source-of-truth nếu Render chết trước khi mirror flush xong.
+        await markGroupTaskCampaignClaimed(userId);
+
+        if (!marker.fraudLogged) {
+            await recordAntiFraudEvent(userId, 'task', {
+                rewardEvent:true,
+                coins:TASK_GROUP_REWARD.coins,
+                orders:TASK_GROUP_REWARD.orders,
+                campaignId:GROUP_TASK_CAMPAIGN_ID
+            });
+            marker.fraudLogged = true;
+            await writePersistentEvent(markerKey, marker, 2);
+        }
+
+        if (!marker.transactionLogged) {
+            if (await ensureGroupTaskTransactionLog(userId, TASK_GROUP_REWARD)) {
+                marker.transactionLogged = true;
+                await writePersistentEvent(markerKey, marker, 2);
+            }
+        }
+
+        const { data:fresh } = await readUserRow(userId);
+        return {
+            ok:true,
+            reward:TASK_GROUP_REWARD,
+            campaignId:GROUP_TASK_CAMPAIGN_ID,
+            coins:fresh?.coins || 0,
+            orders:fresh?.orders || 0,
+            walletUpdatedAt:fresh?.walletUpdatedAt || null
+        };
     } finally {
         groupTaskProcessing.delete(key);
     }
 }
+
 app.post('/api/task/group/claim', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if (!assertTelegramUser(req, authUserId)) {
+        return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    }
     try {
         const result = await claimGroupTask(authUserId);
         if (!result.ok) {
-            if (result.reason === 'already_claimed') return res.json({success:true,alreadyClaimed:true});
-            if (result.reason === 'processing') return res.status(409).json({success:false,retry:true,error:'Đang xử lý, vui lòng thử lại.'});
-            if (result.reason === 'not_member') return res.status(400).json({success:false,error:'not_member'});
-            if (result.reason === 'fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
+            if (result.reason === 'already_claimed') {
+                return res.json({success:true,alreadyClaimed:true,campaignId:GROUP_TASK_CAMPAIGN_ID});
+            }
+            if (result.reason === 'processing') {
+                return res.status(409).json({success:false,retry:true,error:'Đang xử lý, vui lòng thử lại.'});
+            }
+            if (result.reason === 'not_member') {
+                return res.status(400).json({success:false,error:'not_member'});
+            }
+            if (result.reason === 'membership_check_failed') {
+                return res.status(503).json({
+                    success:false,
+                    error:'membership_check_failed',
+                    message:`Không thể xác minh thành viên ${TASK_GROUP_USERNAME} qua Telegram Bot API. Bot cần có quyền phù hợp trong nhóm.`
+                });
+            }
+            if (result.reason === 'fraud_hold') {
+                return res.status(result.fraudGate.status).json({
+                    success:false,...result.fraudGate,verificationRequired:true
+                });
+            }
             return res.status(400).json({success:false,error:result.reason});
         }
-        res.json({success:true, reward:result.reward, coins:result.coins, orders:result.orders, walletUpdatedAt:result.walletUpdatedAt});
+        res.json({
+            success:true,
+            reward:result.reward,
+            campaignId:result.campaignId,
+            coins:result.coins,
+            orders:result.orders,
+            walletUpdatedAt:result.walletUpdatedAt
+        });
     } catch (e) {
         console.error('Lỗi claim nhiệm vụ nhóm:', e);
         res.status(500).json({success:false,error:e.message});
     }
 });
-
 
 
 const QUIZ_QUESTIONS = [
