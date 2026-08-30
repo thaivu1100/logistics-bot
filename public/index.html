@@ -86,6 +86,11 @@
         .delivery-status-card { position:relative; z-index:3; width:min(390px,calc(100% - 34px)); margin-top:18px; padding:13px 16px; border-radius:20px; background:rgba(15,23,42,.78); border:1px solid rgba(255,255,255,.09); box-shadow:0 14px 35px rgba(0,0,0,.3); text-align:center; backdrop-filter:blur(12px); }
         .delivery-status-title { font-weight:900; font-size:13px; letter-spacing:.04em; }
         .delivery-status-orders { margin-top:5px; color:#fbbf24; font-weight:900; font-size:11px; }
+        .golden-hour-card { position:relative; overflow:hidden; width:100%; min-width:0; border-radius:22px; padding:12px 14px; background:linear-gradient(135deg,rgba(127,29,29,.92),rgba(146,64,14,.90)); border:1px solid rgba(251,191,36,.38); box-shadow:0 10px 28px rgba(0,0,0,.24); }
+        .golden-hour-card::after { content:'🔥'; position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:44px; opacity:.10; pointer-events:none; }
+        .golden-hour-title { position:relative; z-index:1; font-size:12px; font-weight:900; letter-spacing:.035em; overflow-wrap:anywhere; }
+        .golden-hour-desc { position:relative; z-index:1; margin-top:4px; font-size:9px; font-weight:800; line-height:1.35; opacity:.92; overflow-wrap:anywhere; }
+        .golden-hour-countdown { position:relative; z-index:1; display:inline-flex; align-items:center; gap:5px; margin-top:7px; padding:5px 9px; max-width:100%; border-radius:999px; background:rgba(15,23,42,.45); font-size:11px; font-weight:900; font-variant-numeric:tabular-nums; }
         .delivery-progress-track { height:6px; margin-top:10px; border-radius:999px; overflow:hidden; background:rgba(148,163,184,.18); }
         .delivery-progress-fill { height:100%; width:38%; border-radius:999px; background:linear-gradient(90deg,#3b82f6,#fbbf24,#22c55e); animation:deliveryProgress 2.65s cubic-bezier(.2,.8,.2,1) forwards; box-shadow:0 0 14px rgba(251,191,36,.45); }
         .delivery-success-spark { position:absolute; right:34px; bottom:74px; z-index:25; font-size:18px; opacity:0; }
@@ -245,6 +250,11 @@
         .low-graphics .delivery-animation {
             background: #0b1120 !important;
             background-image: none !important;
+        }
+        .low-graphics .golden-hour-card {
+            background: #7c2d12 !important;
+            background-image: none !important;
+            box-shadow: none !important;
         }
         .low-graphics .task-card::before,
         .low-graphics .cta-shine::after {
@@ -629,8 +639,8 @@
         </div>
         <div class="delivery-status-card">
             <div class="delivery-status-title" x-text="isTruckMoving ? texts.deliveryDriving : texts.deliveryLoading"></div>
-            <div class="delivery-status-orders" x-show="_deliveryDeliveredProducts > 0">
-                +<span x-text="formatNumber(_deliveryDeliveredProducts)"></span> <span x-text="texts.ordersTarget"></span>
+            <div class="delivery-status-orders" x-show="_deliveryRewardedOrders > 0">
+                +<span x-text="formatNumber(_deliveryRewardedOrders)"></span> <span x-text="texts.ordersTarget"></span>
             </div>
             <div class="delivery-progress-track"><div class="delivery-progress-fill"></div></div>
         </div>
@@ -688,6 +698,12 @@
                 <div class="glass p-3 rounded-[20px] flex justify-between items-center card-padding">
                     <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + '/' + maxTruckLevel + ' - ' + truckName"></p></div>
                     <div class="text-right"><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.products"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
+                </div>
+
+                <div x-show="goldenHourVisible" x-cloak class="golden-hour-card" aria-live="polite">
+                    <div class="golden-hour-title" x-text="goldenHourActive ? texts.goldenHourActiveTitle : texts.goldenHourSoonTitle"></div>
+                    <div class="golden-hour-desc" x-text="goldenHourActive ? texts.goldenHourActiveDesc : texts.goldenHourSoonDesc"></div>
+                    <div class="golden-hour-countdown">⏰ <span x-text="goldenHourCountdown"></span></div>
                 </div>
                 
                 <!-- BĂNG CHUYỀN SẢN XUẤT (hiện khi đang đếm ngược) -->
@@ -1572,7 +1588,7 @@
                 contactAdmin: 'Liên hệ Admin', enterCode: 'Mã...', redeem: 'Nhận',
                 redeemHistoryLabel: 'Lịch sử nhập code', noRedeemHistory: 'Chưa nhập mã nào', privateOnlyMe: 'Chỉ mình bạn thấy',
                 giftcodePageTitle: '🎟️ Nhập Code', giftcodeDesc: 'Nhập mã để nhận thưởng ngay. Phần thưởng chỉ mình bạn thấy được.',
-                deliveryComplete: 'Giao hàng thành công! +', ordersTarget: 'Đơn hàng',
+                deliveryComplete: 'Giao hàng thành công! +', ordersTarget: 'Đơn hàng', goldenHourSoonTitle:'🔥 GIỜ VÀNG SẮP BẮT ĐẦU', goldenHourActiveTitle:'🔥 GIỜ VÀNG X2', goldenHourSoonDesc:'🚚 Sắp X2 Đơn Hàng khi giao!', goldenHourActiveDesc:'📦 MỌI CHUYẾN GIAO NHẬN X2 ĐƠN HÀNG',
                 adsTarget: 'Quảng cáo', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Lượt rút',
                 bannedTitle: 'Tài Khoản Của Bạn Đã Bị Khóa', bannedDesc: 'Vui Lòng Liên Hệ Admin Để Được Hỗ Trợ!', bannedContact: '☎️ Liên hệ Admin',
                 deliverySuccessTitle: 'GIAO HÀNG THÀNH CÔNG!', x2Question: 'Bạn có muốn xem quảng cáo để', x2Suffix: 'số đơn hàng vừa nhận không?',
@@ -1597,7 +1613,7 @@
                 giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 30 lần/ngày.',
                 inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo hợp lệ', inviteCond4: 'Hoàn thành ít nhất 2 SmartLink hợp lệ', inviteCond5: 'Có ít nhất 1 lần giao hàng hợp lệ',
                 milestoneNote: '⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.',
-                instantRewardTitle: '🎁 Phần Thưởng Mời Bạn Thành Công', instantRewardDesc: 'Mỗi bạn bè mời thành công (đủ điều kiện), bạn nhận ngay:', instantRewardValue: '+500 Coin + 1.000 Đơn Hàng',
+                instantRewardTitle: '🎁 Phần Thưởng Mời Bạn Thành Công', instantRewardDesc: 'Mỗi bạn bè mời thành công (đủ điều kiện), bạn nhận ngay:', instantRewardValue: '+750 Coin + 1.500 Đơn Hàng',
                 ipWarningNote: '⚠️ Bạn Bè Phải Làm Đúng Điều Kiện Mới Tính Là Thành Công. 1 Người Dùng Chỉ Được Tạo 1 Tài Khoản / 1 IP. Nếu Admin Phát Hiện Sẽ Xử Lí!!! (CÓ Hệ Thống Check IP)',
                 withdrawReady: '🎉 Bạn đã đủ điều kiện rút tiền.', progressLabel: 'Tiến độ:',
                 txCodePrefix: 'Mã #', statusApproved: 'Đã duyệt', statusPending: 'Chờ duyệt', statusRejected: 'Hủy',
@@ -1648,7 +1664,7 @@
                 contactAdmin: 'Contact Admin', enterCode: 'Code...', redeem: 'Redeem',
                 redeemHistoryLabel: 'Redeem history', noRedeemHistory: 'No codes redeemed yet', privateOnlyMe: 'Only visible to you',
                 giftcodePageTitle: '🎟️ Redeem Code', giftcodeDesc: 'Enter a code to get your reward instantly. Only you can see it.',
-                deliveryComplete: 'Delivery successful! +', ordersTarget: 'Orders',
+                deliveryComplete: 'Delivery successful! +', ordersTarget: 'Orders', goldenHourSoonTitle:'🔥 GOLDEN HOUR STARTS SOON', goldenHourActiveTitle:'🔥 GOLDEN HOUR X2', goldenHourSoonDesc:'🚚 Deliveries will soon earn X2 Orders!', goldenHourActiveDesc:'📦 EVERY SUCCESSFUL DELIVERY EARNS X2 ORDERS',
                 adsTarget: 'Ads', smartlinksTarget: 'SmartLink', withdrawsLeft: 'Withdraws left',
                 bannedTitle: 'Your Account Has Been Banned', bannedDesc: 'Please Contact Admin For Support!', bannedContact: '☎️ Contact Admin',
                 deliverySuccessTitle: 'DELIVERY SUCCESSFUL!', x2Question: 'Do you want to watch an ad to', x2Suffix: 'the orders you just received?',
@@ -1673,7 +1689,7 @@
                 giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 30 times/day.',
                 inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads', inviteCond4: 'Complete at least 2 valid SmartLinks', inviteCond5: 'Complete at least 1 valid delivery',
                 milestoneNote: '⚠️ Each milestone can only be claimed once. Only valid friends count.',
-                instantRewardTitle: '🎁 Successful Invite Reward', instantRewardDesc: 'For every friend you invite successfully (meets all conditions), you instantly get:', instantRewardValue: '+500 Coin + 1,000 Orders',
+                instantRewardTitle: '🎁 Successful Invite Reward', instantRewardDesc: 'For every friend you invite successfully (meets all conditions), you instantly get:', instantRewardValue: '+750 Coins + 1,500 Orders',
                 ipWarningNote: '⚠️ Your friend must fully meet the conditions to count as successful. Only 1 account is allowed per IP. Admins will take action if abuse is detected!!! (IP checking system in place)',
                 withdrawReady: '🎉 You are eligible to withdraw.', progressLabel: 'Progress:',
                 txCodePrefix: 'Code #', statusApproved: 'Approved', statusPending: 'Pending', statusRejected: 'Rejected',
@@ -1866,7 +1882,8 @@
                 // lượt giao hàng ở server" (do lỗi tạm thời) và cờ khoá chống gọi /api/delivery/claim
                 // trùng lặp. Xem deliverWithAd()/retryDeliveryClaim() để biết luồng xử lý đầy đủ.
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
-                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 20,
+                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryRewardedOrders: 0, _deliveryGoldenHourActive: false, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 20,
+                goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
                 _rewardedRunning: false, _rewardedActionId: '', _smartlinkSaving: false, _taskClaimInFlight: false,
                 _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
@@ -2299,6 +2316,7 @@
                     }, 45000);
                     this.scheduleCoinBox();
                     this.startCountdown();
+                    this.startGoldenHourStatusSync();
                     initNonRewardedAds();
                     
                     // Xử lý khi user quay lại app sau khi mở SmartLink. Dùng CẢ 'visibilitychange' lẫn 'focus'
@@ -2358,6 +2376,7 @@
                         this.tick++;
                         this.updateSmartlinkCooldown();
                         this.updateBonusAdCooldown();
+                        this.updateGoldenHourCountdown();
                     }, 1000);
                     setInterval(() => this.saveState(), 30000);
                     setInterval(() => this.syncLatestUser(), 15000);
@@ -2550,10 +2569,68 @@
                     }
                 },
                 updateSmartlinkCooldown() {
-                    const nextAllowedAt = Math.max(0, Number(this.lastSmartlinkTime || 0)) + 3 * 60 * 1000;
+                    const nextAllowedAt = Math.max(0, Number(this.lastSmartlinkTime || 0)) + 30 * 1000;
                     this.smartlinkCooldown = Date.now() < nextAllowedAt
                         ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
                         : 0;
+                },
+                goldenHourNow() {
+                    return Date.now() + Number(this.goldenHourServerOffset || 0);
+                },
+                async fetchGoldenHourStatus() {
+                    try {
+                        const response=await fetch(`${API_URL}/api/golden-hour/status`,{cache:'no-store'});
+                        const data=await response.json().catch(()=>({}));
+                        if (!response.ok || !data.success) return false;
+                        const clientNow=Date.now();
+                        this.goldenHourServerOffset=Number(data.serverNow || clientNow)-clientNow;
+                        this.goldenHourActive=!!data.active;
+                        this.goldenHourMultiplier=Number(data.multiplier || 1);
+                        this.goldenHourStartAt=Number(data.startAt || 0);
+                        this.goldenHourEndAt=Number(data.endAt || 0);
+                        this.goldenHourNextStartAt=Number(data.nextStartAt || 0);
+                        this.goldenHourNextEndAt=Number(data.nextEndAt || 0);
+                        this.updateGoldenHourCountdown();
+                        return true;
+                    } catch (_) { return false; }
+                },
+                updateGoldenHourCountdown() {
+                    const now=this.goldenHourNow();
+                    let target=0;
+                    if (this.goldenHourActive) {
+                        target=Number(this.goldenHourEndAt || 0);
+                        if (!target || now >= target) {
+                            this.goldenHourActive=false;
+                            this.goldenHourVisible=false;
+                            this.goldenHourCountdown='00:00';
+                            this.requestGoldenHourBoundarySync();
+                            return;
+                        }
+                        this.goldenHourVisible=true;
+                    } else {
+                        target=Number(this.goldenHourNextStartAt || 0);
+                        if (!target || now >= target) {
+                            this.goldenHourVisible=false;
+                            this.goldenHourCountdown='00:00';
+                            if (target) this.requestGoldenHourBoundarySync();
+                            return;
+                        }
+                        this.goldenHourVisible=(target-now)<=5*60*1000;
+                    }
+                    const seconds=Math.max(0,Math.ceil((target-now)/1000));
+                    this.goldenHourCountdown=this.formatCooldownSeconds(seconds);
+                },
+                requestGoldenHourBoundarySync() {
+                    if (this._goldenHourBoundarySyncPending) return;
+                    this._goldenHourBoundarySyncPending=true;
+                    setTimeout(()=>{
+                        this.fetchGoldenHourStatus().finally(()=>{ this._goldenHourBoundarySyncPending=false; });
+                    },250);
+                },
+                startGoldenHourStatusSync() {
+                    if (this._goldenHourSyncTimer) clearInterval(this._goldenHourSyncTimer);
+                    this.fetchGoldenHourStatus().catch(()=>false);
+                    this._goldenHourSyncTimer=setInterval(()=>{ this.fetchGoldenHourStatus().catch(()=>false); },20000);
                 },
                 updateBonusAdCooldown() {
                     const nextAllowedAt = Math.max(0, Number(this.bonusAdNextAllowedAt || 0));
@@ -2666,7 +2743,7 @@
                         this.deliveryCount = 0; 
                         this.chestOpensToday = 0;
                         this.smartlinkCount = 0;
-                        // lastSmartlinkTime giữ nguyên để cooldown 3 phút vẫn đúng nếu lượt trước xảy ra sát 00:00.
+                        // lastSmartlinkTime giữ nguyên để cooldown 30 giây vẫn đúng nếu lượt trước xảy ra sát 00:00.
                         this.usedSmartlinks = [];
                         this.smartlinkStartTime = 0;
                         this.smartlinkAttemptId = '';
@@ -2885,12 +2962,14 @@
                                 this.currentProducts = Number(d.currentProducts ?? 0);
                                 this.lastProducedAt = Number(d.lastProducedAt ?? Date.now());
                                 this.speedUpUsed = !!d.speedUpUsed;
-                                this._deliveryDeliveredProducts = Number(d.deliveredProducts || 0);
+                                this._deliveryDeliveredProducts = Number(d.baseOrders ?? d.deliveredProducts ?? 0);
+                                this._deliveryRewardedOrders = Number(d.rewardedOrders ?? d.deliveredProducts ?? 0);
+                                this._deliveryGoldenHourActive = !!d.goldenHourActive;
                                 if (d.walletUpdatedAt) this.walletSyncedAt = d.walletUpdatedAt;
                                 await this.syncDailyTasksFromServer();
                                 if (this._lastAppliedDeliveryToken !== token) {
                                     this._lastAppliedDeliveryToken = token;
-                                    this.startDeliveryAnimation(this._deliveryDeliveredProducts);
+                                    this.startDeliveryAnimation(this._deliveryRewardedOrders, this._deliveryGoldenHourActive);
                                 }
                                 return true;
                             }
@@ -2965,32 +3044,35 @@
                     (this._deliveryAnimationTimers || []).forEach(timer => clearTimeout(timer));
                     this._deliveryAnimationTimers = [];
                 },
-                startDeliveryAnimation(deliveredProducts = 0) {
+                startDeliveryAnimation(rewardedOrders = 0, goldenHourActive = false) {
                     this.clearDeliveryAnimationTimers();
                     this.isShipping = true;
                     this.showDeliveryAnimation = true;
                     this.isTruckMoving = false;
                     this._deliveryResultApplied = true;
-                    this._deliveryDeliveredProducts = Number(deliveredProducts || this._deliveryDeliveredProducts || 0);
+                    this._deliveryRewardedOrders = Number(rewardedOrders || this._deliveryRewardedOrders || 0);
+                    this._deliveryGoldenHourActive = !!goldenHourActive;
                     const moveTimer = setTimeout(() => { this.isTruckMoving = true; }, this.graphicsMode === 'fixlag' ? 250 : 620);
                     const finishTimer = setTimeout(() => {
-                        this.completeDelivery(this._deliveryDeliveredProducts);
+                        this.completeDelivery(this._deliveryRewardedOrders, this._deliveryGoldenHourActive);
                         this.showDeliveryAnimation = false;
                         this.isTruckMoving = false;
                         this.clearDeliveryAnimationTimers();
                     }, this.graphicsMode === 'fixlag' ? 1500 : 2950);
                     this._deliveryAnimationTimers = [moveTimer, finishTimer];
                 },
-                completeDelivery(delivered = this._deliveryDeliveredProducts || 0) {
-                    // Server đã chuyển hàng + cộng orders trước khi animation chạy.
-                    // Tuyệt đối không cộng orders/currentProducts ở client lần nữa.
-                    // currentProducts/lastProducedAt/speedUpUsed đã hydrate từ response server.
-                    // Không ghi cưỡng bức về 0 ở đây vì một idempotent retry rất muộn có thể đã sang mẻ mới.
+                completeDelivery(rewarded = this._deliveryRewardedOrders || 0, goldenHourActive = this._deliveryGoldenHourActive) {
+                    // Server đã chuyển hàng + cộng Orders (bao gồm multiplier Golden Hour nếu có) trước animation.
+                    // Frontend chỉ hiển thị snapshot server, tuyệt đối không tự nhân/cộng Orders lần nữa.
                     this.isShipping = false;
                     this._deliveryResultApplied = false;
                     this._deliveryDeliveredProducts = 0;
+                    this._deliveryRewardedOrders = 0;
+                    this._deliveryGoldenHourActive = false;
                     this.syncDailyTasksFromServer().catch(() => {});
-                    this.showNotification('🚚 ' + this.texts.deliveryComplete + this.formatNumber(Number(delivered || 0)) + ' ' + (this.texts.ordersTarget || 'Orders'));
+                    const amount=this.formatNumber(Number(rewarded || 0));
+                    if (goldenHourActive) this.showNotification(`🔥 GIỜ VÀNG X2! 🚚 ${this.texts.deliveryComplete}${amount} ${this.texts.ordersTarget || 'Orders'}`);
+                    else this.showNotification('🚚 ' + this.texts.deliveryComplete + amount + ' ' + (this.texts.ordersTarget || 'Orders'));
                     this.scheduleCoinBox();
                 },
                 async upgradeTruck() {
@@ -3483,7 +3565,7 @@
                                 if (typeof result.smartlinksToday === 'number') this.smartlinksToday = Number(result.smartlinksToday);
                                 this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
                             } else if (result.cooldown && result.nextAllowedAt) {
-                                this.lastSmartlinkTime = Number(result.nextAllowedAt) - 3 * 60 * 1000;
+                                this.lastSmartlinkTime = Number(result.nextAllowedAt) - 30 * 1000;
                                 this.updateSmartlinkCooldown();
                                 this.showNotification(this.smartlinkButtonText());
                             } else {
@@ -4198,6 +4280,7 @@
 
                         let sessionResponse = null;
                         let sessionData = {};
+                        let sessionStartSucceeded = false;
                         for (let attempt = 0; attempt < 3; attempt++) {
                             try {
                                 sessionResponse = await fetch(`${API_URL}/api/ad/session/start`, {
@@ -4216,7 +4299,10 @@
                                 sessionResponse = null;
                                 sessionData = {success:false,retry:true};
                             }
-                            if (sessionResponse?.ok && sessionData?.token) break;
+                            if (sessionResponse?.ok && sessionData?.success && sessionData?.token) {
+                                sessionStartSucceeded = true;
+                                break;
+                            }
                             if (purpose === 'bonus-task' && sessionData?.cooldown) {
                                 this.bonusAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0);
                                 this.updateBonusAdCooldown();
@@ -4231,8 +4317,10 @@
                             if (!(sessionData?.retry || !sessionResponse || [408,409,429,500,502,503,504].includes(sessionResponse.status))) break;
                             await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
                         }
-                        token = String(sessionData?.token || '');
-                        if (!token) throw new Error(sessionData?.error || 'Không tạo được phiên quảng cáo hợp lệ');
+                        token = sessionStartSucceeded ? String(sessionData?.token || '') : '';
+                        if (!sessionStartSucceeded || !token) {
+                            throw new Error(sessionData?.error || 'Không tạo được phiên quảng cáo hợp lệ');
+                        }
                         sessionStarted = true;
 
                         const sdkResult = await Promise.resolve()
