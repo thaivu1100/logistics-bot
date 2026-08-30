@@ -9,18 +9,6 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
-    <script>
-        // Banner 320x50 config supplied by project owner. No invoke/loader URL exists in this source,
-        // so the configuration is preserved exactly without inventing an ad script URL.
-        window.atOptions = {
-            'key' : '8ee7fbebb850f04e4e48dda69ae38579',
-            'format' : 'iframe',
-            'height' : 50,
-            'width' : 320,
-            'params' : {}
-        };
-        window.__banner320x50Config = { ...window.atOptions };
-    </script>
     <script src="https://www.youtube.com/iframe_api"></script>
     <!-- Rewarded Interstitial uses the existing zone 11457064. Passive fullscreen uses the same flow. -->
     
@@ -682,6 +670,11 @@
             </div>
         </header>
 
+        <!-- Banner 320x50 nằm trong normal flow, không che bottom nav/nút/modal. Script provider được render trễ sau 8s. -->
+        <div id="banner320x50-shell" class="hidden px-2 pt-2" aria-label="Advertisement">
+            <div id="banner320x50-slot" class="mx-auto overflow-hidden" style="width:320px;height:50px;max-width:100%;"></div>
+        </div>
+
         <main class="p-2 space-y-3">
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
@@ -818,9 +811,9 @@
                         <span class="text-yellow-300 font-black" x-text="texts.smartlinkRewardLabel"></span>
                         <span class="text-slate-400" x-text="smartlinkRemaining > 0 ? (texts.smartlinkRemainingLabel + ' ' + smartlinkRemaining) : texts.smartlinkLimitReached"></span>
                     </div>
-                    <button @click="startSmartlink()" :disabled="smartlinkRemaining <= 0 || !!smartlinkStartTime || _smartlinkSaving"
-                        class="w-full py-2.5 rounded-2xl bg-blue-600 text-white font-black text-[10px] uppercase tracking-wide shadow-lg shadow-blue-600/20 btn-text">
-                        <span x-text="smartlinkRemaining > 0 ? texts.smartlinkStart : texts.smartlinkLimitReached"></span>
+                    <button @click="startSmartlink()" :disabled="smartlinkRemaining <= 0 || smartlinkCooldown > 0 || !!smartlinkStartTime || _smartlinkSaving"
+                        class="w-full py-2.5 rounded-2xl bg-blue-600 text-white font-black text-[10px] uppercase tracking-wide shadow-lg shadow-blue-600/20 btn-text disabled:opacity-40">
+                        <span x-text="smartlinkButtonText()"></span>
                     </button>
                 </div>
 
@@ -927,7 +920,7 @@
                         <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/30 ' + texts.today"></span>
                     </div>
                     <p class="text-[9px] text-slate-400"><span x-text="texts.watchAdRewardDesc"></span> <span class="text-yellow-400 font-black">+50 Coin</span> &amp; <span class="text-yellow-400 font-black" x-text="'+25 ' + texts.ordersTarget"></span>. <span x-text="texts.maxPerDay"></span></p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 30" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="texts.watchAdRewardBtn"></button>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 30 || bonusAdCooldown > 0 || _rewardedRunning" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -1356,6 +1349,121 @@
                 );
             } catch (_) { return true; }
         }
+
+        // ===== SOCIAL BAR + BANNER 320x50 (timer quản lý, không duplicate) =====
+        const THATLOBSTER_SOCIAL_BAR_SRC = 'https://thatlobster.com/c5/d4/82/c5d482f841680852f6e0215c17ad234b.js';
+        const THATLOBSTER_BANNER_SRC = 'https://thatlobster.com/8ee7fbebb850f04e4e48dda69ae38579/invoke.js';
+        let nonRewardedAdsInitialized = false;
+        let socialBarLoadTimer = null;
+        let socialBarLoaded = false;
+        let bannerRefreshTimer = null;
+        let bannerNextRefreshAt = 0;
+        let bannerRefreshOverdue = false;
+
+        function miniAppIsForeground() {
+            return document.visibilityState === 'visible' && !document.hidden;
+        }
+
+        function scheduleSocialBarAttempt(delayMs) {
+            if (socialBarLoadTimer) clearTimeout(socialBarLoadTimer);
+            socialBarLoadTimer = setTimeout(() => {
+                socialBarLoadTimer = null;
+                if (socialBarLoaded || document.querySelector(`script[src="${THATLOBSTER_SOCIAL_BAR_SRC}"]`)) {
+                    socialBarLoaded = true;
+                    return;
+                }
+                if (!miniAppIsForeground() || isCriticalActionActive()) {
+                    scheduleSocialBarAttempt(5000);
+                    return;
+                }
+                const script = document.createElement('script');
+                script.src = THATLOBSTER_SOCIAL_BAR_SRC;
+                script.async = true;
+                script.dataset.socialBarProvider = 'thatlobster';
+                document.body.appendChild(script);
+                socialBarLoaded = true; // provider tự quản lý hiển thị, tuyệt đối không reload script
+            }, Math.max(0, Number(delayMs || 0)));
+        }
+
+        function cleanupBanner320x50() {
+            const slot = document.getElementById('banner320x50-slot');
+            if (!slot) return;
+            while (slot.firstChild) slot.removeChild(slot.firstChild);
+        }
+
+        function scheduleBannerRefresh(delayMs) {
+            if (bannerRefreshTimer) clearTimeout(bannerRefreshTimer);
+            bannerNextRefreshAt = Date.now() + Math.max(0, Number(delayMs || 0));
+            bannerRefreshTimer = setTimeout(() => {
+                bannerRefreshTimer = null;
+                if (!miniAppIsForeground()) {
+                    bannerRefreshOverdue = true;
+                    return;
+                }
+                if (isCriticalActionActive()) {
+                    scheduleBannerRefresh(5000);
+                    return;
+                }
+                renderBanner320x50();
+            }, Math.max(0, Number(delayMs || 0)));
+        }
+
+        function renderBanner320x50() {
+            if (!miniAppIsForeground()) {
+                bannerRefreshOverdue = true;
+                return false;
+            }
+            const shell = document.getElementById('banner320x50-shell');
+            const slot = document.getElementById('banner320x50-slot');
+            if (!shell || !slot) {
+                scheduleBannerRefresh(5000);
+                return false;
+            }
+
+            cleanupBanner320x50();
+            const frame = document.createElement('iframe');
+            frame.title = 'Advertisement';
+            frame.width = '320';
+            frame.height = '50';
+            frame.scrolling = 'no';
+            frame.frameBorder = '0';
+            frame.style.cssText = 'display:block;width:320px;max-width:100%;height:50px;border:0;margin:0 auto;overflow:hidden;';
+            const openScript = '<scr' + 'ipt>';
+            const closeScript = '</scr' + 'ipt>';
+            frame.srcdoc =
+                '<!DOCTYPE html><html><head><meta name="viewport" content="width=320,initial-scale=1"></head>' +
+                '<body style="margin:0;padding:0;width:320px;height:50px;overflow:hidden;background:transparent;">' +
+                openScript +
+                "atOptions = {\n  'key' : '8ee7fbebb850f04e4e48dda69ae38579',\n  'format' : 'iframe',\n  'height' : 50,\n  'width' : 320,\n  'params' : {}\n};" +
+                closeScript +
+                '<scr' + 'ipt src="' + THATLOBSTER_BANNER_SRC + '"></scr' + 'ipt>' +
+                '</body></html>';
+            slot.appendChild(frame);
+            shell.classList.remove('hidden');
+            bannerRefreshOverdue = false;
+            scheduleBannerRefresh(75 * 1000);
+            return true;
+        }
+
+        function initNonRewardedAds() {
+            if (nonRewardedAdsInitialized) return;
+            nonRewardedAdsInitialized = true;
+            scheduleSocialBarAttempt(15 * 1000);
+            scheduleBannerRefresh(8 * 1000);
+
+            document.addEventListener('visibilitychange', () => {
+                if (!miniAppIsForeground()) return;
+                if (bannerRefreshOverdue || (bannerNextRefreshAt && Date.now() >= bannerNextRefreshAt)) {
+                    if (bannerRefreshTimer) {
+                        clearTimeout(bannerRefreshTimer);
+                        bannerRefreshTimer = null;
+                    }
+                    if (isCriticalActionActive()) scheduleBannerRefresh(5000);
+                    else renderBanner320x50(); // chỉ refresh 1 lần, không bù hàng loạt
+                }
+            });
+        }
+
         let passiveTabThreshold = nextPassiveTabThreshold();
         const passiveAdAppOpenedAt = Date.now();
         let passiveAdCooldown = nextPassiveAdCooldown();
@@ -1456,7 +1564,7 @@
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
-                rankConditionsTitle: 'Điều kiện Top thưởng', rankInviteCondText: 'Xếp hạng theo số lượt mời HỢP LỆ trong tuần. Cần đạt tối thiểu 5 lượt mời hợp lệ trong tuần để Top 1-3 được nhận thưởng (đứng hạng nhưng chưa đủ điều kiện thì vẫn hiện trên BXH nhưng KHÔNG được thưởng).', rankAdsCondText: 'Xếp hạng theo số Rewarded Interstitial hợp lệ đã xem trong tuần, chỉ tính khi server xác nhận hoàn thành quảng cáo. Cần đạt tối thiểu 20 lượt xem hợp lệ trong tuần để Top 1-3 được nhận thưởng.', rankRewardsText: '🥇 Top 1: +75.000 Đơn Hàng + 8 Lượt Mở Rương · 🥈 Top 2: +45.000 Đơn Hàng + 5 Lượt Mở Rương · 🥉 Top 3: +25.000 Đơn Hàng + 3 Lượt Mở Rương', rankResetText: 'BXH tự động reset vào đúng 00:00 Chủ Nhật (giờ Việt Nam) mỗi tuần, thưởng Top 1-3 (nếu đủ điều kiện) được cộng thẳng và thông báo qua Telegram ngay khi reset.',
+                rankConditionsTitle: 'Điều kiện Top thưởng', rankInviteCondText: 'Xếp hạng theo số lượt mời HỢP LỆ trong tuần. Cần đạt tối thiểu 5 lượt mời hợp lệ trong tuần để Top 1-3 được nhận thưởng (đứng hạng nhưng chưa đủ điều kiện thì vẫn hiện trên BXH nhưng KHÔNG được thưởng).', rankAdsCondText: 'Xếp hạng theo số Rewarded Interstitial hợp lệ đã xem trong tuần, chỉ tính khi server xác nhận hoàn thành quảng cáo. Cần đạt tối thiểu 50 lượt xem hợp lệ trong tuần để Top 1-3 được nhận thưởng.', rankRewardsText: '🥇 Top 1: +75.000 Đơn Hàng + 8 Lượt Mở Rương · 🥈 Top 2: +45.000 Đơn Hàng + 5 Lượt Mở Rương · 🥉 Top 3: +25.000 Đơn Hàng + 3 Lượt Mở Rương', rankResetText: 'BXH tự động reset vào đúng 00:00 Chủ Nhật (giờ Việt Nam) mỗi tuần, thưởng Top 1-3 (nếu đủ điều kiện) được cộng thẳng và thông báo qua Telegram ngay khi reset.',
                 refCode: 'Mã giới thiệu', inviteFriends: 'Mời Bạn Bè\nCùng Kiếm Tiền!',
                 copy: 'Copy', share: 'CHIA SẺ CHO MN', invited: 'Đã mời', valid: 'Hợp lệ',
                 withdraw: 'Rút Tiền', withdrawHistory: 'Lịch sử rút', noTransactions: 'Chưa có giao dịch',
@@ -1532,7 +1640,7 @@
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
-                rankConditionsTitle: 'Reward eligibility', rankInviteCondText: 'Ranked by the number of VALID invites this week. You need at least 5 valid invites this week for Top 1-3 to receive a reward (you can still appear on the board without enough invites, but you will NOT receive the reward).', rankAdsCondText: 'Ranked by the number of valid Rewarded Interstitial ads watched this week, counted only once the server confirms the ad was completed. You need at least 20 valid views this week for Top 1-3 to receive a reward.', rankRewardsText: '🥇 Top 1: +75,000 Orders + 8 Chest Spins · 🥈 Top 2: +45,000 Orders + 5 Chest Spins · 🥉 Top 3: +25,000 Orders + 3 Chest Spins', rankResetText: 'The leaderboard automatically resets at 00:00 (Vietnam time) every Sunday. Top 1-3 rewards (if eligible) are credited instantly and announced via Telegram right when the reset happens.',
+                rankConditionsTitle: 'Reward eligibility', rankInviteCondText: 'Ranked by the number of VALID invites this week. You need at least 5 valid invites this week for Top 1-3 to receive a reward (you can still appear on the board without enough invites, but you will NOT receive the reward).', rankAdsCondText: 'Ranked by the number of valid Rewarded Interstitial ads watched this week, counted only once the server confirms the ad was completed. You need at least 50 valid Rewarded Interstitial views this week for Top 1-3 to receive a reward.', rankRewardsText: '🥇 Top 1: +75,000 Orders + 8 Chest Spins · 🥈 Top 2: +45,000 Orders + 5 Chest Spins · 🥉 Top 3: +25,000 Orders + 3 Chest Spins', rankResetText: 'The leaderboard automatically resets at 00:00 (Vietnam time) every Sunday. Top 1-3 rewards (if eligible) are credited instantly and announced via Telegram right when the reset happens.',
                 refCode: 'Referral code', inviteFriends: 'Invite shippers\nEarn together!',
                 copy: 'Copy', share: 'SHARE', invited: 'Invited', valid: 'Valid',
                 withdraw: 'Withdraw', withdrawHistory: 'Withdraw history', noTransactions: 'No transactions',
@@ -1760,6 +1868,7 @@
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
                 _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 20,
                 _rewardedRunning: false, _rewardedActionId: '', _smartlinkSaving: false, _taskClaimInFlight: false,
+                _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
                 _saveQueue: Promise.resolve(), _saveInFlight: false, // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
@@ -1768,7 +1877,7 @@
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, dailyValidInvites: 0, deliveryCountLifetime: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 20,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
                 isAppLoading: true, loadingProgress: 0, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
                 maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
@@ -2069,6 +2178,8 @@
                             this.lifetimeAdsWatched = data.lifetimeAdsWatched || 0;
                             this.lifetimeSmartlinks = data.lifetimeSmartlinks || 0;
                             this.bonusAdsToday = data.bonusAdsToday || 0;
+                            this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0);
+                            this.updateBonusAdCooldown();
                             this.rewardedAdsToday = data.rewardedAdsToday || 0;
                             this.extraDeliveryAdsToday = data.extraDeliveryAdsToday || 0;
                             this.extraDeliveryCount = data.extraDeliveryCount || 0;
@@ -2180,16 +2291,15 @@
                     this.checkTaskProgress('invite');
                     this.checkWeeklyRewards();
                     this.produceLoop();
-                    // FIX: trước đây resetDailyIfNeeded() và checkWeeklyRewards() chỉ chạy 1 lần lúc mở app,
-                    // nên nếu user để app mở xuyên qua mốc 00:00 (không tắt/mở lại), nhiệm vụ & lượt xem QC
-                    // sẽ KHÔNG tự reset về 0 cho đến khi họ tải lại trang. Kiểm tra định kỳ mỗi phút để tự
-                    // reset đúng lúc, không cần chờ reload.
-                    setInterval(() => {
+                    // Watchdog frontend 45 giây: khi weekKey Việt Nam đổi, reload CẢ hai BXH.
+                    if (this._weeklyRefreshTimer) clearInterval(this._weeklyRefreshTimer);
+                    this._weeklyRefreshTimer = setInterval(() => {
                         this.resetDailyIfNeeded();
                         this.checkWeeklyRewards();
-                    }, 60000);
+                    }, 45000);
                     this.scheduleCoinBox();
                     this.startCountdown();
+                    initNonRewardedAds();
                     
                     // Xử lý khi user quay lại app sau khi mở SmartLink. Dùng CẢ 'visibilitychange' lẫn 'focus'
                     // vì 1 số client (đặc biệt Telegram Desktop trên PC) không bắn 'visibilitychange' đáng tin cậy
@@ -2243,8 +2353,12 @@
                             schedulePassiveAdCheck(650);
                         }
                     });
-                    setInterval(() => { this.tick++; }, 1000);
-                    setInterval(() => { this.updateSmartlinkCooldown(); }, 1000);
+                    if (this._uiSecondTimer) clearInterval(this._uiSecondTimer);
+                    this._uiSecondTimer = setInterval(() => {
+                        this.tick++;
+                        this.updateSmartlinkCooldown();
+                        this.updateBonusAdCooldown();
+                    }, 1000);
                     setInterval(() => this.saveState(), 30000);
                     setInterval(() => this.syncLatestUser(), 15000);
                     // ===== NHẠC NỀN: mỗi phiên mới luôn TẮT =====
@@ -2391,18 +2505,8 @@
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
-                        const nextSunday = new Date(now);
-                        nextSunday.setHours(0, 0, 0, 0);
-                        const daysUntilSunday = (7 - now.getDay()) % 7; // 0 nếu hôm nay là Chủ Nhật
-                        nextSunday.setDate(now.getDate() + daysUntilSunday);
-                        // FIX LỖI: nếu mốc vừa tính ra đã ở QUÁ KHỨ so với hiện tại (tức đang là Chủ Nhật
-                        // và đã qua 00:00, không chỉ riêng giờ đầu tiên) thì phải nhảy sang Chủ Nhật tuần sau.
-                        // Trước đây chỉ kiểm tra "now.getHours() === 0" nên cả ngày Chủ Nhật (trừ giờ đầu)
-                        // bị tính ra hiệu số ÂM, khiến đồng hồ đếm ngược hiển thị sai như đang tăng lên.
-                        if (nextSunday <= now) {
-                            nextSunday.setDate(nextSunday.getDate() + 7);
-                        }
-                        const diff = nextSunday - now;
+                        const nextSunday = this.nextVietnamSundayMidnight(now);
+                        const diff = Math.max(0, nextSunday.getTime() - now.getTime());
                         const days = Math.floor(diff / (1000 * 60 * 60 * 24));
                         const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
                         const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -2410,7 +2514,8 @@
                         this.countdownText = `${days}ng ${hours}h ${minutes}m ${seconds}s`;
                     };
                     updateCountdown();
-                    setInterval(updateCountdown, 1000);
+                    if (this._countdownTimer) clearInterval(this._countdownTimer);
+                    this._countdownTimer = setInterval(updateCountdown, 1000);
                 },
                 changeLanguage() {
                     this.language = this.language === 'en' ? 'en' : 'vi';
@@ -2433,24 +2538,52 @@
                     });
                 },
                 checkWeeklyRewards() {
-                    // LƯU Ý: việc trao thưởng Top 1-3 hàng tuần và tính toán "tuần hiện tại" giờ đã chuyển
-                    // hẳn sang xử lý ở SERVER (weeklyLeaderboardReset trong server.js), đáng tin cậy hơn vì
-                    // chạy đúng giờ dù không có ai mở app. Hàm này ở client giờ chỉ đơn thuần tự làm mới lại
-                    // BXH hiển thị khi phát hiện sang tuần mới - KHÔNG tự xóa/reset dữ liệu cục bộ nào cả,
-                    // tránh gây hiểu lầm "mất dữ liệu BXH" như lỗi trước đây.
-                    const now = new Date();
-                    const currentWeek = this.getWeekIdentifier(now);
-                    if (this.lastWeekReset !== currentWeek) {
+                    const currentWeek = this.getWeekIdentifier(new Date());
+                    const changed = this.lastWeekReset !== currentWeek;
+                    if (changed) {
                         this.lastWeekReset = currentWeek;
                         this.saveState();
-                        this.initRankList(); // Tải lại BXH mới nhất từ server
+                    }
+                    // Khi user đang mở tab BXH, watchdog 45s cũng retry refresh nếu request đúng mốc 00:00 bị lỗi mạng.
+                    if (changed || this.tab === 'leaderboard') {
+                        Promise.all([this.initRankList(), this.initQcRankList()]).catch(() => {});
                     }
                 },
                 updateSmartlinkCooldown() {
-                    const now = Date.now();
-                    const diff = now - this.lastSmartlinkTime;
-                    const cooldown = 5 * 60 * 1000; // 5 minutes cooldown for SmartLink actions
-                    this.smartlinkCooldown = diff < cooldown ? Math.floor((cooldown - diff) / 1000) : 0;
+                    const nextAllowedAt = Math.max(0, Number(this.lastSmartlinkTime || 0)) + 3 * 60 * 1000;
+                    this.smartlinkCooldown = Date.now() < nextAllowedAt
+                        ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
+                        : 0;
+                },
+                updateBonusAdCooldown() {
+                    const nextAllowedAt = Math.max(0, Number(this.bonusAdNextAllowedAt || 0));
+                    this.bonusAdCooldown = Date.now() < nextAllowedAt
+                        ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
+                        : 0;
+                },
+                formatCooldownSeconds(totalSeconds) {
+                    const total = Math.max(0, Math.ceil(Number(totalSeconds || 0)));
+                    const mins = Math.floor(total / 60);
+                    const secs = total % 60;
+                    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+                },
+                smartlinkButtonText() {
+                    if (this.smartlinkRemaining <= 0) return this.texts.smartlinkLimitReached;
+                    if (this.smartlinkCooldown > 0) {
+                        const t = this.formatCooldownSeconds(this.smartlinkCooldown);
+                        return this.language === 'en' ? `⏳ Next SmartLink in ${t}` : `⏳ SmartLink tiếp sau ${t}`;
+                    }
+                    return this.texts.smartlinkStart;
+                },
+                bonusAdButtonText() {
+                    if (Number(this.bonusAdsToday || 0) >= 30) {
+                        return this.language === 'en' ? '✅ DAILY LIMIT REACHED' : '✅ ĐÃ HẾT LƯỢT HÔM NAY';
+                    }
+                    if (this.bonusAdCooldown > 0) {
+                        const t = this.formatCooldownSeconds(this.bonusAdCooldown);
+                        return this.language === 'en' ? `⏳ Next ad in ${t}` : `⏳ Xem tiếp sau ${t}`;
+                    }
+                    return this.texts.watchAdRewardBtn;
                 },
                 // BXH lấy dữ liệu THẬT từ DB (số bạn mời hợp lệ thực tế của từng user), không còn random
                 async initRankList() {
@@ -2462,7 +2595,7 @@
                             this.rankList = (data.leaderboard || []).map((u, idx) => ({
                                 rank: idx + 1,
                                 name: u.name || ('User ' + u.id),
-                                invites: u.validInvites || 0,
+                                invites: u.weeklyValidInvites || 0,
                                 title: titles[idx] || 'Shipper'
                             }));
                         }
@@ -2492,12 +2625,21 @@
                     else this.initRankList();
                 },
                 
-                getWeekIdentifier(date) {
-                    // Mốc Chủ Nhật 00:00, khớp với server (weeklyLeaderboardReset) và đồng hồ đếm ngược "Reset vào 00:00 Chủ Nhật"
-                    const d = new Date(date); d.setHours(0,0,0,0);
-                    const day = d.getDay();
-                    d.setDate(d.getDate() - day);
-                    return d.toISOString().slice(0,10);
+                getWeekIdentifier(date = new Date()) {
+                    const parts = new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Asia/Ho_Chi_Minh', year:'numeric', month:'2-digit', day:'2-digit'
+                    }).formatToParts(date);
+                    const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+                    const calendarUtc = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day));
+                    const sundayUtc = new Date(calendarUtc - new Date(calendarUtc).getUTCDay() * 86400000);
+                    return sundayUtc.toISOString().slice(0,10);
+                },
+                nextVietnamSundayMidnight(date = new Date()) {
+                    const currentWeek = this.getWeekIdentifier(date);
+                    const base = new Date(`${currentWeek}T00:00:00.000Z`);
+                    base.setUTCDate(base.getUTCDate() + 7);
+                    const nextWeekKey = base.toISOString().slice(0,10);
+                    return new Date(`${nextWeekKey}T00:00:00+07:00`);
                 },
                 resetDailyIfNeeded() {
                     const today = this.vietnamDayKey();
@@ -2524,7 +2666,7 @@
                         this.deliveryCount = 0; 
                         this.chestOpensToday = 0;
                         this.smartlinkCount = 0;
-                        this.lastSmartlinkTime = 0; 
+                        // lastSmartlinkTime giữ nguyên để cooldown 3 phút vẫn đúng nếu lượt trước xảy ra sát 00:00.
                         this.usedSmartlinks = [];
                         this.smartlinkStartTime = 0;
                         this.smartlinkAttemptId = '';
@@ -2949,28 +3091,44 @@
                     this.maxProducts = stats.max;
                     if (this.currentProducts > this.maxProducts) this.currentProducts = this.maxProducts;
                 },
-                scheduleCoinBox() {
-                    // FIX YÊU CẦU "HỘP COIN XUẤT HIỆN ĐÚNG 10-15 PHÚT": trước đây random trong khoảng 0-30
-                    // phút (có thể xuất hiện gần như ngay lập tức, hoặc quá lâu tới 30 phút). Đổi lại đúng
-                    // khoảng 10-15 phút: 10 phút cố định + random thêm 0-5 phút. Không đổi thời gian hiển thị
-                    // (60 giây), vị trí ngẫu nhiên, phần thưởng/xác suất hay luồng xem QC.
-                    const MIN_COINBOX_DELAY = 10 * 60 * 1000; // 10 phút
-                    const MAX_COINBOX_EXTRA = 5 * 60 * 1000;  // + tối đa 5 phút -> tổng 10-15 phút
-                    const delay = MIN_COINBOX_DELAY + Math.random() * MAX_COINBOX_EXTRA; // Random trong khoảng 10-15 phút
-                    setTimeout(() => {
+                scheduleCoinBox(delayOverride = null) {
+                    if (this._coinBoxScheduleTimer) {
+                        clearTimeout(this._coinBoxScheduleTimer);
+                        this._coinBoxScheduleTimer = null;
+                    }
+                    const MIN_COINBOX_DELAY = 2 * 60 * 1000;
+                    const MAX_COINBOX_EXTRA = 2 * 60 * 1000;
+                    const delay = delayOverride === null
+                        ? MIN_COINBOX_DELAY + Math.random() * MAX_COINBOX_EXTRA
+                        : Math.max(0, Number(delayOverride || 0));
+
+                    this._coinBoxScheduleTimer = setTimeout(() => {
+                        this._coinBoxScheduleTimer = null;
+
+                        if (isCriticalActionActive()) {
+                            this.scheduleCoinBox(10000 + Math.random() * 20000);
+                            return;
+                        }
+
+                        if (this._coinBoxHideTimer) {
+                            clearTimeout(this._coinBoxHideTimer);
+                            this._coinBoxHideTimer = null;
+                        }
                         if (!this.coinBoxVisible) {
-                            this.coinBoxX = 10 + Math.random() * 70; // Random X position
-                            this.coinBoxY = 20 + Math.random() * 50; // Random Y position
+                            this.coinBoxX = 10 + Math.random() * 70;
+                            this.coinBoxY = 20 + Math.random() * 50;
                             this.coinBoxVisible = true;
                             this.coinBoxCountdown = 'Sẵn sàng!';
                         }
-                        setTimeout(() => {
-                            if (this.coinBoxVisible) { // If not opened, hide it and reschedule
+
+                        this._coinBoxHideTimer = setTimeout(() => {
+                            this._coinBoxHideTimer = null;
+                            if (this.coinBoxVisible) {
                                 this.coinBoxVisible = false;
                                 this.coinBoxCountdown = '2 giờ';
-                                this.scheduleCoinBox();
                             }
-                        }, 60000); // Box visible for 60 seconds
+                            this.scheduleCoinBox();
+                        }, 60000);
                     }, delay);
                 },
                 async openCoinBoxWithAd() {
@@ -3005,6 +3163,7 @@
                                 this.showNotification('🎁 Nhận ' + this.formatNumber(Number(result.coin||0)) + ' Coin!');
                                 this.coinBoxVisible=false;
                                 this.coinBoxCountdown='2 giờ';
+                                if (this._coinBoxHideTimer) { clearTimeout(this._coinBoxHideTimer); this._coinBoxHideTimer = null; }
                                 this.scheduleCoinBox();
                                 return true;
                             }
@@ -3199,13 +3358,20 @@
                 // Card thưởng QC cũ vẫn được giữ nguyên ngoài Daily Tasks: mỗi Rewarded hợp lệ +50 Coin +25 Orders,
                 // tối đa 30 lượt/ngày; tiến độ và phần thưởng vẫn do server xác nhận.
                 watchBonusAdTask() {
+                    this.updateBonusAdCooldown();
                     if ((this.bonusAdsToday || 0) >= 30) {
                         this.showNotification('⚠️ Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.');
+                        return;
+                    }
+                    if (this.bonusAdCooldown > 0) {
+                        this.showNotification(this.bonusAdButtonText());
                         return;
                     }
                     this.playRewardedAd((result = {}) => {
                         this.bonusAdsToday = Number(result.bonusAdsToday ?? this.bonusAdsToday);
                         this.rewardedAdsToday = Number(result.rewardedAdsToday ?? this.rewardedAdsToday);
+                        this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || (Date.now() + 5 * 60 * 1000));
+                        this.updateBonusAdCooldown();
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         this.showNotification(`📺 +50 Coin +25 Đơn Hàng (${this.bonusAdsToday}/30)`);
@@ -3285,6 +3451,11 @@
                 },
                 async startSmartlink(preferredLink = '') {
                     if (this._smartlinkSaving || this.smartlinkStartTime > 0 || this.smartlinkAttemptId) return false;
+                    this.updateSmartlinkCooldown();
+                    if (this.smartlinkCooldown > 0) {
+                        this.showNotification(this.smartlinkButtonText());
+                        return false;
+                    }
                     if (Number(this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
                         this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
                         return false;
@@ -3311,6 +3482,10 @@
                             if (result.limitReached) {
                                 if (typeof result.smartlinksToday === 'number') this.smartlinksToday = Number(result.smartlinksToday);
                                 this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
+                            } else if (result.cooldown && result.nextAllowedAt) {
+                                this.lastSmartlinkTime = Number(result.nextAllowedAt) - 3 * 60 * 1000;
+                                this.updateSmartlinkCooldown();
+                                this.showNotification(this.smartlinkButtonText());
                             } else {
                                 this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'Unable to start SmartLink. Please try again.'));
                             }
@@ -3407,6 +3582,8 @@
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                        this.lastSmartlinkTime = Number(result.lastSmartlinkTime || Date.now());
+                        this.updateSmartlinkCooldown();
                         this.clearSmartlinkAttempt();
                         this.onSmartlinkWatched();
                         await this.syncDailyTasksFromServer();
@@ -4040,6 +4217,17 @@
                                 sessionData = {success:false,retry:true};
                             }
                             if (sessionResponse?.ok && sessionData?.token) break;
+                            if (purpose === 'bonus-task' && sessionData?.cooldown) {
+                                this.bonusAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0);
+                                this.updateBonusAdCooldown();
+                                this.showNotification(this.bonusAdButtonText());
+                                return false; // chưa có token -> Monetag SDK tuyệt đối không mở
+                            }
+                            if (purpose === 'bonus-task' && sessionData?.limitReached) {
+                                this.bonusAdsToday = Number(sessionData.bonusAdsToday ?? this.bonusAdsToday);
+                                this.showNotification('⚠️ Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.');
+                                return false;
+                            }
                             if (!(sessionData?.retry || !sessionResponse || [408,409,429,500,502,503,504].includes(sessionResponse.status))) break;
                             await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
                         }
@@ -4433,6 +4621,10 @@
                             this.spinAdCount = d.spinAdCount ?? this.spinAdCount;
                             this.spinAdProgress = d.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
+                            this.bonusAdNextAllowedAt = Number(d.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
+                            this.updateBonusAdCooldown();
+                            this.lastSmartlinkTime = Number(d.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
+                            this.updateSmartlinkCooldown();
                             this.weeklyAdsCount = d.weeklyAdsCount ?? this.weeklyAdsCount;
                             this.lifetimeAdsWatched = d.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
                             this.lifetimeSmartlinks = d.lifetimeSmartlinks ?? this.lifetimeSmartlinks;
@@ -4502,6 +4694,7 @@
                         lifetimeAdsWatched: this.lifetimeAdsWatched,
                         lifetimeSmartlinks: this.lifetimeSmartlinks,
                         bonusAdsToday: this.bonusAdsToday,
+                        bonusAdNextAllowedAt: this.bonusAdNextAllowedAt,
                         rewardedAdsToday: this.rewardedAdsToday,
                         extraDeliveryAdsToday: this.extraDeliveryAdsToday,
                         extraDeliveryCount: this.extraDeliveryCount,
@@ -4589,6 +4782,10 @@
                             this.spinAdCount = w.spinAdCount ?? this.spinAdCount;
                             this.spinAdProgress = w.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = w.bonusAdsToday ?? this.bonusAdsToday;
+                            this.bonusAdNextAllowedAt = Number(w.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
+                            this.updateBonusAdCooldown();
+                            this.lastSmartlinkTime = Number(w.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
+                            this.updateSmartlinkCooldown();
                             this.weeklyAdsCount = w.weeklyAdsCount ?? this.weeklyAdsCount;
                             this.lifetimeAdsWatched = w.lifetimeAdsWatched ?? this.lifetimeAdsWatched;
                             this.lifetimeSmartlinks = w.lifetimeSmartlinks ?? this.lifetimeSmartlinks;
