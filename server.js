@@ -1396,7 +1396,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     }
     // Đếm riêng cho BXH TUẦN (được reset về 0 mỗi tuần bởi weeklyLeaderboardReset(), khác với validInvites
     // là tổng trọn đời dùng cho mốc thưởng mời bạn, không bao giờ reset).
-    await atomicIncrement(userRecord.referrerId, 'weeklyValidInvites', 1);
+    const weeklyInviteCount = await incrementWeeklyInviteForCurrentWeek(userRecord.referrerId);
+    if (weeklyInviteCount === null) console.error(`Không cập nhật được weeklyValidInvites cho referrer ${userRecord.referrerId}`);
     await atomicIncrement(userRecord.referrerId, 'dailyValidInvites', 1);
     if (newValid > (refUser.invitedCount || 0)) {
         // Dữ liệu invitedCount cũ (trước khi vá lỗi) có thể vẫn còn thấp hơn thực tế -> tự sửa lại cho khớp
@@ -2686,31 +2687,60 @@ bot.command('broadcast', async (ctx) => {
 });
 
 // ==================== RESET BXH TUẦN + TRAO THƯỞNG TOP 1-3 ====================
-// Trước đây việc "reset BXH mỗi tuần" chỉ được xử lý ở CLIENT (index.html), nghĩa là: (1) chỉ chạy khi có
-// user mở app đúng lúc sang tuần mới, (2) không hề trao thưởng thật cho top 1-3 (chỉ xóa số liệu hiển thị
-// tạm trên máy người đó). Chuyển toàn bộ sang SERVER để chạy đúng giờ, đáng tin cậy, và trao thưởng thật.
-
-// Xác định "mã tuần" hiện tại (tuần bắt đầu từ Thứ 2, giống hệt cách tính ở frontend) để biết đã sang tuần mới hay chưa
-// Tính "mã tuần" theo mốc CHỦ NHẬT 00:00 (khớp với đồng hồ đếm ngược "⏳ Reset vào 00:00 Chủ Nhật" hiển thị
-// cho người dùng ở tab BXH) - KHÔNG dùng ISO week (Thứ 2) để tránh lệch 1 ngày so với những gì người dùng
-// nhìn thấy trên giao diện.
-function getWeekIdentifier(date) {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    const day = d.getDay(); // Chủ Nhật = 0
-    d.setDate(d.getDate() - day); // Lùi về đúng Chủ Nhật gần nhất (hoặc giữ nguyên nếu hôm nay là Chủ Nhật)
-    return d.toISOString().slice(0, 10);
-}
-
-// Phần thưởng mặc định cho Top 1-3 BXH mời bạn hàng tuần (có thể chỉnh lại số này theo ý muốn)
+// Toàn bộ mốc tuần dùng Asia/Ho_Chi_Minh, tuần bắt đầu đúng 00:00:00 Chủ Nhật giờ Việt Nam.
+// Scheduler dùng exact setTimeout + watchdog 45 giây + startup recovery. Payout dùng snapshot + marker
+// bền vững trong app_settings để crash/restart không cộng thưởng lại.
+const VIETNAM_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+const WEEKLY_ADS_KEY = 'weekly_ads_counts';
+const WEEKLY_INVITE_MIN = 5;
+const WEEKLY_ADS_MIN = 50;
+const WEEKLY_WATCHDOG_MS = 45 * 1000;
+const WEEKLY_PROCESS_ID = crypto.randomBytes(8).toString('hex');
 const WEEKLY_TOP_REWARDS = [
     { rank: 1, orders: 75000, spins: 8, label: '🥇 Hạng 1' },
     { rank: 2, orders: 45000, spins: 5, label: '🥈 Hạng 2' },
     { rank: 3, orders: 25000, spins: 3, label: '🥉 Hạng 3' }
 ];
 
-const WEEKLY_ADS_KEY = 'weekly_ads_counts';
-let weeklyAdsWriteQueue = Promise.resolve();
+let weeklyLeaderboardQueue = Promise.resolve();
+let weeklyExactTimer = null;
+let weeklyWatchdogTimer = null;
+
+function vietnamCalendarParts(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: VIETNAM_TIME_ZONE,
+        year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(date);
+    const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+    return { year: Number(map.year), month: Number(map.month), day: Number(map.day) };
+}
+
+function getWeekIdentifier(date = new Date()) {
+    const { year, month, day } = vietnamCalendarParts(date);
+    const vietnamCalendarDayUtc = Date.UTC(year, month - 1, day);
+    const dayOfWeek = new Date(vietnamCalendarDayUtc).getUTCDay(); // 0 = Chủ Nhật của ngày lịch Việt Nam
+    const sundayUtc = new Date(vietnamCalendarDayUtc - dayOfWeek * 24 * 60 * 60 * 1000);
+    return sundayUtc.toISOString().slice(0, 10);
+}
+
+function addDaysToWeekKey(weekKey, days) {
+    const base = new Date(`${weekKey}T00:00:00.000Z`);
+    if (Number.isNaN(base.getTime())) throw new Error(`weekKey không hợp lệ: ${weekKey}`);
+    base.setUTCDate(base.getUTCDate() + Number(days || 0));
+    return base.toISOString().slice(0, 10);
+}
+
+function nextVietnamSundayMidnight(from = new Date()) {
+    const nextWeekKey = addDaysToWeekKey(getWeekIdentifier(from), 7);
+    return new Date(`${nextWeekKey}T00:00:00+07:00`);
+}
+
+function runWeeklyLeaderboardExclusive(task) {
+    const run = weeklyLeaderboardQueue.then(task, task);
+    weeklyLeaderboardQueue = run.catch(() => {});
+    return run;
+}
+
 async function getWeeklyAdsCounts() {
     const { data, error } = await supabase.from('app_settings').select('value').eq('key', WEEKLY_ADS_KEY).maybeSingle();
     if (error) throw error;
@@ -2719,121 +2749,423 @@ async function getWeeklyAdsCounts() {
     if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
     return typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
+
 async function saveWeeklyAdsCounts(counts) {
-    const { error } = await supabase.from('app_settings').upsert({ key:WEEKLY_ADS_KEY, value:counts }, { onConflict:'key' });
+    const { error } = await supabase.from('app_settings').upsert({ key: WEEKLY_ADS_KEY, value: counts }, { onConflict: 'key' });
     if (error) throw error;
 }
-function incrementWeeklyAds(userId) {
-    const run = weeklyAdsWriteQueue.then(async () => {
-        const counts = await getWeeklyAdsCounts();
-        counts[String(userId)] = Number(counts[String(userId)] || 0) + 1;
-        await saveWeeklyAdsCounts(counts);
-        return counts[String(userId)];
-    });
-    weeklyAdsWriteQueue = run.catch(() => {});
-    return run;
+
+async function readWeeklyState(id) {
+    const { data, error } = await supabase.from('weekly_state').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return data || null;
 }
 
-async function weeklyLeaderboardReset() {
-    try {
-        const currentWeek = getWeekIdentifier(new Date());
+async function writeWeeklyState(id, weekKey) {
+    const { error } = await supabase.from('weekly_state').upsert({ id, lastWeekKey: weekKey }, { onConflict: 'id' });
+    if (error) throw error;
+}
 
-        // ===== BXH MỜI BẠN =====
-        const { data: inviteState } = await supabase.from('weekly_state').select('*').eq('id', 1).single();
-        if (!inviteState || inviteState.lastWeekKey !== currentWeek) {
-            const inviteCols = await getUserColumns();
-            const hasWeeklyInviteColumn = inviteCols.has('weeklyValidInvites');
-            let topUsers = [], topError = null;
-            if (hasWeeklyInviteColumn) {
-                const r = await supabase.from('users')
-                    .select('id, name, weeklyValidInvites').gt('weeklyValidInvites', 0)
-                    .order('weeklyValidInvites', { ascending: false }).limit(3);
-                topUsers = r.data || []; topError = r.error || null;
-            } else {
-                // Cột chưa có trong bảng users -> xếp hạng theo số đếm đang lưu trong app_settings
-                const all = await getUserExtraAll();
-                const ids = Object.entries(all)
-                    .filter(([, v]) => Number(v?.weeklyValidInvites || 0) > 0)
-                    .sort((a, b) => Number(b[1].weeklyValidInvites) - Number(a[1].weeklyValidInvites))
-                    .slice(0, 3).map(([id]) => id);
-                if (ids.length > 0) {
-                    const { data: rows } = await supabase.from('users').select('id, name').in('id', ids);
-                    const names = Object.fromEntries((rows || []).map(u => [String(u.id), u.name]));
-                    topUsers = ids.map(id => ({ id, name: names[id] || ('User ' + id), weeklyValidInvites: Number(all[id].weeklyValidInvites || 0) }));
-                }
-            }
-            if (topError) {
-                console.error('Lỗi lấy top BXH mời bạn tuần:', topError);
-            } else {
-                for (let i = 0; i < topUsers.length; i++) {
-                    const u = topUsers[i], prize = WEEKLY_TOP_REWARDS[i];
-                    if (!prize) break;
-                    // Top 1-3 chỉ nhận thưởng BXH Mời Bạn tuần khi có >= 5 ref hợp lệ trong tuần đó.
-                    // Không đủ 5 ref hợp lệ -> vẫn đứng hạng trên BXH nhưng KHÔNG được trao thưởng.
-                    if (Number(u.weeklyValidInvites || 0) < 5) continue;
-                    const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
-                    await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
-                    logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH mời bạn tuần`);
-                    await safeSendLocalizedMessage(u.id,
-                        `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${u.weeklyValidInvites}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới!`,
-                        `🏆 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Invite Ranking with *${u.weeklyValidInvites}* valid invites!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe ranking has been reset for the new week!`,
-                        { parse_mode: 'Markdown' }
-                    );
-                    logActivity(`🏆 ${maskName(u.name)} đạt ${prize.label} BXH mời bạn tuần này`);
-                }
-                if (hasWeeklyInviteColumn) {
-                    await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
-                } else {
-                    const all = await getUserExtraAll();
-                    Object.keys(all).forEach(k => { if (all[k] && all[k].weeklyValidInvites) all[k].weeklyValidInvites = 0; });
-                    await saveUserExtraAll(all);
-                }
-                await supabase.from('weekly_state').upsert({ id: 1, lastWeekKey: currentWeek });
-            }
-        }
+function weeklyTransitionKey(boardType) {
+    return persistentEventKey('weekly-transition', boardType);
+}
 
-        // ===== BXH XEM QC =====
-        const { data: adsState } = await supabase.from('weekly_state').select('*').eq('id', 2).single();
-        if (!adsState || adsState.lastWeekKey !== currentWeek) {
-            const counts = await getWeeklyAdsCounts();
-            const topIds = Object.entries(counts).filter(([,count]) => Number(count)>0)
-                .sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,3).map(([id])=>id);
-            const { data: adUsers, error: adsError } = topIds.length
-                ? await supabase.from('users').select('id,name').in('id',topIds)
-                : { data:[], error:null };
-            const names = Object.fromEntries((adUsers||[]).map(u=>[String(u.id),u.name]));
-            const topAds = topIds.map(id=>({id,name:names[id]||('User '+id),weeklyAdsCount:Number(counts[id]||0)}));
-            if (adsError) {
-                console.error('Lỗi lấy top BXH Xem QC tuần:', adsError);
-            } else {
-                for (let i = 0; i < topAds.length; i++) {
-                    const u = topAds[i], prize = WEEKLY_TOP_REWARDS[i];
-                    if (!prize) break;
-                    // Top 1-3 chỉ nhận thưởng BXH Xem QC tuần khi có >= 20 QC hợp lệ trong tuần đó.
-                    // Không đủ 20 QC -> vẫn đứng hạng trên BXH nhưng KHÔNG được trao thưởng.
-                    if (Number(u.weeklyAdsCount || 0) < 20) continue;
-                    const { data: cur } = await supabase.from('users').select('orders, spins').eq('id', u.id).single();
-                    await touchWallet(u.id, { orders: (cur?.orders || 0) + prize.orders, spins: (cur?.spins || 0) + prize.spins });
-                    logTransaction(u.id, 'orders', prize.orders, `${prize.label} BXH Xem QC tuần`);
-                    await safeSendLocalizedMessage(u.id,
-                        `📺 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Xem QC tuần này với *${u.weeklyAdsCount}* lượt xem!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH Xem QC đã được reset cho tuần mới!`,
-                        `📺 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Ad Ranking with *${u.weeklyAdsCount}* valid views!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe Ad Ranking has been reset for the new week!`,
-                        { parse_mode: 'Markdown' }
-                    );
-                    logActivity(`📺 ${maskName(u.name)} đạt ${prize.label} BXH Xem QC tuần này`);
-                }
-                await saveWeeklyAdsCounts({});
-                await supabase.from('weekly_state').upsert({ id: 2, lastWeekKey: currentWeek });
-            }
-        }
+function weeklySnapshotKey(boardType, endedWeekKey) {
+    return persistentEventKey('weekly-snapshot', `${boardType}:${endedWeekKey}`);
+}
 
-        console.log(`✅ Kiểm tra/reset BXH tuần xong: ${currentWeek}`);
-    } catch (e) {
-        console.error('Lỗi weeklyLeaderboardReset:', e);
+function weeklyPayoutKey(boardType, endedWeekKey, rank, userId) {
+    return persistentEventKey('weekly-payout', `${boardType}:${endedWeekKey}:${rank}:${String(userId)}`);
+}
+
+async function getInviteWeeklyEntries(limit = 10) {
+    const inviteCols = await getUserColumns();
+    if (inviteCols.has('weeklyValidInvites')) {
+        const { data, error } = await supabase.from('users')
+            .select('id,name,weeklyValidInvites')
+            .gt('weeklyValidInvites', 0)
+            .order('weeklyValidInvites', { ascending: false })
+            .order('id', { ascending: true })
+            .limit(limit);
+        if (error) throw error;
+        return (data || []).map(u => ({
+            id: String(u.id), name: u.name || ('User ' + u.id),
+            score: Math.max(0, Number(u.weeklyValidInvites || 0))
+        }));
     }
+
+    const all = await getUserExtraAll();
+    const ranked = Object.entries(all)
+        .map(([id, value]) => ({ id: String(id), score: Math.max(0, Number(value?.weeklyValidInvites || 0)) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+        .slice(0, limit);
+    if (!ranked.length) return [];
+    const { data, error } = await supabase.from('users').select('id,name').in('id', ranked.map(x => x.id));
+    if (error) throw error;
+    const names = Object.fromEntries((data || []).map(u => [String(u.id), u.name]));
+    return ranked.map(x => ({ ...x, name: names[x.id] || ('User ' + x.id) }));
 }
-weeklyLeaderboardReset(); // Kiểm tra ngay lúc server khởi động (phòng trường hợp server tắt đúng lúc qua tuần mới)
-setInterval(weeklyLeaderboardReset, 60 * 60 * 1000); // Kiểm tra lại mỗi giờ để không bỏ lỡ mốc sang tuần
+
+async function getAdsWeeklyEntries(limit = 10) {
+    const counts = await getWeeklyAdsCounts();
+    const ranked = Object.entries(counts)
+        .map(([id, count]) => ({ id: String(id), score: Math.max(0, Number(count || 0)) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+        .slice(0, limit);
+    if (!ranked.length) return [];
+    const { data, error } = await supabase.from('users').select('id,name').in('id', ranked.map(x => x.id));
+    if (error) throw error;
+    const names = Object.fromEntries((data || []).map(u => [String(u.id), u.name]));
+    return ranked.map(x => ({ ...x, name: names[x.id] || ('User ' + x.id) }));
+}
+
+async function loadOrCreateWeeklySnapshot(boardType, endedWeekKey) {
+    const key = weeklySnapshotKey(boardType, endedWeekKey);
+    const existing = await readPersistentEvent(key);
+    if (existing?.entries && Array.isArray(existing.entries)) return existing;
+
+    const entries = boardType === 'invite'
+        ? await getInviteWeeklyEntries(10)
+        : await getAdsWeeklyEntries(10);
+    const snapshot = {
+        boardType, endedWeekKey, capturedAt: Date.now(),
+        entries: entries.map((entry, idx) => ({ ...entry, rank: idx + 1 }))
+    };
+    const created = await createPersistentEventOnce(key, snapshot);
+    if (created.error) throw created.error;
+    return created.value || snapshot;
+}
+
+async function ensureWeeklyPayout(boardType, endedWeekKey, entry, prize) {
+    const minimum = boardType === 'invite' ? WEEKLY_INVITE_MIN : WEEKLY_ADS_MIN;
+    if (!entry || Number(entry.score || 0) < minimum) return true;
+
+    const payoutId = `${boardType}:${endedWeekKey}:${prize.rank}:${String(entry.id)}`;
+    const key = weeklyPayoutKey(boardType, endedWeekKey, prize.rank, entry.id);
+    let marker = await readPersistentEvent(key);
+    let createdByThisProcess = false;
+
+    if (!marker) {
+        const { data: current, error } = await readUserRow(entry.id);
+        if (error || !current) return false;
+        const reservation = {
+            status: 'reserved',
+            payoutId,
+            boardType,
+            endedWeekKey,
+            rank: prize.rank,
+            userId: String(entry.id),
+            score: Number(entry.score || 0),
+            orders: prize.orders,
+            spins: prize.spins,
+            preOrders: Number(current.orders || 0),
+            preSpins: Number(current.spins || 0),
+            targetOrders: Number(current.orders || 0) + prize.orders,
+            targetSpins: Number(current.spins || 0) + prize.spins,
+            owner: WEEKLY_PROCESS_ID,
+            reservedAt: Date.now(),
+            leaseUntil: Date.now() + 20 * 1000,
+            transactionLogged: false,
+            notificationSent: false,
+            activityLogged: false
+        };
+        const once = await createPersistentEventOnce(key, reservation);
+        if (once.error) return false;
+        marker = once.value || reservation;
+        createdByThisProcess = !!once.created;
+    }
+
+    if (marker.status !== 'committed') {
+        if (!createdByThisProcess && marker.owner && marker.owner !== WEEKLY_PROCESS_ID
+            && Number(marker.leaseUntil || 0) > Date.now()) {
+            return false; // instance khác đang xử lý; watchdog sẽ retry, không cộng chồng
+        }
+
+        const { data: current, error } = await readUserRow(entry.id);
+        if (error || !current) return false;
+
+        const alreadyApplied = String(current.lastWeeklyPayoutId || '') === payoutId
+            || (marker.status === 'mutating'
+                && Number(current.orders || 0) >= Number(marker.targetOrders || Number.MAX_SAFE_INTEGER)
+                && Number(current.spins || 0) >= Number(marker.targetSpins || Number.MAX_SAFE_INTEGER));
+
+        if (!alreadyApplied) {
+            marker = {
+                ...marker,
+                status: 'mutating',
+                owner: WEEKLY_PROCESS_ID,
+                mutatingAt: Date.now(),
+                leaseUntil: Date.now() + 20 * 1000
+            };
+            if (!(await writePersistentEvent(key, marker, 4))) return false;
+
+            const mutation = await atomicWalletMutation(entry.id, {
+                deltaOrders: prize.orders,
+                deltaSpins: prize.spins,
+                setFields: { lastWeeklyPayoutId: payoutId }
+            });
+            if (mutation.error) {
+                console.error(`Lỗi cộng thưởng ${payoutId}:`, mutation.error.message);
+                return false;
+            }
+            if (!(await flushUserExtra())) return false;
+        }
+
+        const { data: verified } = await readUserRow(entry.id);
+        const safelyCommitted = !!verified && (
+            String(verified.lastWeeklyPayoutId || '') === payoutId
+            || (Number(verified.orders || 0) >= Number(marker.targetOrders || 0)
+                && Number(verified.spins || 0) >= Number(marker.targetSpins || 0))
+        );
+        if (!safelyCommitted) return false;
+
+        marker = {
+            ...marker,
+            status: 'committed',
+            committedAt: marker.committedAt || Date.now(),
+            owner: WEEKLY_PROCESS_ID,
+            leaseUntil: 0
+        };
+        if (!(await writePersistentEvent(key, marker, 4))) return false;
+    }
+
+    // Transaction log: query trước khi insert để retry sau crash không tạo dòng thứ hai.
+    if (!marker.transactionLogged) {
+        const reason = `${prize.label} BXH ${boardType === 'invite' ? 'mời bạn' : 'Xem QC'} tuần ${endedWeekKey}`;
+        const { data: existingTx, error: txReadError } = await supabase.from('transactions')
+            .select('*').eq('userId', String(entry.id)).eq('reason', reason).limit(1);
+        if (txReadError) return false;
+        if (!existingTx || existingTx.length === 0) {
+            const tx = await insertRowSafe('transactions', {
+                userId: String(entry.id), type: 'orders', amount: prize.orders, reason
+            });
+            if (tx.error) return false;
+        }
+        marker.transactionLogged = true;
+        if (!(await writePersistentEvent(key, marker, 3))) return false;
+    }
+
+    // Telegram gửi SAU reward commit. Gửi lỗi không rollback payout/reset.
+    if (!marker.notificationSent) {
+        const sent = boardType === 'invite'
+            ? await safeSendLocalizedMessage(entry.id,
+                `🏆 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Mời Bạn tuần này với *${entry.score}* lượt mời hợp lệ!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH đã được reset cho tuần mới!`,
+                `🏆 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Invite Ranking with *${entry.score}* valid invites!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe ranking has been reset for the new week!`,
+                { parse_mode: 'Markdown' })
+            : await safeSendLocalizedMessage(entry.id,
+                `📺 *CHÚC MỪNG!* Bạn đạt *${prize.label}* Bảng Xếp Hạng Xem QC tuần này với *${entry.score}* lượt xem!\n🎁 Phần thưởng: *+${prize.orders.toLocaleString()} Đơn Hàng + ${prize.spins} Lượt Mở Rương*\n\nBXH Xem QC đã được reset cho tuần mới!`,
+                `📺 *CONGRATULATIONS!* You reached *${prize.label}* on this week's Ad Ranking with *${entry.score}* valid views!\n🎁 Reward: *+${prize.orders.toLocaleString()} Orders + ${prize.spins} Chest Opens*\n\nThe Ad Ranking has been reset for the new week!`,
+                { parse_mode: 'Markdown' });
+        if (sent) {
+            marker.notificationSent = true;
+            await writePersistentEvent(key, marker, 2);
+        }
+    }
+
+    if (!marker.activityLogged) {
+        await logActivity(`${boardType === 'invite' ? '🏆' : '📺'} ${maskName(entry.name)} đạt ${prize.label} BXH ${boardType === 'invite' ? 'mời bạn' : 'Xem QC'} tuần này`);
+        marker.activityLogged = true;
+        await writePersistentEvent(key, marker, 2);
+    }
+    return true;
+}
+
+async function resetWeeklyBoardCounters(boardType) {
+    if (boardType === 'ads') {
+        await saveWeeklyAdsCounts({});
+        return true;
+    }
+
+    const cols = await getUserColumns();
+    if (cols.has('weeklyValidInvites')) {
+        const { error } = await supabase.from('users').update({ weeklyValidInvites: 0 }).gt('weeklyValidInvites', -1);
+        if (error) throw error;
+        return true;
+    }
+
+    const all = await getUserExtraAll();
+    for (const key of Object.keys(all)) {
+        if (all[key] && Object.prototype.hasOwnProperty.call(all[key], 'weeklyValidInvites')) {
+            all[key].weeklyValidInvites = 0;
+        }
+    }
+    const saved = await saveUserExtraAll(all);
+    if (!saved) throw new Error('Không lưu được reset weeklyValidInvites vào user_extra_state.');
+    return true;
+}
+
+async function processWeeklyBoard(boardType, stateId, currentWeek) {
+    const state = await readWeeklyState(stateId);
+    const transitionKey = weeklyTransitionKey(boardType);
+    const transition = await readPersistentEvent(transitionKey);
+
+    if (state?.lastWeekKey === currentWeek) {
+        // Crash sau khi weekly_state đã ghi nhưng trước khi transition đổi về active.
+        if (transition?.status === 'resetting' && transition.toWeek === currentWeek) {
+            await writePersistentEvent(transitionKey, {
+                ...transition, status: 'active', activeWeek: currentWeek, completedAt: Date.now()
+            }, 3);
+        }
+        return true;
+    }
+
+    // Không có state cũ: bootstrap an toàn, tuyệt đối không đoán rồi xóa dữ liệu giữa tuần.
+    if (!state?.lastWeekKey) {
+        await writeWeeklyState(stateId, currentWeek);
+        await writePersistentEvent(transitionKey, {
+            boardType, status: 'active', activeWeek: currentWeek, initializedAt: Date.now()
+        }, 3);
+        console.log(`ℹ️ Khởi tạo weekly_state ${boardType}: ${currentWeek} (không xóa dữ liệu).`);
+        return true;
+    }
+
+    const endedWeekKey = String(state.lastWeekKey);
+    const snapshot = await loadOrCreateWeeklySnapshot(boardType, endedWeekKey);
+    if (!snapshot || !Array.isArray(snapshot.entries)) return false;
+
+    // Snapshot bất biến -> payout Top 1-3 theo đúng tuần vừa kết thúc.
+    for (let i = 0; i < Math.min(3, snapshot.entries.length); i++) {
+        const prize = WEEKLY_TOP_REWARDS[i];
+        const ok = await ensureWeeklyPayout(boardType, endedWeekKey, snapshot.entries[i], prize);
+        if (!ok) return false; // không reset nếu payout/DB chưa ở trạng thái an toàn
+    }
+
+    // Chặn mọi increment tuần mới cho tới khi reset + weekly_state hoàn tất.
+    const resetTransition = {
+        boardType, status: 'resetting', fromWeek: endedWeekKey, toWeek: currentWeek,
+        snapshotKey: weeklySnapshotKey(boardType, endedWeekKey), startedAt: Date.now()
+    };
+    if (!(await writePersistentEvent(transitionKey, resetTransition, 4))) return false;
+
+    await resetWeeklyBoardCounters(boardType);
+    await writeWeeklyState(stateId, currentWeek);
+    if (!(await writePersistentEvent(transitionKey, {
+        ...resetTransition, status: 'active', activeWeek: currentWeek, completedAt: Date.now()
+    }, 4))) {
+        // weekly_state đã là tuần mới, lần watchdog kế tiếp chỉ cần finalize transition, không reset lại.
+        console.warn(`Transition ${boardType} chưa finalize, watchdog sẽ sửa lại.`);
+    }
+    return true;
+}
+
+async function weeklyLeaderboardResetUnlocked(reason = 'manual') {
+    const currentWeek = getWeekIdentifier(new Date());
+    let inviteOk = false, adsOk = false;
+    try { inviteOk = await processWeeklyBoard('invite', 1, currentWeek); }
+    catch (e) { console.error('Lỗi reset BXH Mời Bạn:', e.message); }
+    try { adsOk = await processWeeklyBoard('ads', 2, currentWeek); }
+    catch (e) { console.error('Lỗi reset BXH Xem QC:', e.message); }
+    if (inviteOk && adsOk) console.log(`✅ Kiểm tra/reset BXH tuần (${reason}): ${currentWeek}`);
+    return inviteOk && adsOk;
+}
+
+function weeklyLeaderboardReset(reason = 'manual') {
+    return runWeeklyLeaderboardExclusive(() => weeklyLeaderboardResetUnlocked(reason));
+}
+
+// Chỉ Rewarded đã server-verify mới gọi hàm này. eventId = ad token giúp retry không cộng BXH lần hai.
+function incrementWeeklyAds(userId, eventId = '') {
+    return runWeeklyLeaderboardExclusive(async () => {
+        const currentWeek = getWeekIdentifier(new Date());
+        const ready = await processWeeklyBoard('ads', 2, currentWeek);
+        if (!ready) return null;
+
+        const transition = await readPersistentEvent(weeklyTransitionKey('ads'));
+        if (transition?.status === 'resetting') return null;
+
+        const id = String(userId);
+        const counts = await getWeeklyAdsCounts();
+        if (!eventId) {
+            counts[id] = Number(counts[id] || 0) + 1;
+            await saveWeeklyAdsCounts(counts);
+            return counts[id];
+        }
+
+        // Reuse chính ad-completed marker của token để không tạo thêm 1 row app_settings cho mỗi QC.
+        const markerKey = completedAdEventKey(String(eventId));
+        let marker = await readPersistentEvent(markerKey);
+        if (marker?.completionResult?.success) {
+            return Number(marker.completionResult.weeklyAdsCount ?? counts[id] ?? 0);
+        }
+        if (marker?.weeklyCountApplied && marker.weeklyCountWeekKey === currentWeek) {
+            return Math.max(Number(counts[id] || 0), Number(marker.weeklyTargetCount || 0));
+        }
+
+        if (!marker) {
+            const reservation = {
+                userId: id,
+                purpose: 'weekly-count-reservation',
+                weeklyCountWeekKey: currentWeek,
+                weeklyTargetCount: Number(counts[id] || 0) + 1,
+                weeklyCountApplied: false,
+                createdAt: Date.now()
+            };
+            const once = await createPersistentEventOnce(markerKey, reservation);
+            if (once.error) return null;
+            marker = once.value || reservation;
+        }
+
+        if (marker.completionResult?.success) {
+            return Number(marker.completionResult.weeklyAdsCount ?? counts[id] ?? 0);
+        }
+        if (marker.weeklyCountWeekKey && marker.weeklyCountWeekKey !== currentWeek) return null;
+        if (marker.userId && String(marker.userId) !== id) return null;
+
+        const targetCount = Number(marker.weeklyTargetCount || (Number(counts[id] || 0) + 1));
+        if (Number(counts[id] || 0) < targetCount) {
+            counts[id] = targetCount;
+            await saveWeeklyAdsCounts(counts);
+        }
+        marker = {
+            ...marker,
+            userId: id,
+            weeklyCountWeekKey: currentWeek,
+            weeklyTargetCount: targetCount,
+            weeklyCountApplied: true,
+            weeklyCountAppliedAt: Date.now()
+        };
+        if (!(await writePersistentEvent(markerKey, marker, 3))) return null;
+        return Math.max(Number(counts[id] || 0), targetCount);
+    });
+}
+
+// Referral hợp lệ dùng boundary lock rồi atomicIncrement; claim referrerCounted hiện hữu vẫn là idempotency chính.
+function incrementWeeklyInviteForCurrentWeek(referrerId) {
+    return runWeeklyLeaderboardExclusive(async () => {
+        const currentWeek = getWeekIdentifier(new Date());
+        const ready = await processWeeklyBoard('invite', 1, currentWeek);
+        if (!ready) return null;
+        const transition = await readPersistentEvent(weeklyTransitionKey('invite'));
+        if (transition?.status === 'resetting') return null;
+        return atomicIncrement(referrerId, 'weeklyValidInvites', 1);
+    });
+}
+
+function scheduleNextVietnamWeeklyReset() {
+    if (weeklyExactTimer) clearTimeout(weeklyExactTimer);
+    const now = new Date();
+    const next = nextVietnamSundayMidnight(now);
+    const delay = Math.max(1, next.getTime() - now.getTime());
+    weeklyExactTimer = setTimeout(async () => {
+        try { await weeklyLeaderboardReset('exact-timer'); }
+        finally { scheduleNextVietnamWeeklyReset(); }
+    }, delay);
+    console.log(`⏰ Weekly reset kế tiếp: ${next.toISOString()} (${VIETNAM_TIME_ZONE})`);
+}
+
+function startWeeklyLeaderboardScheduler() {
+    weeklyLeaderboardReset('startup-recovery').catch(e => console.error('Startup weekly recovery:', e.message))
+        .finally(() => scheduleNextVietnamWeeklyReset());
+    if (weeklyWatchdogTimer) clearInterval(weeklyWatchdogTimer);
+    weeklyWatchdogTimer = setInterval(() => {
+        weeklyLeaderboardReset('watchdog').catch(e => console.error('Weekly watchdog:', e.message));
+    }, WEEKLY_WATCHDOG_MS);
+}
+
+// setImmediate bảo đảm toàn bộ helper persistent-event phía dưới file đã được khởi tạo trước lần recovery đầu tiên.
+setImmediate(startWeeklyLeaderboardScheduler);
 
 
 // (ví dụ lỗi 409 Conflict do phiên bản deploy cũ vẫn còn đang polling khi Render tạo instance mới),
@@ -3032,7 +3364,8 @@ app.post('/api/user/:id', async (req, res) => {
             'adsToday', 'smartlinksToday', 'smartlinkCount', 'deliveryCount',
             'deliveryCountLifetime', 'chestOpensTotal', 'chestOpensToday',
             'referralMilestones', 'dailyValidInvites',
-            'bonusAdsToday','rewardedAdsToday','extraDeliveryAdsToday','extraDeliveryCount','withdrawRemain','spinAdCount','groupTaskClaimed',
+            'bonusAdsToday','bonusAdNextAllowedAt','lastBonusAdToken','rewardedAdsToday','extraDeliveryAdsToday','extraDeliveryCount','withdrawRemain','spinAdCount','groupTaskClaimed',
+            'lastSmartlinkTime','lastSmartlinkAttemptId',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds',
             'dailyTasks', 'allTasksClaimed', 'lastResetDate',
             'weeklyAdsCount', 'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed'
@@ -3114,6 +3447,7 @@ const SMARTLINK_DAILY_LIMIT = 30;
 const SMARTLINK_REWARD_COINS = 25;
 const SMARTLINK_REWARD_ORDERS = 25;
 const SMARTLINK_MIN_ELAPSED_MS = 5000;
+const SMARTLINK_COOLDOWN_MS = 3 * 60 * 1000;
 const SMARTLINK_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 function isAllowedSmartlinkUrl(value) {
     try {
@@ -3142,6 +3476,16 @@ app.post('/api/smartlink/start', async (req, res) => {
         const count = Math.max(0, Number(user.smartlinksToday || user.smartlinkCount || 0));
         if (count >= SMARTLINK_DAILY_LIMIT) {
             return res.status(429).json({success:false,limitReached:true,smartlinksToday:count,error:'Đã hết 30 lượt SmartLink hôm nay.'});
+        }
+        const nextAllowedAt = Math.max(0, Number(user.lastSmartlinkTime || 0)) + SMARTLINK_COOLDOWN_MS;
+        if (Date.now() < nextAllowedAt) {
+            return res.status(429).json({
+                success:false,cooldown:true,
+                retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),
+                nextAllowedAt,
+                smartlinksToday:count,
+                error:'SmartLink đang trong thời gian chờ 3 phút.'
+            });
         }
         const attemptId = crypto.randomBytes(18).toString('hex');
         const startedAt = Date.now();
@@ -3210,6 +3554,7 @@ app.post('/api/smartlink/complete', async (req, res) => {
                 lifetimeSmartlinks:Number(freshUser.lifetimeSmartlinks || 0),
                 coins:Number(freshUser.coins || 0),orders:Number(freshUser.orders || 0),
                 walletUpdatedAt:freshUser.walletUpdatedAt || null,
+                lastSmartlinkTime:Number(freshUser.lastSmartlinkTime || Date.now()),
                 elapsed:Date.now()-Number(attempt.startedAt || Date.now())
             };
             const completedAttempt = {...attempt,status:'completed',used:true,completedAt:Date.now(),result:response};
@@ -4678,11 +5023,26 @@ async function writePersistentEvent(key, value, retries = 2) {
     console.error('Persistent reward event write failed:', key);
     return false;
 }
+async function createPersistentEventOnce(key, value) {
+    try {
+        const { error } = await supabase.from('app_settings').insert({ key, value });
+        if (!error) return { created: true, value, error: null };
+        if (error.code === '23505') {
+            const existing = await readPersistentEvent(key);
+            return existing
+                ? { created: false, value: existing, error: null }
+                : { created: false, value: null, error: new Error(`Marker ${key} đã tồn tại nhưng chưa đọc lại được.`) };
+        }
+        return { created: false, value: null, error };
+    } catch (error) {
+        return { created: false, value: null, error };
+    }
+}
 function persistentEventKey(type, id) {
     return `${PERSISTENT_EVENT_PREFIX}${type}:${String(id)}`;
 }
 
-const PERSISTENT_AD_ACTION_PURPOSES = new Set(['delivery','truck-upgrade','x2','coinbox','streak-recovery']);
+const PERSISTENT_AD_ACTION_PURPOSES = new Set(['delivery','truck-upgrade','x2','coinbox','streak-recovery','bonus-task']);
 
 function completedAdEventKey(token) {
     return persistentEventKey('ad-completed', token);
@@ -4736,6 +5096,26 @@ app.post('/api/ad/session/start', async (req, res) => {
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const normalizedUserId = String(userId);
         const normalizedActionId = String(actionId || '');
+
+        // Bonus-task cooldown phải được kiểm tra TRƯỚC khi trả token để frontend chưa thể mở Monetag.
+        if (sessionPurpose === 'bonus-task') {
+            const bonusUser = await loadCurrentDailyUser(normalizedUserId);
+            if (!bonusUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+            const bonusCount = Math.max(0, Number(bonusUser.bonusAdsToday || 0));
+            if (bonusCount >= 30) {
+                return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 30 lượt QC Rewarded hôm nay.'});
+            }
+            const nextAllowedAt = Math.max(0, Number(bonusUser.bonusAdNextAllowedAt || 0));
+            if (Date.now() < nextAllowedAt) {
+                return res.status(429).json({
+                    success:false,cooldown:true,
+                    retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),
+                    nextAllowedAt,
+                    bonusAdsToday:bonusCount
+                });
+            }
+        }
+
         const existingToken = activeAdByUser.get(normalizedUserId);
         if (existingToken) {
             let existing = adSessions.get(existingToken);
@@ -4928,10 +5308,43 @@ app.post('/api/ad/session/complete', async (req, res) => {
             if (Number(user.extraDeliveryAdsToday||0)>=8) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 8 quảng cáo nhận thêm lượt giao hôm nay.'});
         }
         if (purpose==='chest-spin' && Number(user.spinAdCount||0)>=10) return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 10).'});
-        const next=await incrementWeeklyAds(String(userId)); if(next===null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
+        if (purpose==='bonus-task' && Number(user.bonusAdsToday||0)>=30) {
+            return res.status(429).json({success:false,limitReached:true,bonusAdsToday:Number(user.bonusAdsToday||0),error:'Đã hết 30 lượt QC Rewarded hôm nay.'});
+        }
+
+        // Nếu process trước đã commit bonus nhưng chết trước completed marker, không cộng ví/counter lần hai.
+        if (purpose === 'bonus-task' && String(user.lastBonusAdToken || '') === String(token)) {
+            const next = await incrementWeeklyAds(String(userId), String(token));
+            if (next === null) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Reward đã commit nhưng BXH đang đồng bộ.'});
+            const recovered = await readUserRow(String(userId));
+            const recoveredUser = recovered.data || user;
+            const recoveredResponse = {
+                success:true,adToken:String(token),purpose,weeklyAdsCount:next,
+                adsToday:Number(recoveredUser.adsToday||0),rewardedAdsToday:Number(recoveredUser.rewardedAdsToday||0),
+                lifetimeAdsWatched:Number(recoveredUser.lifetimeAdsWatched||0),bonusAdsToday:Number(recoveredUser.bonusAdsToday||0),
+                bonusAdNextAllowedAt:Number(recoveredUser.bonusAdNextAllowedAt||0),
+                extraDeliveryAdsToday:Number(recoveredUser.extraDeliveryAdsToday||0),extraDeliveryCount:Number(recoveredUser.extraDeliveryCount||0),
+                rewardCoins:50,rewardOrders:25,rewardSpins:0,
+                coins:Number(recoveredUser.coins||0),orders:Number(recoveredUser.orders||0),spins:Number(recoveredUser.spins||0),
+                spinAdCount:Number(recoveredUser.spinAdCount||0),walletUpdatedAt:recoveredUser.walletUpdatedAt||null,elapsed,
+                riskScore:(await getAntiFraudState(String(userId))).stats.score
+            };
+            const recoveredCompleted={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,completionResult:recoveredResponse};
+            completedAdEvents.set(String(token), recoveredCompleted);
+            await persistCompletedAdEvent(String(token), recoveredCompleted);
+            adSessions.delete(token);
+            if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+            return res.json({...recoveredResponse,idempotent:true,recovered:true});
+        }
+
+        const next=await incrementWeeklyAds(String(userId), String(token)); if(next===null) return res.status(500).json({success:false,error:'Không cập nhật được BXH Xem QC.'});
         const rewardCoins=purpose==='bonus-task'?50:0, rewardOrders=purpose==='bonus-task'?25:0, rewardSpins=purpose==='chest-spin'?1:0;
         const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,lastResetDate:vietnamDayKey()};
-        if(purpose==='bonus-task') updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
+        if(purpose==='bonus-task') {
+            updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
+            updateFields.bonusAdNextAllowedAt=Date.now()+5*60*1000;
+            updateFields.lastBonusAdToken=String(token);
+        }
         if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
         if(purpose==='extra-delivery'){
             updateFields.extraDeliveryAdsToday=Number(user.extraDeliveryAdsToday||0)+1;
@@ -4939,6 +5352,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        if (purpose==='bonus-task' && !(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Phần thưởng đã commit nhưng cooldown đang đồng bộ.'});
         const fresh=await readUserRow(String(userId));
         const completed={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null};
         await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,spins:rewardSpins,sessionId,purpose});
@@ -4946,7 +5360,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         try{await tryFinalizeReferral(String(userId));}catch(_){}
         insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose,ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
         completedAdEvents.set(String(token),completed);
-        const response={success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
+        const response={success:true,adToken:String(token),purpose,weeklyAdsCount:next,adsToday:Number(fresh.data?.adsToday||0),rewardedAdsToday:Number(fresh.data?.rewardedAdsToday||0),lifetimeAdsWatched:Number(fresh.data?.lifetimeAdsWatched||0),bonusAdsToday:Number(fresh.data?.bonusAdsToday||0),bonusAdNextAllowedAt:Number(fresh.data?.bonusAdNextAllowedAt||0),extraDeliveryAdsToday:Number(fresh.data?.extraDeliveryAdsToday||0),extraDeliveryCount:Number(fresh.data?.extraDeliveryCount||0),rewardCoins,rewardOrders,rewardSpins,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),spinAdCount:Number(fresh.data?.spinAdCount||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
         completed.completionResult=response;
         const completedPersisted = await persistCompletedAdEvent(String(token), completed);
         if (!completedPersisted && PERSISTENT_AD_ACTION_PURPOSES.has(purpose)) {
@@ -5347,35 +5761,37 @@ app.get('/api/withdrawals/:userId', async (req, res) => {
     res.json({ withdrawals: data || [] });
 });
 
-// API bảng xếp hạng mời bạn - dữ liệu THẬT từ DB (không random)
+// API bảng xếp hạng tuần - luôn chạy boundary recovery trước khi trả dữ liệu để client không thấy tuần cũ.
 app.get('/api/leaderboard-ads', async (req, res) => {
     try {
-        const counts = await getWeeklyAdsCounts();
-        const ids = Object.entries(counts).filter(([,count])=>Number(count)>0)
-            .sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,10).map(([id])=>id);
-        if (!ids.length) return res.json({ leaderboard:[] });
-        const { data, error } = await supabase.from('users').select('id,name').in('id',ids);
-        if (error) throw error;
-        const names = Object.fromEntries((data||[]).map(u=>[String(u.id),u.name]));
-        res.json({ leaderboard:ids.map(id=>({id,name:names[id]||('User '+id),adsCount:Number(counts[id]||0)})) });
+        await weeklyLeaderboardReset('api-leaderboard-ads');
+        const currentWeek = getWeekIdentifier(new Date());
+        const entries = await getAdsWeeklyEntries(10);
+        res.set('Cache-Control', 'no-store');
+        res.json({
+            weekKey: currentWeek,
+            leaderboard: entries.map(u => ({ id:u.id, name:u.name, adsCount:u.score }))
+        });
     } catch (error) {
-        console.error('Lỗi lấy BXH QC:',error);
+        console.error('Lỗi lấy BXH QC:', error);
         res.status(500).json({leaderboard:[]});
     }
 });
 
 app.get('/api/leaderboard', async (req, res) => {
-    // FIX LỖI "BXH MẤT HẾT DỮ LIỆU/MẤT TOP": trước đây đổi sang xếp hạng theo weeklyValidInvites (cột MỚI,
-    // ai cũng bắt đầu từ 0), khiến BXH nhìn như bị xóa sạch dù validInvites trọn đời của mọi người vẫn còn
-    // nguyên trong DB. Quay lại xếp hạng + hiển thị theo validInvites (tổng số mời hợp lệ trọn đời, không
-    // bao giờ mất). weeklyValidInvites vẫn được tính riêng ở ngầm (xem tryFinalizeReferral) chỉ để phục vụ
-    // việc xét thưởng Top 1-3 hàng tuần (weeklyLeaderboardReset), KHÔNG dùng để hiển thị BXH cho người dùng.
-    const { data, error } = await supabase.from('users').select('id, name, validInvites').order('validInvites', { ascending: false }).limit(10);
-    if (error) {
-        console.error("Lỗi lấy bảng xếp hạng:", error);
-        return res.status(500).json({ error: "Lỗi lấy bảng xếp hạng." });
+    try {
+        await weeklyLeaderboardReset('api-leaderboard-invite');
+        const currentWeek = getWeekIdentifier(new Date());
+        const entries = await getInviteWeeklyEntries(10);
+        res.set('Cache-Control', 'no-store');
+        res.json({
+            weekKey: currentWeek,
+            leaderboard: entries.map(u => ({ id:u.id, name:u.name, weeklyValidInvites:u.score }))
+        });
+    } catch (error) {
+        console.error('Lỗi lấy bảng xếp hạng tuần:', error);
+        res.status(500).json({leaderboard:[]});
     }
-    res.json({ leaderboard: (data || []).map(u => ({ id: u.id, name: u.name, validInvites: u.validInvites || 0 })) });
 });
 
 
