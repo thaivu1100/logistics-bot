@@ -52,6 +52,8 @@
         .chest { width: 100%; height: 100%; position: relative; transition: transform 0.3s; display: flex; align-items: center; justify-content: center; }
         .chest.shaking { animation: shake 0.5s ease-in-out; }
         @keyframes shake { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-10deg); } 75% { transform: rotate(10deg); } }
+        @keyframes errorFeedbackShake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-4px)} 80%{transform:translateX(3px)} }
+        .error-feedback-shake { animation: errorFeedbackShake 300ms ease-out !important; }
         .chest-open { animation: chestOpen 0.5s ease-out; }
         @keyframes chestOpen { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
         .maintenance-truck-icon { animation: maintenanceBob 1.6s ease-in-out infinite; }
@@ -725,15 +727,14 @@
         </div>
     </div>
 
-    <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
-    <div x-show="!joinedGroups && !dismissedJoinBanner" class="join-banner">
-        <div class="join-banner-close" @click="dismissedJoinBanner = true">✕</div>
-        <div class="font-black text-sm mb-1" x-text="texts.joinBannerTitle"></div>
-        <div class="text-[10px] opacity-90 mb-1" x-text="texts.joinBannerDesc"></div>
-        <div class="join-banner-btns">
-            <a href="https://t.me/khohangkiemtien" target="_blank" class="bg-blue-500 text-white" x-text="texts.channel"></a>
-            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="bg-yellow-500 text-slate-900" x-text="texts.group"></a>
-            <button @click="checkGroupMembership()" class="bg-green-500 text-white" x-text="texts.checkJoin"></button>
+    <!-- ONBOARDING LOCK: chỉ dựa trên marker persistent từ server, KHÔNG live-check Telegram membership. -->
+    <div x-show="!joinedGroups && !bannedScreen && !maintenanceLocked && !isAppLoading" x-cloak class="min-h-screen flex items-center justify-center px-5 py-10">
+        <div class="glass w-full max-w-sm rounded-[28px] p-6 text-center border border-white/10 shadow-2xl">
+            <div class="text-5xl mb-3">🔒</div>
+            <h2 class="text-lg font-black text-yellow-400 mb-2" x-text="language === 'en' ? 'Verification required' : 'Bạn chưa hoàn tất xác minh'"></h2>
+            <p class="text-xs leading-relaxed text-slate-300 mb-5" x-text="language === 'en' ? 'Return to the Telegram Bot, send /start, join both required groups and tap Verify to unlock the Warehouse.' : 'Vui lòng quay lại Bot, gõ /start và tham gia 2 nhóm để mở Kho Hàng.'"></p>
+            <a href="https://t.me/KhoHangKiemtien_Bot?start=verify" target="_blank" class="inline-flex items-center justify-center w-full py-3 rounded-2xl bg-blue-600 font-black text-sm shadow-lg">🤖 <span class="ml-2" x-text="language === 'en' ? 'Open Bot' : 'Mở Bot'"></span></a>
+            <button @click="window.location.reload()" class="mt-3 w-full py-2.5 rounded-2xl bg-slate-800 font-black text-xs" x-text="language === 'en' ? 'Retry after verification' : 'Tải lại sau khi xác minh'"></button>
         </div>
     </div>
 
@@ -1973,7 +1974,7 @@
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
                 _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryRewardedOrders: 0, _deliveryGoldenHourActive: false, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 10,
                 goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
-                _rewardedRunning: false, _rewardedActionId: '', _smartlinkSaving: false, _taskClaimInFlight: false,
+                _rewardedRunning: false, _rewardedActionId: '', _rewardedActiveToken: '', _rewardedPurpose: '', _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
                 _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
@@ -2193,34 +2194,29 @@
                     setInterval(() => this.checkMaintenanceLock(), 15000);
                     if (this.maintenanceLocked) { this.finishAppLoading(); return; }
 
-                    // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
-                    // chưa/không trả về thông tin user kịp lúc app khởi động.
-                    const savedDeviceId = localStorage.getItem('shipper_uid') || null;
-
+                    // Mini App chỉ chấp nhận Telegram WebApp user thật. Không dùng guest/localStorage ID để tránh bypass onboarding.
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
-                        const tgUser = await this.waitForTelegramUser();
-                        if (tgUser) {
-                            this.user.id = tgUser.id.toString();
-                            this.user.name = tgUser.first_name || 'Shipper';
-                            if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
-                            localStorage.setItem('shipper_uid', this.user.id);
-                        } else {
-                            // Không lấy được thông tin user từ Telegram lúc này -> DÙNG LẠI id đã lưu trên máy
-                            // (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ liệu" khi tải lại.
-                            this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
-                            this.user.name = 'Shipper Demo';
-                            localStorage.setItem('shipper_uid', this.user.id);
-                        }
-                    } else {
-                        // Không chạy trong Telegram (vd mở thẳng bằng trình duyệt) -> vẫn ưu tiên dùng lại id cũ
-                        // trên máy này để tải lại trang không bị mất dữ liệu.
-                        this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
-                        this.user.name = 'Shipper Demo';
-                        localStorage.setItem('shipper_uid', this.user.id);
                     }
-
+                    const tgUser = await this.waitForTelegramUser();
+                    const initData = window.Telegram?.WebApp?.initData || '';
+                    if (!tgUser || !initData) {
+                        this.user.id = '';
+                        this.user.name = 'Shipper';
+                        this.joinedGroups = false;
+                        this._serverHydrationFailed = true;
+                        this.language = localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi';
+                        this.texts = translations[this.language];
+                        document.documentElement.lang = this.language;
+                        document.title = this.language === 'en' ? 'Logistics Warehouse' : 'Kho Hàng Logistics';
+                        await this.finishAppLoading();
+                        this.translateStaticUi();
+                        return;
+                    }
+                    this.user.id = tgUser.id.toString();
+                    this.user.name = tgUser.first_name || 'Shipper';
+                    if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
                     this.language = localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi';
                     this.texts = translations[this.language];
                     document.documentElement.lang = this.language;
@@ -2234,12 +2230,26 @@
                         }
                     } catch (_) {}
                     try {
-                        const res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`);
-                        if (res.status === 404) { // User not found, create new local state
-                            console.log("New user detected or user data not found.");
-                            this.user.joinDate = new Date().toLocaleDateString('vi-VN');
-                            // Initial save for new user (minimal data, referrer handled by bot /start)
-                            await this.saveState(); 
+                        let res = null;
+                        let lastHydrationError = null;
+                        for (let attempt = 0; attempt < 3; attempt++) {
+                            try {
+                                res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`);
+                                if (res.status < 500 || attempt === 2) break;
+                            } catch (e) {
+                                lastHydrationError = e;
+                                if (attempt === 2) throw e;
+                            }
+                            await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+                        }
+                        if (!res) throw lastHydrationError || new Error('Không đọc được dữ liệu user.');
+                        if (res.status === 404) {
+                            // User chưa /start: tuyệt đối không tự tạo local/default rồi save ngược lên server.
+                            this.joinedGroups = false;
+                            this._serverHydrationFailed = true;
+                            await this.finishAppLoading();
+                            this.translateStaticUi();
+                            return;
                         } else if (res.ok) {
                             let data = await res.json();
                             this._serverHydrationFailed = false;
@@ -2257,6 +2267,9 @@
                             this.user.referrerCounted = data.referrerCounted || false;
                             this.user.joinDate = data.joinDate || '';
                             this.user.accountCreatedAt = data.accountCreatedAt || this.user.accountCreatedAt || null;
+                            // Đây là access marker persistent từ Bot onboarding, KHÔNG phải live membership.
+                            this.joinedGroups = data.onboardingGroupsVerified === true;
+                            this.dismissedJoinBanner = true;
                             this.orders = data.orders || 0;
                             this.coins = data.coins || 0;
                             this.truckLevel = data.truckLevel || 1;
@@ -2359,6 +2372,7 @@
                         // Snapshot cũ chỉ được dùng làm backup debug; không được để nó trở thành nguồn dữ liệu thứ hai
                         // rồi ghi ngược lên Supabase và vô tình rollback progress mới.
                         this._serverHydrationFailed = true;
+                        this.joinedGroups = false;
                         this.showNotification("⚠️ Không đọc được dữ liệu mới nhất từ máy chủ. Vui lòng thử lại!");
                     }
                     // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
@@ -2377,10 +2391,8 @@
                         }
                     } catch(e) {}
                     
-                    // Check group membership for banner (only on mini-app load)
-                    const memberStatus = this.user.id === MAIN_ADMIN_ID ? true : await this.checkGroupMembership(true);
-                    this.joinedGroups = memberStatus;
-                    this.dismissedJoinBanner = memberStatus; // Admin chính luôn được bypass nhóm bắt buộc
+                    // Không live-check Telegram membership trong Mini App. Access chỉ lấy từ onboarding marker server.
+                    if (this._serverHydrationFailed || !this.joinedGroups) return;
 
                     // Lưu IP
                     try {
@@ -2503,10 +2515,18 @@
                     // đăng ký cả visibilitychange + pagehide + beforeunload vì mỗi WebView Telegram
                     // bắn khác nhau 1 trong các sự kiện này.
                     const flushSave = () => { this.saveState(); };
+                    const cancelPassiveOnExit = () => {
+                        if (this._rewardedPurpose !== 'passive' || !this._rewardedActiveToken || !this._rewardedActionId) return;
+                        fetch(`${API_URL}/api/ad/session/cancel`, {
+                            method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
+                            body:JSON.stringify({userId:this.user.id,token:this._rewardedActiveToken,actionId:this._rewardedActionId})
+                        }).catch(() => {});
+                    };
                     const stopMusicOnExit = () => { try { this.stopMusic(); } catch (e) {} };
                     document.addEventListener('visibilitychange', () => {
                         if (document.hidden) {
                             stopMusicOnExit();
+                            cancelPassiveOnExit();
                             flushSave();
                         } else if (this.musicOn && this._musicUserEnabledThisSession) {
                             this.resumeMusic();
@@ -2514,10 +2534,12 @@
                     });
                     window.addEventListener('pagehide', () => {
                         stopMusicOnExit();
+                        cancelPassiveOnExit();
                         flushSave();
                     });
                     window.addEventListener('beforeunload', () => {
                         stopMusicOnExit();
+                        cancelPassiveOnExit();
                         flushSave();
                     });
                     try {
@@ -2584,32 +2606,11 @@
                 },
 
                 async checkGroupMembership(silent = false) {
-                    if (this.user?.id === MAIN_ADMIN_ID) { this.joinedGroups = true; this.dismissedJoinBanner = true; return true; }
-                    if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
-                    // FIX LỖI "LOAD XONG NHƯNG KHÔNG VÀO ĐƯỢC GIAO DIỆN TRONG": giao diện chính (main-container)
-                    // chỉ hiện khi joinedGroups === true. Trước đây hàm này dùng fetch() THƯỜNG, không có
-                    // timeout -> nếu request /api/verify bị treo (mạng chờn, server chậm phản hồi), await
-                    // này ở initApp() không bao giờ resolve, khiến joinedGroups mãi mãi giữ giá trị false ban
-                    // đầu dù isAppLoading đã tắt từ trước đó -> người dùng thấy màn loading biến mất nhưng
-                    // giao diện trong (main-container) không bao giờ hiện ra. Đổi sang fetchWithTimeout để
-                    // luôn có kết quả (thành công hoặc thất bại) trong tối đa 8 giây, không treo vô thời hạn.
-                    try {
-                        const res = await fetchWithTimeout(`${API_URL}/api/verify/${this.user.id}`);
-                        const data = await res.json();
-                        if (data.success) {
-                            this.joinedGroups = true;
-                            this.dismissedJoinBanner = true;
-                            if (!silent) this.showNotification('✅ Xác thực thành công!');
-                            return true;
-                        } else {
-                            if (!silent) this.showNotification('⚠️ Bot chưa phát hiện bạn trong nhóm!');
-                            return false;
-                        }
-                    } catch (e) {
-                        console.error("Lỗi kiểm tra nhóm:", e);
-                        if (!silent) this.showNotification('⚠️ Lỗi kiểm tra nhóm!');
-                        return false;
+                    // Legacy method kept only so old Alpine references do not crash. No Telegram/API live membership check.
+                    if (!silent && !this.joinedGroups) {
+                        this.showNotification(this.language === 'en' ? '🔒 Complete verification in the Bot first.' : '🔒 Vui lòng xác minh onboarding trong Bot trước.');
                     }
+                    return this.joinedGroups === true;
                 },
                 
                 startCountdown() {
@@ -2810,47 +2811,20 @@
                     return new Date(`${nextWeekKey}T00:00:00+07:00`);
                 },
                 resetDailyIfNeeded() {
+                    // Frontend tuyệt đối không tự zero Quiz/Task/Ads/Delivery. Server quyết định ngày mới theo Asia/Ho_Chi_Minh.
+                    if (this._serverHydrationFailed || !this.user?.id || !this.lastResetDate) return;
                     const today = this.vietnamDayKey();
-                    if (this.lastResetDate !== today) {
-                        // Giữ nguyên lượt mở rương đang có, chỉ đảm bảo mỗi ngày có tối thiểu 1 lượt
-                        // miễn phí (trước đây gán thẳng = 1 nên ai còn dư lượt là bị mất sạch).
-                        this.spinFree = Math.max(this.spinFree || 0, 1);
-                        this.spinAdCount = 0; 
-                        this.spinAdProgress = 0;
-                        this.adsToday = 0; 
-                        this.smartlinksToday = 0; 
-                        this.bonusAdsToday = 0;
-                        this.rewardedAdsToday = 0;
-                        this.extraDeliveryAdsToday = 0;
-                        this.extraDeliveryCount = 0;
-                        this.deliveryServerLimit = 10;
-                        this.withdrawRemain = 1;
-                        this.dailyTasks.forEach(t => {
-                            t.done = false;
-                            t.claimable = false;
-                            if (t.id === 'invite1' || t.id === 'invite5') t.meta = { ...(t.meta || {}), baseValidInvites: this.validInvites || 0 };
-                        });
-                        this.allTasksClaimed = false;
-                        this.deliveryCount = 0; 
-                        this.chestOpensToday = 0;
-                        this.smartlinkCount = 0;
-                        // lastSmartlinkTime giữ nguyên để cooldown 30 giây vẫn đúng nếu lượt trước xảy ra sát 00:00.
-                        this.usedSmartlinks = [];
-                        this.smartlinkStartTime = 0;
-                        this.smartlinkAttemptId = '';
-                        try { localStorage.removeItem('shipper_smartlink_start'); localStorage.removeItem('shipper_smartlink_attempt'); localStorage.removeItem('shipper_smartlink_link'); } catch (_) {}
-                        // Reset TRẢ LỜI CÂU HỎI mỗi ngày: trả lại 1 câu miễn phí + 4 câu mở bằng QC
-                        this.quizFreeUsed = false;
-                        this.quizAdUnlocked = 0;
-                        this.quizUsedIds = [];
-                        this.quizCurrent = null;
-                        this.quizChosen = null;
-                        this.quizDate = today;
-                        this.lastResetDate = today;
-                        this.saveState();
-                        this.syncDailyTasksFromServer().catch(() => {});
-                        this.syncStreakStatus().catch(() => {});
-                    }
+                    if (this.lastResetDate === today || this._dailyResetSyncing) return;
+                    this._dailyResetSyncing = true;
+                    fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`, { cache:'no-store' }, 10000)
+                        .then(async res => {
+                            if (!res.ok) throw new Error(`daily sync ${res.status}`);
+                            const data = await res.json();
+                            // Chỉ reload sau khi server xác nhận đã reset đúng day key; không save default local state.
+                            if (data.lastResetDate === today) window.location.reload();
+                        })
+                        .catch(e => console.error('Daily server sync:', e))
+                        .finally(() => { this._dailyResetSyncing = false; });
                 },
                 // Xem QC Tăng Tốc x2: giảm 1 nửa thời gian chờ còn lại của mẻ hàng đang sản xuất
                 // FIX TRIỆT ĐỂ LỖI X2 ("báo thành công nhưng đồng hồ không giảm", "dùng được X2 lần 2",
@@ -4056,41 +4030,68 @@
                 },
                 redeemGift() {
                     if (!this.giftCode.trim()) {
-                        this.showNotification('❌ Vui lòng nhập mã code!');
+                        this.showNotification(this.language === 'en' ? '❌ Please enter a Giftcode!' : '❌ Vui lòng nhập mã code!');
                         return;
                     }
                     fetch(`${API_URL}/api/redeem-code`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ userId: this.user.id, code: this.giftCode })
+                        method:'POST',headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({userId:this.user.id,code:this.giftCode.trim()})
                     })
-                    .then(res => res.json())
-                    .then(result => {
+                    .then(async res => ({ status:res.status, data:await res.json().catch(() => ({})) }))
+                    .then(({data:result}) => {
                         if (result.success) {
-                            this.coins += (result.rewardAmount || 0);
-                            this.orders += (result.orders || 0);
-                            this.spinFree += (result.spins || 0);
-                            
-                            let message = `🎁 Code thành công:`;
+                            // Server đã atomic commit reward; client chỉ render source-of-truth trả về.
+                            this.coins = Number.isFinite(Number(result.coins)) ? Number(result.coins) : this.coins + Number(result.rewardAmount||0);
+                            this.orders = Number.isFinite(Number(result.totalOrders)) ? Number(result.totalOrders) : this.orders + Number(result.orders||0);
+                            this.spinFree = Number.isFinite(Number(result.totalSpins)) ? Number(result.totalSpins) : this.spinFree + Number(result.spins||0);
+                            if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                            let message = this.language === 'en' ? '🎁 Giftcode redeemed:' : '🎁 Code thành công:';
                             if (result.rewardAmount > 0) message += ` +${this.formatNumber(result.rewardAmount)} Coin`;
-                            if (result.orders > 0) message += ` +${this.formatNumber(result.orders)} Đơn hàng`;
-                            if (result.spins > 0) message += ` +${this.formatNumber(result.spins)} Lượt mở rương`;
-                            
+                            if (result.orders > 0) message += ` +${this.formatNumber(result.orders)} ${this.language === 'en' ? 'Orders' : 'Đơn hàng'}`;
+                            if (result.spins > 0) message += ` +${this.formatNumber(result.spins)} ${this.language === 'en' ? 'Chest Opens' : 'Lượt mở rương'}`;
                             this.showNotification(message);
-                            this.giftCode = '';
-                            this.saveState();
+                            this.giftCode='';
                             this.fetchRedeemHistory();
+                        } else if (result.adRequirement) {
+                            const current=Math.max(0,Number(result.currentAds||0));
+                            const required=Math.max(5,Number(result.requiredAds||5));
+                            this.showNotification(this.language === 'en'
+                                ? `❌ 📺 Giftcode requirement not met! Watch at least ${required} valid Rewarded Interstitial ads. Progress: ${current}/${required}`
+                                : `❌ 📺 Chưa đủ điều kiện dùng Giftcode! Cần xem ít nhất ${required} QC Rewarded Interstitial hợp lệ. Tiến độ: ${current}/${required}`);
                         } else {
-                            this.showNotification('❌ ' + (result.error || 'Mã không hợp lệ!'));
+                            this.showNotification('❌ ' + (result.error || (this.language === 'en' ? 'Invalid Giftcode!' : 'Mã không hợp lệ!')));
                         }
                     })
-                    .catch((e) => {
-                        console.error("Lỗi redeem giftcode:", e);
-                        this.showNotification('❌ Lỗi kết nối server khi đổi code.');
+                    .catch(e => {
+                        console.error('Lỗi redeem giftcode:',e);
+                        this.showNotification(this.language === 'en' ? '❌ Server connection error while redeeming Giftcode.' : '❌ Lỗi kết nối server khi đổi code.');
                     });
+                },
+                triggerErrorFeedback(element = null) {
+                    const now=Date.now();
+                    if (now-Number(this._lastErrorFeedbackAt||0)<650) return;
+                    this._lastErrorFeedbackAt=now;
+                    let hapticDone=false;
+                    try {
+                        const h=window.Telegram?.WebApp?.HapticFeedback;
+                        if (h && typeof h.notificationOccurred==='function') { h.notificationOccurred('error'); hapticDone=true; }
+                    } catch (_) {}
+                    if (!hapticDone) {
+                        try { if (typeof navigator.vibrate==='function') navigator.vibrate([80,40,80]); } catch (_) {}
+                    }
+                    try {
+                        const target=element || document.querySelector('.modal-content') || document.querySelector('.main-container') || document.body;
+                        if (target) {
+                            target.classList.remove('error-feedback-shake');
+                            void target.offsetWidth;
+                            target.classList.add('error-feedback-shake');
+                            setTimeout(() => target.classList.remove('error-feedback-shake'),350);
+                        }
+                    } catch (_) {}
                 },
                 showNotification(text) {
                     this.notification.text = translateRuntimeText(text, this.language);
+                    if (String(text || '').trim().startsWith('❌')) this.triggerErrorFeedback();
                     this.notification.show = true;
                     setTimeout(() => { this.notification.show = false; }, 3000);
                 },
@@ -4141,6 +4142,7 @@
                         this.captchaChars = [];
                         this.captchaError = '❌ ' + (e?.message || this.texts.captchaLoadError || 'Could not create CAPTCHA.');
                         this.captchaRefreshing = false;
+                        this.triggerErrorFeedback(document.querySelector('.modal-content'));
                         return false;
                     }
                 },
@@ -4177,6 +4179,7 @@
                     if (this.captchaAction === 'withdraw') {
                         if (input.length !== 5 || !this.captchaChallengeId) {
                             this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
+                            this.triggerErrorFeedback(document.querySelector('.modal-content'));
                             return;
                         }
                         try {
@@ -4189,6 +4192,7 @@
                                 const errorText = '❌ ' + (result.error || this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
                                 if (!result.retry) await this.loadWithdrawCaptchaChallenge();
                                 this.captchaError = errorText;
+                                this.triggerErrorFeedback(document.querySelector('.modal-content'));
                                 return;
                             }
                             this.withdrawCaptchaToken = String(result.withdrawCaptchaToken);
@@ -4199,6 +4203,7 @@
                         } catch (e) {
                             console.error('Withdraw CAPTCHA verify:',e);
                             this.captchaError = '❌ ' + (this.texts.serverConnectionError || 'Server connection error.');
+                            this.triggerErrorFeedback(document.querySelector('.modal-content'));
                             return;
                         }
                     }
@@ -4206,6 +4211,7 @@
                     // Existing delivery CAPTCHA remains unchanged and local; only withdrawal requires server token.
                     if (input.length !== 5 || input !== this.captchaCode) {
                         this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'CAPTCHA không đúng. Vui lòng nhập lại!');
+                        this.triggerErrorFeedback(document.querySelector('.modal-content'));
                         await this.newCaptchaCode();
                         return;
                     }
@@ -4223,18 +4229,8 @@
                 },
                 quizTodayKey() { return this.vietnamDayKey(); },
                 ensureQuizDay() {
-                    const today = this.quizTodayKey();
-                    if (this.quizDate !== today) {
-                        this.quizDate = today;
-                        this.quizFreeUsed = false;
-                        this.quizAdUnlocked = 0;
-                        this.quizUsedIds = [];
-                        this.quizCurrent = null;
-                        this.quizChosen = null;
-                        this.quizIsCorrect = false;
-                        this.quizPendingReward = false;
-                        this.saveQuizLocal();
-                    }
+                    // Server /api/quiz/* là source-of-truth. Không reset quiz vì quizDate rỗng/chưa hydrate.
+                    return this._quizServerHydrated && this.quizDate === this.quizTodayKey();
                 },
                 quizSlotsUsed() { this.ensureQuizDay(); return (this.quizFreeUsed ? 1 : 0) + Math.min(this.quizAdUnlocked || 0, 4); },
                 quizRemaining() { return Math.max(0, 5 - this.quizSlotsUsed()); },
@@ -4405,6 +4401,8 @@
                             throw new Error(sessionData?.error || 'Không tạo được phiên quảng cáo hợp lệ');
                         }
                         sessionStarted = true;
+                        this._rewardedActiveToken = token;
+                        this._rewardedPurpose = purpose;
 
                         const sdkResult = await Promise.resolve()
                             .then(() => show_11457064({ ymid: String(this.user.id || '') }))
@@ -4419,7 +4417,12 @@
                         }
                         // Monetag Rewarded SDK đã resolve thành công: complete ngay, không artificial wait.
 
-                        if (this._rewardedActionId !== actionId) return false;
+                        if (this._rewardedActionId !== actionId) {
+                            if (purpose === 'passive' && token) {
+                                fetch(`${API_URL}/api/ad/session/cancel`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId}),keepalive:true}).catch(() => {});
+                            }
+                            return false;
+                        }
 
                         let completeData = null;
                         let completeRes = null;
@@ -4449,7 +4452,7 @@
 
                         // Server có thể trả verified=true khi Rewarded đã được xác minh/commit nhưng marker
                         // persistence đang retry. Đây vẫn là AD SUCCESS và phải dùng lại đúng token, không xem QC mới.
-                        if (!completeData?.success && completeData?.verified && completeData?.adToken) {
+                        if (!completeData?.success && completeData?.verified && completeData?.adToken && purpose !== 'passive') {
                             completeData = { ...completeData, success:true, adToken:String(completeData.adToken) };
                         }
                         if (!completeData?.success) {
@@ -4476,7 +4479,7 @@
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
-                        if (sessionStarted && token && !sdkOpened && !adVerified) {
+                        if (sessionStarted && token && !adVerified && (purpose === 'passive' || !sdkOpened)) {
                             fetch(`${API_URL}/api/ad/session/cancel`, {
                                 method:'POST',
                                 headers:{'Content-Type':'application/json'},
@@ -4494,6 +4497,8 @@
                             window.notePassiveAdSuppression();
                         }
                         if (this._rewardedActionId === actionId) this._rewardedActionId = '';
+                        if (this._rewardedActiveToken === token) this._rewardedActiveToken = '';
+                        if (this._rewardedPurpose === purpose) this._rewardedPurpose = '';
                         this._rewardedRunning = false;
                         if (this.musicOn) this.resumeMusic();
                     }
