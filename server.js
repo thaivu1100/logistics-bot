@@ -122,46 +122,123 @@ let userExtraRevision = 0;
 let userExtraFlushedRevision = 0;
 let userExtraFlushQueue = Promise.resolve();
 let userExtraFlushTimer = null;
+let userExtraPendingOps = [];
+let userExtraLoadHealthy = null;
+
+function parseUserExtraValue(value) {
+    if (!value) return {};
+    if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
+    return (typeof value === 'object' && !Array.isArray(value)) ? value : {};
+}
+
+async function readUserExtraAllFresh() {
+    const { data, error } = await supabase.from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
+    if (error) {
+        userExtraLoadHealthy = false;
+        throw error;
+    }
+    userExtraLoadHealthy = true;
+    return parseUserExtraValue(data?.value);
+}
+
 async function loadUserExtraAll() {
     try {
-        const { data, error } = await supabase.from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
-        if (error) throw error;
-        const value = data?.value;
-        if (!value) return {};
-        if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
-        return (typeof value === 'object' && !Array.isArray(value)) ? value : {};
+        return await readUserExtraAllFresh();
     } catch (e) {
         console.error('Không đọc được user_extra_state:', e.message);
         return {};
     }
 }
+
+function applyUserExtraOp(all, op) {
+    if (!op) return all;
+    if (op.type === 'replaceAll') return structuredClone(op.value || {});
+    const key = String(op.userId || '');
+    if (!key) return all;
+    if (op.type === 'deleteUser') {
+        delete all[key];
+        return all;
+    }
+    if (op.type === 'merge') {
+        all[key] = { ...(all[key] || {}), ...(op.values || {}) };
+        return all;
+    }
+    if (op.type === 'deleteFields') {
+        if (!all[key]) return all;
+        for (const field of op.fields || []) delete all[key][field];
+        return all;
+    }
+    return all;
+}
+
+function queueUserExtraOp(op) {
+    userExtraRevision += 1;
+    const queued = { ...op, revision:userExtraRevision };
+    userExtraPendingOps.push(queued);
+    userExtraDirty = true;
+    return queued;
+}
+
 async function getUserExtraAll() {
     if (!userExtraCache) userExtraCache = await loadUserExtraAll();
     return userExtraCache;
 }
+
 async function flushUserExtra() {
     const runFlush = async () => {
         if (!userExtraCache) return true;
         if (!userExtraDirty && userExtraFlushedRevision >= userExtraRevision) return true;
-
-        // Snapshot bất biến + queue tuần tự: một flush cũ không thể hoàn tất SAU flush mới rồi ghi đè
-        // mất thay đổi của user khác / request khác trong object user_extra_state dùng chung.
         const revisionToFlush = userExtraRevision;
-        const snapshot = structuredClone(userExtraCache);
-        const { error } = await supabase.from('app_settings')
-            .upsert({ key: USER_EXTRA_KEY, value: snapshot }, { onConflict: 'key' });
-        if (error) {
-            userExtraDirty = true;
-            console.error('Không lưu được user_extra_state:', error.message);
-            return false;
+        const opsToFlush = userExtraPendingOps.filter(op => op.revision <= revisionToFlush);
+        if (!opsToFlush.length) {
+            userExtraFlushedRevision = revisionToFlush;
+            userExtraDirty = userExtraFlushedRevision < userExtraRevision;
+            return true;
         }
-        userExtraFlushedRevision = Math.max(userExtraFlushedRevision, revisionToFlush);
-        userExtraDirty = userExtraFlushedRevision < userExtraRevision;
-        return true;
+
+        let releaseLock = null;
+        try {
+            // Cross-instance lock + fresh merge: instance B luôn đọc snapshot mà instance A vừa commit,
+            // rồi chỉ áp các field/operation B thật sự thay đổi. Không còn ghi toàn bộ cache stale đè nhau.
+            for (let lockAttempt = 0; lockAttempt < 8 && !releaseLock; lockAttempt++) {
+                releaseLock = await acquirePersistentLeaseLock('lock:user_extra_state', 30 * 1000);
+                if (!releaseLock && lockAttempt < 7) await new Promise(r => setTimeout(r, 80 * (lockAttempt + 1)));
+            }
+            if (!releaseLock) {
+                userExtraDirty = true;
+                console.error('Không lấy được persistent lock để flush user_extra_state.');
+                return false;
+            }
+            let latest = await readUserExtraAllFresh();
+            for (const op of opsToFlush) latest = applyUserExtraOp(latest, op);
+            const { error } = await supabase.from('app_settings').upsert({ key:USER_EXTRA_KEY, value:latest }, { onConflict:'key' });
+            if (error) {
+                userExtraDirty = true;
+                console.error('Không lưu được user_extra_state:', error.message);
+                return false;
+            }
+
+            userExtraPendingOps = userExtraPendingOps.filter(op => op.revision > revisionToFlush);
+            userExtraFlushedRevision = Math.max(userExtraFlushedRevision, revisionToFlush);
+            userExtraDirty = userExtraPendingOps.length > 0 || userExtraFlushedRevision < userExtraRevision;
+
+            // Cache nhận luôn thay đổi mới từ instance khác, sau đó replay những op local phát sinh trong lúc await DB.
+            let rebuilt = structuredClone(latest);
+            for (const op of userExtraPendingOps) rebuilt = applyUserExtraOp(rebuilt, op);
+            userExtraCache = rebuilt;
+            return true;
+        } catch (e) {
+            userExtraDirty = true;
+            console.error('Flush user_extra_state thất bại:', e.message || e);
+            return false;
+        } finally {
+            if (releaseLock) { try { await releaseLock(); } catch (_) {} }
+        }
     };
     userExtraFlushQueue = userExtraFlushQueue.then(runFlush, runFlush);
     return userExtraFlushQueue;
 }
+
 function scheduleUserExtraFlush() {
     if (userExtraFlushTimer) return;
     userExtraFlushTimer = setTimeout(() => {
@@ -169,45 +246,53 @@ function scheduleUserExtraFlush() {
         flushUserExtra().catch(() => {});
     }, 3000);
 }
+
 async function getUserExtra(userId) {
     const all = await getUserExtraAll();
     return all[String(userId)] || {};
 }
+
 async function saveUserExtra(userId, values) {
     const all = await getUserExtraAll();
     const key = String(userId);
-    all[key] = { ...(all[key] || {}), ...values };
-    userExtraRevision += 1;
-    userExtraDirty = true;
+    all[key] = { ...(all[key] || {}), ...(values || {}) };
+    queueUserExtraOp({ type:'merge', userId:key, values:structuredClone(values || {}) });
     scheduleUserExtraFlush();
 }
+
 async function saveUserExtraAll(all) {
-    userExtraCache = all || {};
-    userExtraRevision += 1;
-    userExtraDirty = true;
+    userExtraCache = structuredClone(all || {});
+    queueUserExtraOp({ type:'replaceAll', value:structuredClone(all || {}) });
     return flushUserExtra();
 }
-// Nếu một field đã được ghi vào cột thật thì xoá bản sao cũ trong kho lưu tạm, tránh trường hợp
-// sau này thêm cột vào Supabase mà vẫn đọc nhầm giá trị cũ.
+
+// Nếu field đã có cột thật, xoá bản sao fallback bằng operation deleteFields để merge an toàn cross-instance.
 async function pruneUserExtra(userId, keys) {
     if (!keys || keys.length === 0) return;
     const all = await getUserExtraAll();
-    const entry = all[String(userId)];
+    const key = String(userId);
+    const entry = all[key];
     if (!entry) return;
-    let changed = false;
-    keys.forEach(k => { if (k in entry) { delete entry[k]; changed = true; } });
-    if (changed) { userExtraRevision += 1; userExtraDirty = true; scheduleUserExtraFlush(); }
+    const removed=[];
+    for (const field of keys) {
+        if (field in entry) { delete entry[field]; removed.push(field); }
+    }
+    if (removed.length) {
+        queueUserExtraOp({ type:'deleteFields', userId:key, fields:removed });
+        scheduleUserExtraFlush();
+    }
 }
+
 async function clearUserExtra(userId) {
     if (userId === null) return saveUserExtraAll({});
     const all = await getUserExtraAll();
-    delete all[String(userId)];
-    userExtraRevision += 1;
-    userExtraDirty = true;
+    const key=String(userId);
+    delete all[key];
+    queueUserExtraOp({ type:'deleteUser', userId:key });
     return flushUserExtra();
 }
+
 setInterval(() => { flushUserExtra().catch(() => {}); }, 15000);
-// Render gửi SIGTERM trước khi tắt instance cũ -> ghi nốt dữ liệu còn trong bộ đệm để không mất.
 process.on('SIGTERM', () => { flushUserExtra().catch(() => {}); });
 
 // Lấy tên cột bị thiếu từ thông báo lỗi của Postgres/PostgREST (42703 hoặc PGRST204)
@@ -658,20 +743,116 @@ async function safeSendLocalizedMessage(chatId, viText, enText, options = {}) {
     return safeSendMessage(chatId, language === 'en' ? enText : viText, options);
 }
 
-// Hàm kiểm tra thành viên nhóm
+// ==================== ONBOARDING NHÓM TELEGRAM: XÁC MINH 1 LẦN, LƯU BỀN VỮNG ====================
+const ONBOARDING_VALID_MEMBER_STATUSES = new Set(['member', 'administrator', 'creator']);
+const ONBOARDING_MEMBER_CHECK_TIMEOUT_MS = 8000;
+
+function hasOwnField(obj, key) {
+    return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+async function getChatMemberStrict(chatId, userId, label) {
+    if (!Number.isFinite(Number(chatId))) {
+        const err = new Error(`${label} chưa được cấu hình ID hợp lệ.`);
+        err.code = 'GROUP_CONFIG_INVALID';
+        throw err;
+    }
+    let timer;
+    try {
+        return await Promise.race([
+            bot.telegram.getChatMember(Number(chatId), Number(userId)),
+            new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    const err = new Error(`Telegram getChatMember timeout (${label}).`);
+                    err.code = 'TELEGRAM_MEMBER_TIMEOUT';
+                    reject(err);
+                }, ONBOARDING_MEMBER_CHECK_TIMEOUT_MS);
+            })
+        ]);
+    } catch (error) {
+        const description = error?.response?.description || error?.description || error?.message || String(error);
+        const wrapped = new Error(`${label}: ${description}`);
+        wrapped.code = error?.code || 'TELEGRAM_MEMBER_CHECK_FAILED';
+        wrapped.telegramDescription = description;
+        throw wrapped;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+// Chỉ dùng trong callback onboarding của Bot. Mini App/referral tuyệt đối không dùng live membership.
 async function checkUserMembership(userId) {
     try {
-        // Sử dụng Promise.all để kiểm tra song song, tiết kiệm thời gian
         const [m1, m2] = await Promise.all([
-            bot.telegram.getChatMember(GROUP_1_ID, userId).catch(() => ({ status: 'left' })),
-            bot.telegram.getChatMember(GROUP_2_ID, userId).catch(() => ({ status: 'left' }))
+            getChatMemberStrict(GROUP_1_ID, userId, 'GROUP_1_ID'),
+            getChatMemberStrict(GROUP_2_ID, userId, 'GROUP_2_ID')
         ]);
-        const validStatuses = ['member', 'administrator', 'creator'];
-        return validStatuses.includes(m1.status) && validStatuses.includes(m2.status);
+        return {
+            ok: true,
+            isMember: ONBOARDING_VALID_MEMBER_STATUSES.has(m1?.status) && ONBOARDING_VALID_MEMBER_STATUSES.has(m2?.status),
+            statuses: [m1?.status || 'unknown', m2?.status || 'unknown']
+        };
     } catch (e) {
-        console.error(`Lỗi check member ${userId}:`, e.message);
-        return false;
+        // Không bao giờ biến timeout/lỗi quyền Bot thành "user chưa tham gia".
+        console.error(`❌ getChatMember thất bại cho user ${userId}:`, e.telegramDescription || e.message, {
+            GROUP_1_ID, GROUP_2_ID, code: e.code || null
+        });
+        return { ok:false, isMember:false, error:e.message, code:e.code || 'TELEGRAM_MEMBER_CHECK_FAILED' };
     }
+}
+
+// Compatibility:
+// - User mới do phiên bản này tạo luôn có onboardingGroupsVerified=false.
+// - User cũ tồn tại trước rollout nhưng chưa có field được grandfather=true và persist lại.
+async function getOnboardingAccessState(userId, providedUser = null) {
+    let user = providedUser;
+    if (!user) {
+        const result = await readUserRow(String(userId));
+        if (result.error || !result.data) return { exists:false, reliable:true, verified:false, legacy:false, user:null, error:result.error || null };
+        user = result.data;
+    }
+    if (hasOwnField(user, 'onboardingGroupsVerified')) {
+        return {
+            exists:true, reliable:true,
+            verified:user.onboardingGroupsVerified === true,
+            legacy:!!user.onboardingGroupsLegacy,
+            verifiedAt:user.onboardingGroupsVerifiedAt || null,
+            user
+        };
+    }
+    if (userExtraLoadHealthy === false) {
+        // Không được nhầm READ ERROR thành legacy access=true; chờ DB đọc lại được rồi mới quyết định.
+        return {exists:true,reliable:false,verified:false,legacy:false,verifiedAt:null,user,error:new Error('Không đọc được user_extra_state để xác định onboarding.')};
+    }
+
+    const legacyValues = {
+        onboardingGroupsVerified: true,
+        onboardingGroupsVerifiedAt: user.onboardingGroupsVerifiedAt || null,
+        onboardingGroupsLegacy: true
+    };
+    const saved = await saveUserFields(String(userId), legacyValues);
+    if (saved.error) {
+        console.error(`Không persist được grandfather onboarding cho ${userId}:`, saved.error.message || saved.error);
+    } else if (!(await flushUserExtra())) {
+        console.error(`Không flush được grandfather onboarding cho ${userId}. Vẫn cho legacy access để tránh khóa nhầm.`);
+    }
+    return { exists:true, reliable:true, verified:true, legacy:true, verifiedAt:legacyValues.onboardingGroupsVerifiedAt, user:{...user,...legacyValues} };
+}
+
+async function persistOnboardingVerified(userId) {
+    const verifiedAt = new Date().toISOString();
+    const { error } = await saveUserFields(String(userId), {
+        onboardingGroupsVerified: true,
+        onboardingGroupsVerifiedAt: verifiedAt,
+        onboardingGroupsLegacy: false
+    });
+    if (error) return { ok:false, error };
+    if (!(await flushUserExtra())) return { ok:false, error:new Error('Không flush được trạng thái onboarding vào Supabase.') };
+    const verifyRead = await readUserRow(String(userId));
+    if (!verifyRead.data || verifyRead.data.onboardingGroupsVerified !== true) {
+        return { ok:false, error:new Error('Không đọc lại được marker onboarding sau khi lưu.') };
+    }
+    return { ok:true, verifiedAt:verifyRead.data.onboardingGroupsVerifiedAt || verifiedAt, user:verifyRead.data };
 }
 
 // Hàm kiểm tra IP trùng
@@ -1313,10 +1494,10 @@ async function logTransaction(userId, type, amount, reason) {
 // Xây dựng nội dung thông báo "lượt mời chưa thành công" gửi cho người mời, CHỈ liệt kê đúng những điều
 // kiện người được mời CÒN THIẾU tại thời điểm gửi (không hiển thị điều kiện đã hoàn thành) - phản ánh đúng
 // các điều kiện thực tế mà tryFinalizeReferral() đang xét ở trên, không tự bịa hay đổi điều kiện referral.
-function buildReferralPendingConditionsText(userRow, isMemberNow, language = 'vi') {
+function buildReferralPendingConditionsText(userRow, onboardingVerified, language = 'vi') {
     const en = normalizeUserLanguage(language) === 'en';
     const missing = [];
-    if (!isMemberNow) missing.push(en ? '✅ Join all required Telegram groups' : '✅ Tham gia đầy đủ nhóm Telegram bắt buộc');
+    if (!onboardingVerified) missing.push(en ? '✅ Complete one-time Telegram group onboarding verification' : '✅ Xác minh onboarding đủ 2 nhóm Telegram một lần');
     if ((userRow?.lifetimeAdsWatched || 0) < 3) missing.push(en ? '✅ Watch at least 3 valid ads' : '✅ Xem ít nhất 3 quảng cáo hợp lệ');
     if ((userRow?.lifetimeSmartlinks || 0) < 2) missing.push(en ? '✅ Complete at least 2 valid SmartLinks' : '✅ Hoàn thành ít nhất 2 SmartLink');
     if (userRow?.isBanned) missing.push(en ? '✅ Account must not be banned' : '✅ Tài khoản không bị khóa/ban');
@@ -1339,7 +1520,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     if (userRecord.referrerCounted) return { ok: false, reason: 'already_counted' };
     if (userRecord.isBanned) return { ok: false, reason: 'banned' };
 
-    const isMember = precomputedIsMember !== null ? precomputedIsMember : await checkUserMembership(userId);
+    const onboarding = await getOnboardingAccessState(userId, userRecord);
+    const isMember = precomputedIsMember === true ? true : onboarding.verified === true;
     if (!isMember) return { ok: false, reason: 'not_member' };
 
     if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
@@ -1616,7 +1798,10 @@ bot.start(async (ctx) => {
                 quizUsedIds: [],
                 chestOpensTotal: 0, // Tổng số lượt đã mở rương (trọn đời) - dùng cho /checkID
                 chestOpensToday: 0, // Số lượt đã mở rương hôm nay - dùng cho /checkID, reset mỗi ngày
-                walletUpdatedAt: new Date().toISOString() // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
+                walletUpdatedAt: new Date().toISOString(), // Mốc thời gian admin sửa ví gần nhất, dùng để chống ghi đè dữ liệu
+                onboardingGroupsVerified: false,
+                onboardingGroupsVerifiedAt: null,
+                onboardingGroupsLegacy: false
             };
             const { known: newUserRow, extra: newUserExtra } = await splitUserFields(newUser);
             const { data: insertedUser, error: insertError } = await supabase.from('users').insert(newUserRow).select().single();
@@ -1624,7 +1809,13 @@ bot.start(async (ctx) => {
                 console.error("Lỗi tạo user mới:", insertError);
                 return ctx.reply(language === 'en' ? '⚠️ Could not create your account. Please try again later!' : '⚠️ Có lỗi xảy ra khi tạo tài khoản, vui lòng thử lại sau!');
             }
-            if (Object.keys(newUserExtra).length > 0) await saveUserExtra(userId, newUserExtra);
+            if (Object.keys(newUserExtra).length > 0) {
+                await saveUserExtra(userId, newUserExtra);
+                if (!(await flushUserExtra())) {
+                    console.error(`Không persist được state user mới ${userId}; dừng /start để tránh bypass onboarding.`);
+                    return ctx.reply('⚠️ Chưa thể lưu trạng thái tài khoản lúc này. Vui lòng gõ /start lại sau vài giây.');
+                }
+            }
             userRecord = { ...newUserExtra, ...insertedUser };
             
             // Tăng invitedCount cho người mời (chưa tính hợp lệ)
@@ -1639,9 +1830,9 @@ bot.start(async (ctx) => {
                     // công, kèm nhắc nhở ĐÚNG các điều kiện còn thiếu thực tế (không hiển thị điều kiện đã
                     // đủ). Thưởng + thông báo "thành công" thật sự chỉ được gửi trong tryFinalizeReferral()
                     // khi bạn bè ĐÃ đủ điều kiện.
-                    const isMemberAtInvite = await checkUserMembership(userId).catch(() => false);
+                    const onboardingAtInvite = userRecord.onboardingGroupsVerified === true;
                     const refLanguage = await getStoredUserLanguage(referrerId);
-                    const conditionsText = buildReferralPendingConditionsText(userRecord, isMemberAtInvite, refLanguage);
+                    const conditionsText = buildReferralPendingConditionsText(userRecord, onboardingAtInvite, refLanguage);
                     await safeSendMessage(referrerId, refLanguage === 'en'
                         ? `👋 *${userName}* joined the Mini App through your referral link!\n⚠️ This referral is *not valid yet*.\n\nThey still need to complete:\n${conditionsText}\n\n🎁 Once all requirements are met, the system will confirm it automatically and add your reward.`
                         : `👋 *${userName}* vừa tham gia Mini App bằng link giới thiệu của bạn!\n⚠️ Lượt mời này *chưa được tính thành công*.\n\nĐể được tính hợp lệ, bạn ấy cần hoàn tất:\n${conditionsText}\n\n🎁 Khi đủ điều kiện, hệ thống sẽ tự động xác nhận lượt mời và cộng thưởng cho bạn.`,
@@ -1676,35 +1867,31 @@ bot.start(async (ctx) => {
         }
         language = normalizeUserLanguage(userRecord.language);
 
-        // Kiểm tra tham gia nhóm
-        const isMember = await checkUserMembership(userId);
-
-        if (isMember) {
-            // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
+        // /start lần sau chỉ đọc marker persistent; live membership chỉ xảy ra khi bấm ✅ Xác Nhận.
+        const onboarding = await getOnboardingAccessState(userId, userRecord);
+        if (onboarding.reliable === false) {
+            return ctx.reply(language === 'en' ? '⚠️ The server cannot read your verification state right now. Please try /start again shortly.' : '⚠️ Máy chủ chưa đọc được trạng thái xác minh lúc này. Vui lòng gõ /start lại sau ít giây.');
+        }
+        if (onboarding.verified) {
             await tryFinalizeReferral(userId, true);
-
-            // Gửi nút mở Mini App
             await ctx.reply(
                 language === 'en'
-                    ? `Welcome ${userName}! 🎉\nVerification successful. Tap the button below to open the Mini App!`
-                    : `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
+                    ? `Welcome back ${userName}! 🎉\nYour one-time group onboarding is already verified. Open your warehouse below.`
+                    : `Chào mừng ${userName}! 🎉\nBạn đã xác minh onboarding nhóm trước đó. Hãy mở Kho Hàng bên dưới.`,
                 botOpenAppInline(language)
             );
             await sendPersistentMainMenu(ctx, language);
         } else {
-            // Yêu cầu tham gia nhóm TRƯỚC khi cho vào miniapp
             const joinText = language === 'en'
-                ? "⚠️ *You have not joined both required Telegram groups!*\n\nPlease join both groups below:\n1️⃣ https://t.me/khohangkiemtien (Notification Channel)\n2️⃣ https://t.me/khohangchatkiemtien (Community Chat)\n\nAfter joining, tap *Verify* below so the bot can check."
-                : "⚠️ *Bạn chưa tham gia đủ 2 nhóm bắt buộc!*\n\nVui lòng tham gia 2 nhóm dưới đây:\n1️⃣ https://t.me/khohangkiemtien (Kênh thông báo)\n2️⃣ https://t.me/khohangchatkiemtien (Nhóm chat)\n\nSau khi tham gia xong, nhấn nút *Xác Nhận* bên dưới để bot kiểm tra.";
+                ? "👋 *Welcome to Logistics Warehouse!*\n\nTo unlock the Mini App for the first time, join both required Telegram communities:\n\n📢 Notification Channel:\nhttps://t.me/khohangkiemtien\n\n💬 Community Chat:\nhttps://t.me/khohangchatkiemtien\n\nThen tap *✅ Verify*. This is a one-time onboarding check."
+                : "👋 *CHÀO MỪNG BẠN ĐẾN KHO HÀNG!*\n\nĐể mở Mini App lần đầu, vui lòng tham gia đủ 2 cộng đồng bắt buộc:\n\n📢 *Kênh Thông Báo:*\nhttps://t.me/khohangkiemtien\n\n💬 *Nhóm Cộng Đồng:*\nhttps://t.me/khohangchatkiemtien\n\nSau đó nhấn *✅ Xác Nhận*. Đây là bước xác minh onboarding chỉ thực hiện một lần.";
             await ctx.reply(joinText, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: language === 'en' ? "1️⃣ Join Channel" : "1️⃣ Tham gia Kênh", url: "https://t.me/khohangkiemtien" }],
-                        [{ text: language === 'en' ? "2️⃣ Join Community Chat" : "2️⃣ Tham gia Nhóm Chat", url: "https://t.me/khohangchatkiemtien" }],
-                        [{ text: language === 'en' ? "✅ Verify Membership" : "✅ Xác Nhận Bot Kiểm Tra", callback_data: "check_groups" }]
-                    ]
-                }
+                parse_mode:'Markdown',
+                reply_markup:{inline_keyboard:[
+                    [{text:language==='en'?'📢 Join Channel':'📢 Tham Gia Kênh',url:'https://t.me/khohangkiemtien'}],
+                    [{text:language==='en'?'💬 Join Community':'💬 Tham Gia Nhóm',url:'https://t.me/khohangchatkiemtien'}],
+                    [{text:language==='en'?'✅ Verify':'✅ Xác Nhận',callback_data:'check_groups'}]
+                ]}
             });
             await sendPersistentMainMenu(ctx, language);
         }
@@ -1714,50 +1901,53 @@ bot.start(async (ctx) => {
     }
 });
 
-// Xử lý nút "Xác Nhận Bot Kiểm Tra"
-// FIX LỖI "BẤM NÚT KHÔNG THẤY PHẢN HỒI GÌ": trước đây handler này không có try/catch. Nếu có lỗi xảy ra
-// giữa chừng (Supabase timeout, Telegram API lỗi...) thì ctx.answerCbQuery() ở nhánh thành công không bao
-// giờ được gọi -> nút bấm bị kẹt ở trạng thái "đang tải" (vòng xoay loading) trên Telegram cho tới khi hết
-// hạn, giống hệt hiện tượng "bot không phản hồi". Giờ mọi lỗi đều được bắt và LUÔN trả lời (answerCbQuery)
-// để tắt vòng xoay loading, đồng thời báo lỗi rõ ràng cho người dùng.
+// Xử lý nút "✅ Xác Nhận" onboarding. Đây là nơi duy nhất onboarding gọi getChatMember live.
 bot.on('callback_query', async (ctx) => {
-    if (ctx.callbackQuery.data === 'check_groups') {
-        const userId = ctx.from.id.toString();
-        const userName = ctx.from.first_name || 'User';
-        const language = await getStoredUserLanguage(userId);
-
-        try {
-            await ctx.answerCbQuery(language === 'en' ? '🔍 Checking...' : '🔍 Đang kiểm tra...');
-
-            const isMember = await checkUserMembership(userId);
-
-            if (isMember) {
-                const { data: userRecord, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
-                if (userError) {
-                    console.error("Lỗi lấy user trong callback:", userError);
-                    return ctx.editMessageText(language === 'en' ? '⚠️ Something went wrong. Please try again later!' : '⚠️ Có lỗi xảy ra, vui lòng thử lại sau!').catch(() => {});
-                }
-
-                // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
-                await tryFinalizeReferral(userId, true);
-
-                await ctx.editMessageText(
-                    language === 'en'
-                        ? `Welcome ${userName}! 🎉\nVerification successful. Tap the button below to open the Mini App!`
-                        : `Chào mừng ${userName}! 🎉\nBạn đã xác minh thành công. Hãy nhấn nút bên dưới để vào Mini App!`,
-                    botOpenAppInline(language)
-                );
-                await sendPersistentMainMenu(ctx, language);
-            } else {
-                await ctx.answerCbQuery(language === 'en'
-                    ? '❌ You still have not joined both required groups. Join the Channel and Community Chat, then try again.'
-                    : '❌ Bạn vẫn chưa tham gia đủ 2 nhóm! Vui lòng tham gia cả Kênh và Nhóm Chat rồi nhấn lại.');
-            }
-        } catch (err) {
-            console.error("Lỗi xử lý callback check_groups:", err);
-            // Luôn cố gắng tắt vòng xoay loading trên nút, kể cả khi answerCbQuery ở trên đã lỡ chưa chạy tới
-            await ctx.answerCbQuery(language === 'en' ? '⚠️ Something went wrong. Please try again in a few seconds.' : '⚠️ Đã có lỗi xảy ra, vui lòng thử lại sau ít giây.').catch(() => {});
+    if (ctx.callbackQuery.data !== 'check_groups') return;
+    const userId = String(ctx.from?.id || '');
+    const userName = ctx.from?.first_name || 'User';
+    const language = await getStoredUserLanguage(userId);
+    try {
+        await ctx.answerCbQuery(language === 'en' ? '🔍 Checking both groups...' : '🔍 Đang kiểm tra 2 nhóm...').catch(() => {});
+        const current = await getOnboardingAccessState(userId);
+        if (!current.exists) return ctx.reply(language === 'en' ? '⚠️ Account not found. Please send /start first.' : '⚠️ Chưa tìm thấy tài khoản. Vui lòng gõ /start trước.');
+        if (current.reliable === false) return ctx.reply(language === 'en' ? '⚠️ The server cannot read your verification state right now. Please try again shortly.' : '⚠️ Máy chủ chưa đọc được trạng thái xác minh lúc này. Vui lòng thử lại sau ít giây.');
+        if (current.verified) {
+            return ctx.editMessageText(
+                language === 'en' ? `Welcome ${userName}! 🎉\nYou were already verified. Open the Mini App below.` : `Chào mừng ${userName}! 🎉\nBạn đã được xác minh trước đó. Hãy vào Mini App bên dưới.`,
+                botOpenAppInline(language)
+            ).catch(() => ctx.reply(language === 'en' ? '🚀 Open your warehouse:' : '🚀 Mở Kho Hàng:', botOpenAppInline(language)));
         }
+
+        const membership = await checkUserMembership(userId);
+        if (!membership.ok) {
+            return ctx.reply(language === 'en'
+                ? '⚠️ The bot cannot check membership right now. Please try again in a few seconds. The bot may need permission in one of the chats.'
+                : '⚠️ Bot chưa thể kiểm tra thành viên lúc này. Vui lòng thử lại sau vài giây. Nếu lỗi kéo dài, Bot có thể đang thiếu quyền kiểm tra ở một trong hai nhóm.');
+        }
+        if (!membership.isMember) {
+            return ctx.reply(language === 'en'
+                ? '❌ You have not joined both required groups yet. Join the Channel and Community Chat, then tap ✅ Verify again.'
+                : '❌ Bạn chưa tham gia đủ cả 2 nhóm. Hãy vào Kênh Thông Báo và Nhóm Cộng Đồng rồi nhấn ✅ Xác Nhận lại.');
+        }
+
+        const persisted = await persistOnboardingVerified(userId);
+        if (!persisted.ok) {
+            console.error(`Không lưu được onboarding verified cho ${userId}:`, persisted.error?.message || persisted.error);
+            return ctx.reply(language === 'en'
+                ? '⚠️ Membership was confirmed, but the server could not save verification. Please tap Verify again in a few seconds.'
+                : '⚠️ Bot đã xác nhận bạn ở đủ 2 nhóm nhưng chưa lưu được trạng thái. Vui lòng nhấn Xác Nhận lại sau vài giây.');
+        }
+
+        await tryFinalizeReferral(userId, true);
+        await ctx.editMessageText(
+            language === 'en' ? `Welcome ${userName}! 🎉\n✅ One-time group verification successful. Open the Mini App below.` : `Chào mừng ${userName}! 🎉\n✅ Xác minh 2 nhóm thành công. Từ giờ không cần kiểm tra membership lại.`,
+            botOpenAppInline(language)
+        ).catch(() => ctx.reply(language === 'en' ? '🚀 Open your warehouse:' : '🚀 Vào Kho Hàng:', botOpenAppInline(language)));
+        await sendPersistentMainMenu(ctx, language);
+    } catch (err) {
+        console.error('Lỗi callback check_groups:', err);
+        await ctx.reply(language === 'en' ? '⚠️ Could not verify right now. Please try again shortly.' : '⚠️ Chưa thể xác minh lúc này. Vui lòng thử lại sau ít giây.').catch(() => {});
     }
 });
 
@@ -1765,11 +1955,12 @@ bot.on('callback_query', async (ctx) => {
 bot.hears(['🚀 Mở Kho Hàng', '🚀 Open Warehouse'], async (ctx) => {
     const userId = String(ctx.from?.id || '');
     const language = await getStoredUserLanguage(userId);
-    const isMember = await checkUserMembership(userId);
-    if (!isMember) {
+    const onboarding = await getOnboardingAccessState(userId);
+    if (onboarding.reliable === false) return ctx.reply(language === 'en' ? '⚠️ Cannot read verification state right now. Please try again.' : '⚠️ Chưa đọc được trạng thái xác minh. Vui lòng thử lại sau.');
+    if (!onboarding.exists || !onboarding.verified) {
         return ctx.reply(language === 'en'
-            ? '⚠️ Please join both required Telegram groups first, then use /start to verify.'
-            : '⚠️ Vui lòng tham gia đủ 2 nhóm Telegram bắt buộc trước, sau đó dùng /start để xác minh.',
+            ? '⚠️ Please use /start and complete the one-time verification of both Telegram groups first.'
+            : '⚠️ Vui lòng dùng /start và xác nhận tham gia 2 nhóm trước.',
             botMainReplyKeyboard(language));
     }
     await ctx.reply(language === 'en' ? '🚀 Open your warehouse:' : '🚀 Mở Kho Hàng của bạn:', botOpenAppInline(language));
@@ -2437,40 +2628,195 @@ bot.command('saoke', async (ctx) => {
     }
 });
 
-// /checkID
+// /checkID <ID> - báo cáo read-only, chỉ Admin. Dùng readUserRow() để lấy cả users + user_extra_state.
 bot.command('checkID', async (ctx) => {
     if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /checkID <userId>");
-    
-    const { data, error } = await supabase.from('users').select('*').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    
-    const { data: withdraws } = await supabase.from('withdrawals').select('amount').eq('userId', targetId).eq('status', 'success');
-    const totalWithdrawn = withdraws ? withdraws.reduce((sum, w) => sum + (w.amount || 0), 0) : 0;
-    
-    // Check IP trùng
-    const duplicates = await checkDuplicateIP(targetId, data.ip);
-    const dupText = duplicates.length > 0 
-        ? `\n⚠️ *IP TRÙNG VỚI:*\n${duplicates.map(d => `- ${d.name} (${d.id})`).join('\n')}`
-        : '';
-    
-    ctx.reply(
-        `👤 *Thông tin user:*\n` +
-        `🆔 ID: ${data.id}\n` +
-        `👤 Tên: ${data.name}\n` +
-        `📦 Đơn hàng: ${data.orders}\n` +
-        `🪙 Coin: ${data.coins}\n` +
-        `🚛 Level xe: ${data.truckLevel}\n` +
-        `🎁 Lượt mở rương còn lại: ${data.spins || 0}\n` +
-        `🎁 Tổng số lượt đã mở rương: ${(data.chestOpensTotal || 0).toLocaleString()}\n` +
-        `🎁 Số lượt mở rương hôm nay: ${(data.chestOpensToday || 0).toLocaleString()}\n` +
-        `🌐 IP: ${data.ip || 'Chưa có'}\n` +
-        `💰 Tổng tiền đã rút: ${totalWithdrawn.toLocaleString()} VNĐ\n` +
-        `👥 Đã mời: ${data.invitedCount} (Hợp lệ: ${data.validInvites})` +
-        dupText,
-        { parse_mode: 'Markdown' }
-    );
+    const targetId=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');
+    if (!targetId) return ctx.reply('❌ Sử dụng: /checkID <userId>');
+    try {
+        const {data:user,error}=await readUserRow(targetId);
+        if (error || !user) return ctx.reply('❌ Không tìm thấy user hoặc lỗi database.');
+
+        const now=Date.now();
+        const createdRaw=user.accountCreatedAt||user.createdAt||user.joinDate||null;
+        const createdMs=createdRaw ? new Date(createdRaw).getTime() : NaN;
+        const ageText=Number.isFinite(createdMs) ? `${Math.max(0,(now-createdMs)/86400000).toFixed(1)} ngày` : 'N/A';
+        const onboardingHasMarker=hasOwnField(user,'onboardingGroupsVerified');
+        const onboardingVerified=onboardingHasMarker ? user.onboardingGroupsVerified===true : true;
+        const onboardingLabel=onboardingVerified ? (onboardingHasMarker?'Có':'Có (Legacy/Grandfather)') : 'Chưa';
+        const level=calculateLevelStats(user.truckLevel||1);
+        const deliveryCount=Math.max(0,Number(user.deliveryCount||0));
+        const extraDeliveryCount=Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0)));
+        const deliveryLimit=DELIVERY_DAILY_LIMIT+extraDeliveryCount;
+        const basicRemain=Math.max(0,DELIVERY_DAILY_LIMIT-deliveryCount);
+        const extraRemain=Math.max(0,deliveryLimit-Math.max(deliveryCount,DELIVERY_DAILY_LIMIT));
+        const adsLifetime=Math.max(0,Number(user.lifetimeAdsWatched||0));
+        const quizUsed=Array.isArray(user.quizUsedIds)?user.quizUsedIds.map(Number).filter(Number.isFinite):[];
+        const quizSlots=(user.quizFreeUsed?1:0)+Math.min(4,Math.max(0,Number(user.quizAdUnlocked||0)));
+
+        const [claims,actionFlags,streakRaw,antiFraud,withdrawResult,redeemResult,duplicates,extra] = await Promise.all([
+            getServerTaskClaims(targetId),
+            getDailyActionFlags(targetId),
+            getStreakState(targetId),
+            getAntiFraudState(targetId),
+            supabase.from('withdrawals').select('*').eq('userId',targetId).order('createdAt',{ascending:false}).limit(100),
+            supabase.from('giftcode_redemptions').select('*').eq('userId',targetId).limit(100),
+            checkDuplicateIP(targetId,user.ip),
+            getUserExtra(targetId)
+        ]);
+        const tasks=dailyTaskDefinitions(user,claims,actionFlags);
+        const today=vietnamDayKey();
+        const allTaskClaimed=claims.__all===today;
+        const streak=streakView(streakRaw);
+        const withdrawals=withdrawResult.data||[];
+        const redeems=(redeemResult.data||[]).sort((x,y)=>new Date(y.createdAt||y.redeemedAt||0)-new Date(x.createdAt||x.redeemedAt||0));
+        const pendingWithdrawals=withdrawals.filter(w=>w.status==='pending');
+        const successWithdrawals=withdrawals.filter(w=>w.status==='success');
+        const rejectedWithdrawals=withdrawals.filter(w=>['cancelled','rejected'].includes(String(w.status||'').toLowerCase()));
+        const refundedWithdrawals=withdrawals.filter(w=>String(w.status||'').toLowerCase()==='refunded');
+        const approvedVnd=successWithdrawals.reduce((sum,w)=>sum+Number(w.amount||0),0);
+        const pendingVnd=pendingWithdrawals.reduce((sum,w)=>sum+Number(w.amount||0),0);
+        const referralClaims=(extra?.serverReferralMilestones&&typeof extra.serverReferralMilestones==='object')?extra.serverReferralMilestones:{};
+        const groupClaims=(extra?.groupTaskCampaignClaims&&typeof extra.groupTaskCampaignClaims==='object')?extra.groupTaskCampaignClaims:{};
+        const fraudState=antiFraud.state||{};
+        const fraudStats=antiFraud.stats||{};
+        const riskScore=Number(fraudStats.score||fraudState.riskScore||0);
+
+        const lines=[];
+        lines.push('👤 THÔNG TIN TÀI KHOẢN');
+        lines.push(`🆔 Telegram ID: ${targetId}`);
+        lines.push(`👤 Tên: ${user.name||'N/A'}`);
+        lines.push(`🌐 Ngôn ngữ: ${user.language||'vi'}`);
+        lines.push(`📅 Ngày tham gia: ${user.joinDate||'N/A'}`);
+        lines.push(`🕒 accountCreatedAt: ${user.accountCreatedAt||'N/A'}`);
+        lines.push(`⏳ Tuổi tài khoản: ${ageText}`);
+        lines.push(`🚫 Ban: ${user.isBanned?'Có':'Không'}`);
+        lines.push(`💾 walletUpdatedAt: ${user.walletUpdatedAt||'N/A'}`);
+        lines.push(`📆 lastResetDate: ${user.lastResetDate||'N/A'}`);
+        lines.push(`📆 lastWeekReset: ${user.lastWeekReset||'N/A'}`);
+        lines.push(`🔐 Onboarding Groups Verified: ${onboardingLabel}`);
+        lines.push(`🔐 Verified At: ${user.onboardingGroupsVerifiedAt||'N/A'}`);
+
+        lines.push('\n💰 VÍ & XE');
+        lines.push(`Coin: ${Number(user.coins||0).toLocaleString('vi-VN')}`);
+        lines.push(`Orders: ${Number(user.orders||0).toLocaleString('vi-VN')}`);
+        lines.push(`Spins: ${Number(user.spins||0).toLocaleString('vi-VN')}`);
+        lines.push(`Truck Level: ${Number(user.truckLevel||1)} / ${level.maxLevel}`);
+        lines.push(`Upgrade Cost: ${Number(level.upgradeCost||0).toLocaleString('vi-VN')} Coin`);
+        lines.push(`currentProducts: ${Number(user.currentProducts||0).toLocaleString('vi-VN')}`);
+        lines.push(`maxProducts: ${Number(user.maxProducts||level.maxWarehouse||0).toLocaleString('vi-VN')}`);
+        lines.push(`productionAmount: ${Number(user.productionAmount||level.productsPerDelivery||0).toLocaleString('vi-VN')}`);
+        lines.push(`productionInterval: ${Number(user.productionInterval||level.productionMs||0)} ms`);
+        lines.push(`lastProducedAt: ${user.lastProducedAt||'N/A'}`);
+        lines.push(`speedUpUsed: ${!!user.speedUpUsed}`);
+        lines.push(`productionTime: ${level.productionTime} phút | products/delivery: ${level.productsPerDelivery.toLocaleString('vi-VN')}`);
+        lines.push(`warehouse max: ${level.maxWarehouse.toLocaleString('vi-VN')} | deliveries/day: ${level.deliveriesPerDay} | orders/day: ${level.ordersPerDay.toLocaleString('vi-VN')}`);
+
+        lines.push('\n🚚 GIAO HÀNG');
+        lines.push(`deliveryCount hôm nay: ${deliveryCount}`);
+        lines.push(`deliveryLimit hiện tại: ${deliveryLimit}`);
+        lines.push(`deliveryCountLifetime: ${Number(user.deliveryCountLifetime||0)}`);
+        lines.push(`extraDeliveryCount: ${Number(user.extraDeliveryCount||0)}`);
+        lines.push(`extraDeliveryAdsToday: ${Number(user.extraDeliveryAdsToday||0)}`);
+        lines.push(`Lượt cơ bản còn: ${basicRemain}`);
+        lines.push(`Lượt extra còn: ${extraRemain}`);
+
+        lines.push('\n📺 REWARDED');
+        lines.push(`adsToday: ${Number(user.adsToday||0)}`);
+        lines.push(`rewardedAdsToday: ${Number(user.rewardedAdsToday||0)}`);
+        lines.push(`lifetimeAdsWatched: ${adsLifetime}`);
+        lines.push(`bonusAdsToday: ${Number(user.bonusAdsToday||0)}`);
+        lines.push(`spinAdCount: ${Number(user.spinAdCount||0)}`);
+        lines.push(`extraDeliveryAdsToday: ${Number(user.extraDeliveryAdsToday||0)}`);
+        lines.push(`weeklyAdsCount: ${Number(user.weeklyAdsCount||0)}`);
+        lines.push(`🎟 Giftcode requirement: ${Math.min(adsLifetime,5)}/5 Rewarded — ${adsLifetime>=5?'✅ Đủ điều kiện':'❌ Chưa đủ'}`);
+
+        lines.push('\n🔗 SMARTLINK');
+        lines.push(`smartlinksToday: ${Number(user.smartlinksToday||0)}`);
+        lines.push(`smartlinkCount: ${Number(user.smartlinkCount||0)}`);
+        lines.push(`lifetimeSmartlinks: ${Number(user.lifetimeSmartlinks||0)}`);
+        lines.push(`lastSmartlinkTime: ${user.lastSmartlinkTime||0}`);
+        lines.push(`usedSmartlinks count: ${Array.isArray(user.usedSmartlinks)?user.usedSmartlinks.length:0}`);
+        lines.push(`lastSmartlinkAttemptId: ${user.lastSmartlinkAttemptId||'N/A'}`);
+
+        lines.push('\n🧠 QUIZ');
+        lines.push(`quizDate: ${user.quizDate||'N/A'}`);
+        lines.push(`quizFreeUsed: ${!!user.quizFreeUsed}`);
+        lines.push(`quizAdUnlocked: ${Number(user.quizAdUnlocked||0)}`);
+        lines.push(`quizUsedIds: [${quizUsed.join(', ')}]`);
+        lines.push(`Đã trả lời: ${quizUsed.length}/5 | Slot đã mở: ${quizSlots}/5 | Còn: ${Math.max(0,5-quizUsed.length)}`);
+
+        lines.push('\n📋 DAILY TASKS');
+        for (const task of tasks) lines.push(`${task.done?'✅':task.claimable?'🎁':'🎯'} ${task.name} — ${task.progress}/${task.max} — eligible=${task.eligible?'Có':'Không'} — claimed=${task.done?'Có':'Không'} — claimable=${task.claimable?'Có':'Không'}`);
+        lines.push(`Thưởng hoàn thành tất cả: ${allTaskClaimed?'ĐÃ NHẬN':'CHƯA NHẬN'}`);
+
+        lines.push('\n👥 REFERRAL');
+        lines.push(`referrerId: ${user.referrerId||'N/A'}`);
+        lines.push(`referrerCounted: ${!!user.referrerCounted}`);
+        lines.push(`invitedCount: ${Number(user.invitedCount||0)}`);
+        lines.push(`validInvites: ${Number(user.validInvites||0)}`);
+        lines.push(`dailyValidInvites: ${Number(user.dailyValidInvites||0)}`);
+        lines.push(`weeklyValidInvites: ${Number(user.weeklyValidInvites||0)}`);
+        lines.push(`Requirements: Group=${onboardingVerified?'✅':'❌'} | Rewarded=${Math.min(3,adsLifetime)}/3 | SmartLink=${Math.min(2,Number(user.lifetimeSmartlinks||0))}/2`);
+        for (const m of REFERRAL_MILESTONE_REWARDS) lines.push(`Mốc ${m.friends}: ${referralClaims[String(m.friends)]===true?'ĐÃ NHẬN':'CHƯA NHẬN'}`);
+
+        lines.push('\n🎁 RƯƠNG');
+        lines.push(`spins còn: ${Number(user.spins||0)}`);
+        lines.push(`chestOpensToday: ${Number(user.chestOpensToday||0)}`);
+        lines.push(`chestOpensTotal: ${Number(user.chestOpensTotal||0)}`);
+        lines.push(`spinAdCount: ${Number(user.spinAdCount||0)}`);
+        lines.push(`QC Rương còn lại: ${Math.max(0,5-Number(user.spinAdCount||0))}`);
+
+        lines.push('\n🔥 STREAK');
+        lines.push(`day: ${streak.day}`);
+        lines.push(`currentDay: ${streak.currentDay}`);
+        lines.push(`lastCheckInDate: ${streak.lastCheckInDate||'N/A'}`);
+        lines.push(`missed: ${streak.missed?'Có':'Không'}`);
+        lines.push(`recoveryAvailable: ${streak.recoveryAvailable?'Có':'Không'}`);
+        lines.push(`recoveryDate: ${streak.recoveryDate||'N/A'}`);
+
+        lines.push('\n👥 GROUP TASK');
+        for (const campaign of Object.values(GROUP_TASK_CAMPAIGNS)) lines.push(`${campaign.username} | campaignId=${campaign.id} | ${groupClaims[campaign.id]===true?'ĐÃ CLAIM':'CHƯA CLAIM'}`);
+
+        lines.push('\n💳 RÚT TIỀN');
+        lines.push(`Tổng yêu cầu: ${withdrawals.length}`);
+        lines.push(`Pending: ${pendingWithdrawals.length}`);
+        lines.push(`Success: ${successWithdrawals.length}`);
+        lines.push(`Cancelled/Rejected: ${rejectedWithdrawals.length}`);
+        lines.push(`Refunded: ${refundedWithdrawals.length}`);
+        lines.push(`Tổng VNĐ đã duyệt: ${approvedVnd.toLocaleString('vi-VN')}`);
+        lines.push(`Tổng VNĐ pending: ${pendingVnd.toLocaleString('vi-VN')}`);
+        lines.push(`withdrawRemain hôm nay: ${Number(user.withdrawRemain??0)}`);
+        withdrawals.slice(0,5).forEach(w=>lines.push(`#${w.txCode||w.id||'?'} | ${Number(w.amount||0).toLocaleString('vi-VN')} VNĐ | ${w.status||'N/A'} | created=${w.createdAt||'N/A'} | approved=${w.approvedAt||'N/A'}`));
+
+        lines.push('\n🎟 GIFTCODE');
+        lines.push(`Tổng số code user đã nhập: ${redeems.length}`);
+        redeems.slice(0,5).forEach(r=>lines.push(`${r.code||'N/A'} | Coin +${Number(r.rewardCoin||0)} | Orders +${Number(r.rewardOrders||0)} | Spins +${Number(r.rewardSpins||0)} | ${r.createdAt||r.redeemedAt||'N/A'}`));
+
+        lines.push('\n🛡 ANTI-FRAUD');
+        lines.push(`Risk Score: ${riskScore}/100`);
+        lines.push(`Risk Level: ${fraudStats.level||fraudState.riskLevel||'LOW'}`);
+        lines.push(`Reasons/Signals: ${(fraudStats.reasons||fraudState.suspiciousSignals||[]).join(' | ')||'Không có'}`);
+        lines.push(`blockedReward: ${riskScore>=ANTI_FRAUD_CONFIG.thresholds.critical?'Có':'Không'}`);
+        lines.push(`holdWithdrawal: ${riskScore>=ANTI_FRAUD_CONFIG.thresholds.hold?'Có':'Không'}`);
+        lines.push(`duplicateDeviceAccounts: ${Number(fraudState.duplicateDeviceAccounts||0)}`);
+        lines.push(`IP: ${user.ip||fraudState.ip||'N/A'}`);
+        lines.push(`IP duplicate users: ${duplicates.length}${duplicates.length?` (${duplicates.map(x=>`${x.name||'User'}:${x.id}`).join(', ')})`:''}`);
+
+        const text=lines.join('\n');
+        const chunks=[];
+        let current='';
+        for (const line of text.split('\n')) {
+            const candidate=current?`${current}\n${line}`:line;
+            if (candidate.length>3600 && current) { chunks.push(current); current=line; }
+            else current=candidate;
+        }
+        if (current) chunks.push(current);
+        for (let i=0;i<chunks.length;i++) await ctx.reply(`📄 ${i+1}/${chunks.length}\n\n${chunks[i]}`);
+    } catch (e) {
+        console.error('/checkID:',e);
+        return ctx.reply('❌ Lỗi khi tạo báo cáo /checkID: '+(e?.message||e));
+    }
 });
 
 // /hoantra - Hoàn trả đơn rút tiền chưa duyệt
@@ -2814,7 +3160,7 @@ async function getInviteWeeklyEntries(limit = 10) {
         }));
     }
 
-    const all = await getUserExtraAll();
+    const all = await readUserExtraAllFresh();
     const ranked = Object.entries(all)
         .map(([id, value]) => ({ id: String(id), score: Math.max(0, Number(value?.weeklyValidInvites || 0)) }))
         .filter(x => x.score > 0)
@@ -3015,14 +3361,13 @@ async function resetWeeklyBoardCounters(boardType) {
         return true;
     }
 
-    const all = await getUserExtraAll();
+    const all = await readUserExtraAllFresh();
     for (const key of Object.keys(all)) {
         if (all[key] && Object.prototype.hasOwnProperty.call(all[key], 'weeklyValidInvites')) {
-            all[key].weeklyValidInvites = 0;
+            await saveUserExtra(key, { weeklyValidInvites:0 });
         }
     }
-    const saved = await saveUserExtraAll(all);
-    if (!saved) throw new Error('Không lưu được reset weeklyValidInvites vào user_extra_state.');
+    if (!(await flushUserExtra())) throw new Error('Không lưu được reset weeklyValidInvites vào user_extra_state.');
     return true;
 }
 
@@ -3271,21 +3616,19 @@ app.use('/api', (req, res, next) => {
     next();
 });
 
-// API kiểm tra tham gia nhóm từ frontend
+// API legacy giữ tương thích: trả marker ONBOARDING PERSISTENT, không live-check membership.
 app.get('/api/verify/:id', async (req, res) => {
     try {
-        const isMember = await checkUserMembership(req.params.id);
-        // FIX LỖ HỔNG: trước đây route này chỉ trả về true/false, không thử chốt lượt mời bạn. Nếu user
-        // bấm "✅ Kiểm tra" ngay trong Mini App (thay vì qua bot) sau khi đã lỡ xem đủ 3 QC từ trước, lượt
-        // mời sẽ không bao giờ được tính vì onAdWatched() chỉ gọi check-referral khi lifetimeAdsWatched<=3.
-        // Gọi tại đây để MỌI đường xác nhận thành viên đều tự thử chốt, không phụ thuộc thứ tự thao tác.
-        if (isMember) {
-            tryFinalizeReferral(req.params.id, true).catch(() => {});
-        }
-        res.json({ success: isMember });
+        const userId = String(req.params.id || '');
+        if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,verified:false,error:'Telegram session không hợp lệ.'});
+        const onboarding = await getOnboardingAccessState(userId);
+        if (!onboarding.exists) return res.status(404).json({success:false,verified:false,error:'User not found'});
+        if (onboarding.reliable === false) return res.status(503).json({success:false,verified:false,retry:true,error:'Không đọc được trạng thái onboarding.'});
+        res.set('Cache-Control','no-store');
+        return res.json({success:onboarding.verified,verified:onboarding.verified,onboardingGroupsVerified:onboarding.verified,verifiedAt:onboarding.verifiedAt||null,legacy:onboarding.legacy});
     } catch (e) {
-        console.error("Lỗi API verify:", e);
-        res.status(500).json({ success: false, error: e.message });
+        console.error('Lỗi API verify persistent:', e);
+        return res.status(500).json({success:false,verified:false,error:'Không đọc được trạng thái onboarding.'});
     }
 });
 
@@ -3330,14 +3673,20 @@ app.post('/api/save-ip/:id', async (req, res) => {
 
 // API lấy user (kèm level stats)
 app.get('/api/user/:id', async (req, res) => {
-    let { data, error } = await readUserRow(req.params.id);
+    const requestedUserId = String(req.params.id || '');
+    if (!assertTelegramUser(req, requestedUserId)) return res.status(401).json({error:'Telegram session không hợp lệ.',onboardingRequired:true});
+    let { data, error } = await readUserRow(requestedUserId);
     // Sang ngày mới (0h00 giờ VN) thì SERVER tự reset, nên tải lại app hay tắt/mở bot đều KHÔNG
     // tạo thêm lượt câu hỏi / SmartLink / nhiệm vụ như trước.
     if (data && !isCurrentVietnamDay(data.lastResetDate)) {
         const { error: resetError } = await saveUserFields(req.params.id, {
             ...dailyResetFields(), walletUpdatedAt: new Date().toISOString()
         });
-        if (!resetError) ({ data } = await readUserRow(req.params.id));
+        if (!resetError) {
+            const flushed = await flushUserExtra();
+            if (!flushed) return res.status(503).json({ error:'Không thể lưu daily reset an toàn lúc này.', retry:true });
+            ({ data } = await readUserRow(req.params.id));
+        }
     }
     if (!data) {
         if (!error || error.code === 'PGRST116') { // Not Found
@@ -3346,6 +3695,12 @@ app.get('/api/user/:id', async (req, res) => {
         console.error("Lỗi lấy user:", error);
         return res.status(500).json({ error: "Failed to fetch user data" });
     }
+    const onboarding = await getOnboardingAccessState(requestedUserId, data);
+    if (onboarding.reliable === false) return res.status(503).json({error:'Không đọc được trạng thái onboarding.',retry:true});
+    data.onboardingGroupsVerified = onboarding.verified === true;
+    data.onboardingGroupsVerifiedAt = onboarding.verifiedAt || null;
+    data.onboardingGroupsLegacy = onboarding.legacy === true;
+
     // Parse referralMilestones if stored as JSON string (bọc try/catch để 1 dòng dữ liệu hỏng
     // không làm crash cả request, khiến client không bao giờ nhận được phản hồi)
     if (data.referralMilestones && typeof data.referralMilestones === 'string') {
@@ -3390,7 +3745,9 @@ app.get('/api/user/:id', async (req, res) => {
 // trạng thái X2 và thời gian sản xuất không bao giờ bị lệch nhau.
 const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned', 'speedUpUsed', 'maxProducts', 'productionAmount', 'dailyTasks', 'allTasksClaimed'])];
 app.post('/api/user/:id', async (req, res) => {
-    const releaseUserStateWrite = await acquireUserStateWriteLock(req.params.id);
+    const requestedUserId = String(req.params.id || '');
+    if (!assertTelegramUser(req, requestedUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const releaseUserStateWrite = await acquireUserStateWriteLock(requestedUserId);
     try {
         const userId = req.params.id;
         const { clientWalletSyncedAt, ...body } = req.body;
@@ -3409,7 +3766,8 @@ app.post('/api/user/:id', async (req, res) => {
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds',
             'dailyTasks', 'allTasksClaimed', 'lastResetDate',
             'weeklyAdsCount', 'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed',
-            'groupTaskCampaignClaims', 'groupTaskCampaignId'
+            'groupTaskCampaignClaims', 'groupTaskCampaignId',
+            'onboardingGroupsVerified', 'onboardingGroupsVerifiedAt', 'onboardingGroupsLegacy'
         ].forEach(f => { delete updateData[f]; });
 
         // Handle referralMilestones as JSON string
@@ -3420,18 +3778,25 @@ app.post('/api/user/:id', async (req, res) => {
         let { data: current, error: currentError } = await readUserRow(userId);
         if (!current) {
             // Chưa có bản ghi (mở Mini App trước khi /start) -> tạo mới ngay để KHÔNG mất dữ liệu người dùng
-            const { known: seedRow } = await splitUserFields({
-                id: userId,
-                name: body.name || 'Shipper',
-                walletUpdatedAt: new Date().toISOString(),
-                accountCreatedAt: new Date().toISOString()
+            const { known: seedRow, extra: seedExtra } = await splitUserFields({
+                id:userId,
+                name:body.name || 'Shipper',
+                walletUpdatedAt:new Date().toISOString(),
+                accountCreatedAt:new Date().toISOString(),
+                onboardingGroupsVerified:false,
+                onboardingGroupsVerifiedAt:null,
+                onboardingGroupsLegacy:false
             });
-            const { error: createError } = await supabase.from('users').insert(seedRow);
+            const { error:createError } = await supabase.from('users').insert(seedRow);
             if (createError) {
                 console.error(`Không tạo được user ${userId}:`, createError.message || currentError?.message);
-                return res.status(404).json({ success: false, error: "User not found" });
+                return res.status(404).json({success:false,error:'User not found'});
             }
-            ({ data: current } = await readUserRow(userId));
+            if (Object.keys(seedExtra).length) {
+                await saveUserExtra(userId, seedExtra);
+                if (!(await flushUserExtra())) return res.status(503).json({success:false,error:'Không lưu được onboarding state cho user mới.'});
+            }
+            ({ data:current } = await readUserRow(userId));
             if (!current) return res.status(404).json({ success: false, error: "User not found" });
         }
         if (current.isBanned) {
@@ -3786,13 +4151,17 @@ async function loadCurrentDailyUser(userId) {
     if (!user) return null;
     if (!isCurrentVietnamDay(user.lastResetDate)) {
         // Chỉ sang ngày mới thật sự mới reset toàn bộ nhiệm vụ/QC/SmartLink/giao hàng.
-        await saveUserFields(userId, { ...dailyResetFields(), walletUpdatedAt:new Date().toISOString() });
+        const saved = await saveUserFields(userId, { ...dailyResetFields(), walletUpdatedAt:new Date().toISOString() });
+        if (saved.error) throw saved.error;
+        if (!(await flushUserExtra())) throw new Error('Không thể lưu daily reset an toàn lúc này.');
         ({ data:user } = await readUserRow(userId));
     } else if (user.quizDate !== vietnamDayKey()) {
         // Nếu riêng dữ liệu quiz cũ/thiếu thì chỉ reset quiz, tuyệt đối không xóa tiến độ khác trong ngày.
-        await saveUserFields(userId, {
+        const saved = await saveUserFields(userId, {
             quizDate:vietnamDayKey(), quizFreeUsed:false, quizAdUnlocked:0, quizUsedIds:[]
         });
+        if (saved.error) throw saved.error;
+        if (!(await flushUserExtra())) throw new Error('Không thể lưu trạng thái Quiz an toàn lúc này.');
         ({ data:user } = await readUserRow(userId));
     }
     return user;
@@ -3808,8 +4177,10 @@ function quizState(user) {
     };
 }
 app.get('/api/quiz/status/:id', async (req, res) => {
+    const userId = String(req.params.id || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     try {
-        const user = await loadCurrentDailyUser(String(req.params.id));
+        const user = await loadCurrentDailyUser(userId);
         if (!user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
         res.json({ success:true, ...quizState(user) });
     } catch (e) {
@@ -3821,6 +4192,7 @@ app.post('/api/quiz/claim-slot', async (req, res) => {
     const userId = String(req.body?.userId || '');
     const kind = req.body?.kind === 'ad' ? 'ad' : 'free';
     if (!userId) return res.status(400).json({ success:false, error:'Thiếu userId.' });
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     if (quizProcessing.has(userId)) return res.status(409).json({ success:false, retry:true, error:'Đang xử lý lượt câu hỏi.' });
     quizProcessing.add(userId);
     try {
@@ -5822,6 +6194,28 @@ async function persistCompletedAdEvent(token, event, extra = {}) {
     return ok;
 }
 
+
+async function releasePersistentAdSession(userId, token, terminalStatus = 'released') {
+    const uid=String(userId||''), tid=String(token||'');
+    if (!uid || !tid) return false;
+    let ok=true;
+    const sessionKey=persistentEventKey('ad-session',tid);
+    const persistedSession=await readPersistentEvent(sessionKey);
+    if (persistedSession && String(persistedSession.userId||'')===uid) {
+        const saved=await writePersistentEvent(sessionKey,{...persistedSession,status:terminalStatus,completedAt:persistedSession.completedAt||Date.now(),releasedAt:Date.now(),expiresAt:Date.now()-1},3);
+        if (!saved) ok=false;
+    }
+    const activeKey=persistentEventKey('ad-active-user',uid);
+    const activeMarker=await readPersistentEvent(activeKey);
+    if (String(activeMarker?.token||'')===tid) {
+        const released=await writePersistentEvent(activeKey,{...activeMarker,status:'released',releasedAt:Date.now(),expiresAt:Date.now()-1},3);
+        if (!released) ok=false;
+    }
+    adSessions.delete(tid);
+    if (activeAdByUser.get(uid)===tid) activeAdByUser.delete(uid);
+    return ok;
+}
+
 app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -5994,7 +6388,11 @@ app.post('/api/ad/session/cancel', async (req, res) => {
     const actionId=String(req.body?.actionId||'');
     if(!token) return res.status(400).json({success:false,error:'Thiếu token.'});
     const completed=completedAdEvents.get(token);
-    if(completed) return res.json({success:true,alreadyCompleted:true});
+    if(completed) {
+        const released = await releasePersistentAdSession(userId, token, 'completed').catch(() => false);
+        if (!released) return res.status(503).json({success:false,retry:true,verified:true,alreadyCompleted:true,error:'QC đã hoàn tất nhưng máy chủ chưa cleanup được phiên quảng cáo.'});
+        return res.json({success:true,alreadyCompleted:true});
+    }
     let session=adSessions.get(token);
     if(!session) {
         const persisted=await readPersistentEvent(persistentEventKey('ad-session',token));
@@ -6036,7 +6434,13 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const { userId, token, adType, sessionId } = req.body || {};
         const existingCompleted = await loadCompletedAdEvent(String(token));
         if (existingCompleted && existingCompleted.userId === String(userId) && existingCompleted.adType === adType) {
-            if (existingCompleted.completionResult) return res.json({ ...existingCompleted.completionResult, idempotent:true });
+            if (existingCompleted.completionResult) {
+                const released = await releasePersistentAdSession(String(userId), String(token), 'completed').catch(() => false);
+                if (!released) {
+                    return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:existingCompleted.purpose||'generic',error:'QC đã xác minh nhưng máy chủ đang hoàn tất cleanup phiên quảng cáo.'});
+                }
+                return res.json({ ...existingCompleted.completionResult, idempotent:true });
+            }
         }
 
         let s=adSessions.get(token);
@@ -6077,6 +6481,8 @@ app.post('/api/ad/session/complete', async (req, res) => {
                         used:!!persistedDelivery.used, deliveryClaimResult:persistedDelivery.deliveryClaimResult || null,
                         completionResult:persistedDelivery.completionResult
                     });
+                    const released = await releasePersistentAdSession(String(userId), String(token), 'completed');
+                    if (!released) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Rewarded giao hàng đã xác minh nhưng phiên quảng cáo đang cleanup.'});
                     return res.json({ ...persistedDelivery.completionResult, idempotent:true, recovered:true });
                 }
                 if (persistedDelivery.status === 'processing' || persistedDelivery.verificationReady === true) {
@@ -6100,9 +6506,13 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (purpose==='passive') {
             insertRowSafe('ad_events',{user_id:String(userId),ad_type:'rewarded',purpose,status:'passive_success',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
             const passiveResponse={success:true,adToken:String(token),purpose,passive:true,elapsed};
-            completedAdEvents.set(String(token),{userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true,completionResult:passiveResponse});
-            if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
-            adSessions.delete(token);
+            const passiveCompleted={userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true,completionResult:passiveResponse};
+            completedAdEvents.set(String(token),passiveCompleted);
+            const completedSaved=await persistCompletedAdEvent(String(token),passiveCompleted,{expiresAt:Date.now()+10*60*1000});
+            const released=await releasePersistentAdSession(String(userId),String(token),'completed');
+            if (!completedSaved || !released) {
+                return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,passive:true,error:'QC tự động đã hoàn tất nhưng máy chủ đang đồng bộ cleanup. Không cần xem lại quảng cáo.'});
+            }
             setTimeout(()=>completedAdEvents.delete(String(token)),120000);
             return res.json(passiveResponse);
         }
@@ -6149,8 +6559,8 @@ app.post('/api/ad/session/complete', async (req, res) => {
             const recoveredCompleted={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,completionResult:recoveredResponse};
             completedAdEvents.set(String(token), recoveredCompleted);
             await persistCompletedAdEvent(String(token), recoveredCompleted);
-            adSessions.delete(token);
-            if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+            const released = await releasePersistentAdSession(String(userId), String(token), 'completed');
+            if (!released) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Reward đã commit nhưng phiên quảng cáo đang cleanup.'});
             return res.json({...recoveredResponse,idempotent:true,recovered:true});
         }
 
@@ -6211,8 +6621,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Quảng cáo đã được xác minh nhưng máy chủ chưa lưu xong trạng thái. Đang chờ đồng bộ, không cần xem lại quảng cáo.'});
             }
         }
-        adSessions.delete(token);
-        if (activeAdByUser.get(String(userId)) === token) activeAdByUser.delete(String(userId));
+        await releasePersistentAdSession(String(userId),String(token),'completed');
         setTimeout(()=>completedAdEvents.delete(String(token)), purpose === 'delivery' ? 30*60*1000 : 10*60*1000);
         res.json(response);
     } catch(e){
@@ -6664,115 +7073,99 @@ app.get('/api/leaderboard', async (req, res) => {
 });
 
 
-// API redeem code
+// API redeem code - server-authoritative + >=5 Rewarded server-verified + idempotency.
 app.post('/api/redeem-code', async (req, res) => {
-    const { userId, code } = req.body;
-    if (!userId || !code) return res.status(400).json({ error: "Missing userId or code." });
+    const userId=String(req.body?.userId||'');
+    const code=String(req.body?.code||'').trim();
+    if (!userId || !code) return res.status(400).json({success:false,error:'Vui lòng nhập mã Giftcode.'});
+    if (!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
 
-    const { data: gc, error: gcError } = await supabase.from('giftcodes').select('*').eq('code', code).single();
-    if (gcError || !gc) return res.status(404).json({ error: "Mã code không hợp lệ hoặc không tồn tại." });
-    if (gc.usedCount >= gc.limitUses) return res.status(400).json({ error: "Mã code đã hết lượt sử dụng." });
+    let releaseGiftLock=null;
+    let redemptionInserted=false;
+    let usedCountReserved=false;
+    let reservedUsedCount=null;
+    try {
+        const {data:user,error:userError}=await readUserRow(userId);
+        if (userError || !user) return res.status(404).json({success:false,error:'Không tìm thấy người dùng.'});
+        if (user.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.'});
+        const currentAds=Math.max(0,Number(user.lifetimeAdsWatched||0));
+        if (currentAds<5) return res.status(403).json({success:false,adRequirement:true,requiredAds:5,currentAds,error:'Bạn cần xem ít nhất 5 QC Rewarded Interstitial hợp lệ trước khi sử dụng Giftcode.'});
 
-    // Kiểm tra PHẠM VI của code: nếu scope = "admin" thì chỉ Admin chính/phụ mới nhập được (code nội bộ).
-    const uid = String(userId);
-    const isRequesterAdmin = uid === String(ADMIN_ID) || subAdminIds.has(uid);
-    if (gc.scope === 'admin' && !isRequesterAdmin) {
-        return res.status(403).json({ error: "Mã code này chỉ dành riêng cho Admin." });
-    }
+        releaseGiftLock=await acquirePersistentLeaseLock(persistentEventKey('giftcode-redeem-lock',code),60*1000);
+        if (!releaseGiftLock) return res.status(409).json({success:false,retry:true,error:'Giftcode đang được xử lý. Vui lòng thử lại.'});
 
-    const { data: userCheck } = await supabase.from('users').select('isBanned, name').eq('id', userId).single();
-    if (userCheck?.isBanned) return res.status(403).json({ error: "Tài khoản đã bị khóa." });
+        const {data:gc,error:gcError}=await supabase.from('giftcodes').select('*').eq('code',code).maybeSingle();
+        if (gcError || !gc) return res.status(404).json({success:false,error:'Mã code không hợp lệ hoặc không tồn tại.'});
+        const isRequesterAdmin=userId===String(ADMIN_ID)||subAdminIds.has(userId);
+        if (gc.scope==='admin'&&!isRequesterAdmin) return res.status(403).json({success:false,error:'Mã code này chỉ dành riêng cho Admin.'});
+        const {data:already}=await supabase.from('giftcode_redemptions').select('code,userId').eq('code',code).eq('userId',userId).maybeSingle();
+        if (already) return res.status(400).json({success:false,error:'Bạn đã sử dụng mã code này rồi.'});
+        const usedCount=Math.max(0,Number(gc.usedCount||0));
+        const limitUses=Math.max(0,Number(gc.limitUses||0));
+        if (usedCount>=limitUses) return res.status(400).json({success:false,error:'Mã code đã hết lượt sử dụng.'});
 
-    // Tính sẵn phần thưởng thực tế của code (để lưu snapshot vào lịch sử + có thể thu hồi chính xác sau này)
-    let rewardCoin = 0, rewardOrders = 0, rewardSpins = 0;
-    if (gc.rewardType === 'multi') {
-        rewardCoin = gc.rewardAmount || 0;
-        rewardOrders = gc.orders || 0;
-        rewardSpins = gc.spins || 0;
-    } else if (gc.rewardType === 'coin') {
-        rewardCoin = gc.rewardAmount || 0;
-    } else if (gc.rewardType === 'orders') {
-        rewardOrders = gc.rewardAmount || 0;
-    } else if (gc.rewardType === 'spins') {
-        rewardSpins = gc.rewardAmount || 0;
-    }
+        let rewardCoin=0,rewardOrders=0,rewardSpins=0;
+        if (gc.rewardType==='multi') { rewardCoin=Number(gc.rewardAmount||0); rewardOrders=Number(gc.orders||0); rewardSpins=Number(gc.spins||0); }
+        else if (gc.rewardType==='coin') rewardCoin=Number(gc.rewardAmount||0);
+        else if (gc.rewardType==='orders') rewardOrders=Number(gc.rewardAmount||0);
+        else if (gc.rewardType==='spins') rewardSpins=Number(gc.rewardAmount||0);
 
-    // FIX LỖI: mỗi user chỉ được nhập 1 code MỘT LẦN DUY NHẤT (trước đây chỉ kiểm tra usedCount chung của
-    // code, không phân biệt user nên 1 người có thể spam nhập lại nhiều lần). Ghi nhận vào bảng
-    // giftcode_redemptions (code, userId) với khóa chính kép -> insert lần 2 của cùng 1 user sẽ báo lỗi.
-    // Đồng thời lưu luôn "snapshot" phần thưởng + thời gian nhập để: (1) hiển thị lịch sử nhập code CHỈ
-    // RIÊNG user đó thấy được (không thông báo lên banner toàn server nữa), và (2) cho phép admin /thuhoi
-    // thu hồi chính xác đúng số đã phát ra dù sau này admin có đổi phần thưởng của code.
-    // Nếu bảng giftcode_redemptions trên Supabase CHƯA được thêm các cột snapshot (chưa chạy SQL migration)
-    // -> tự động fallback insert chỉ với (code, userId) để việc nhập code KHÔNG BỊ LỖI/chặn đứng; khi đó
-    // lịch sử nhập code của user sẽ hiển thị thiếu số phần thưởng cho tới khi admin chạy migration.
-    let redemptionError;
-    {
-        const full = await supabase.from('giftcode_redemptions').insert({
-            code, userId,
-            userName: userCheck?.name || null,
-            rewardCoin, rewardOrders, rewardSpins,
-            createdAt: new Date().toISOString()
-        });
-        redemptionError = full.error;
-        if (redemptionError && redemptionError.code !== '23505' &&
-            (redemptionError.code === '42703' || redemptionError.code === 'PGRST204' || /column/i.test(redemptionError.message || ''))) {
-            const fallback = await supabase.from('giftcode_redemptions').insert({ code, userId });
-            redemptionError = fallback.error;
+        let redemptionError;
+        const full=await supabase.from('giftcode_redemptions').insert({code,userId,userName:user.name||null,rewardCoin,rewardOrders,rewardSpins,createdAt:new Date().toISOString()});
+        redemptionError=full.error;
+        if (redemptionError && redemptionError.code!=='23505' && (redemptionError.code==='42703'||redemptionError.code==='PGRST204'||/column/i.test(redemptionError.message||''))) {
+            redemptionError=(await supabase.from('giftcode_redemptions').insert({code,userId})).error;
         }
-    }
-    if (redemptionError) {
-        // Mã lỗi 23505 = vi phạm unique/primary key -> nghĩa là user đã nhập code này rồi
-        if (redemptionError.code === '23505') {
-            return res.status(400).json({ error: "Bạn đã sử dụng mã code này rồi." });
+        if (redemptionError) {
+            if (redemptionError.code==='23505') return res.status(400).json({success:false,error:'Bạn đã sử dụng mã code này rồi.'});
+            console.error('Lỗi reservation giftcode:',redemptionError);
+            return res.status(500).json({success:false,error:'Lỗi khi xử lý code.'});
         }
-        console.error("Lỗi ghi nhận redemption:", redemptionError);
-        return res.status(500).json({ error: "Lỗi khi xử lý code." });
+        redemptionInserted=true;
+
+        const {data:gcRows,error:gcUpdateError}=await supabase.from('giftcodes').update({usedCount:usedCount+1}).eq('code',code).eq('usedCount',usedCount).select('code,usedCount');
+        if (gcUpdateError || !gcRows?.length) {
+            await supabase.from('giftcode_redemptions').delete().eq('code',code).eq('userId',userId);
+            redemptionInserted=false;
+            return res.status(409).json({success:false,retry:true,error:'Giftcode vừa được sử dụng đồng thời. Vui lòng thử lại.'});
+        }
+        usedCountReserved=true;
+        reservedUsedCount=usedCount+1;
+
+        const mutation=await atomicWalletMutation(userId,{deltaCoins:rewardCoin,deltaOrders:rewardOrders,deltaSpins:rewardSpins});
+        if (mutation.error) {
+            await supabase.from('giftcodes').update({usedCount}).eq('code',code).eq('usedCount',reservedUsedCount);
+            usedCountReserved=false;
+            await supabase.from('giftcode_redemptions').delete().eq('code',code).eq('userId',userId);
+            redemptionInserted=false;
+            return res.status(409).json({success:false,retry:true,error:'Ví vừa thay đổi đồng thời. Vui lòng thử lại.'});
+        }
+        usedCountReserved=false;
+        redemptionInserted=false;
+        if (rewardCoin) logTransaction(userId,'coin',rewardCoin,`Nhập code "${code}"`);
+        if (rewardOrders) logTransaction(userId,'orders',rewardOrders,`Nhập code "${code}"`);
+        await recordAntiFraudEvent(userId,'task',{rewardEvent:true,coins:rewardCoin,orders:rewardOrders,spins:rewardSpins,source:'giftcode'}).catch(()=>{});
+        const fresh=await readUserRow(userId);
+        return res.json({success:true,rewardType:gc.rewardType,rewardAmount:rewardCoin,orders:rewardOrders,spins:rewardSpins,coins:Number(fresh.data?.coins||0),totalOrders:Number(fresh.data?.orders||0),totalSpins:Number(fresh.data?.spins||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,currentAds,requiredAds:5});
+    } catch (e) {
+        console.error('Lỗi redeem-code:',e);
+        if (usedCountReserved && reservedUsedCount!==null) {
+            try { await supabase.from('giftcodes').update({usedCount:Math.max(0,Number(reservedUsedCount)-1)}).eq('code',code).eq('usedCount',reservedUsedCount); } catch (_) {}
+        }
+        if (redemptionInserted) {
+            try { await supabase.from('giftcode_redemptions').delete().eq('code',code).eq('userId',userId); } catch (_) {}
+        }
+        return res.status(500).json({success:false,error:'Lỗi khi xử lý code.'});
+    } finally {
+        if (releaseGiftLock) { try { await releaseGiftLock(); } catch (_) {} }
     }
-    
-    // Tăng số lượt đã dùng CỦA CODE
-    const { error: updateGcError } = await supabase.from('giftcodes').update({ usedCount: gc.usedCount + 1 }).eq('code', code);
-    if (updateGcError) {
-        console.error("Lỗi cập nhật giftcode usedCount:", updateGcError);
-        return res.status(500).json({ error: "Lỗi khi xử lý code." });
-    }
-
-    // Cộng thưởng cho user
-    const { data: u, error: userFetchError } = await supabase.from('users').select('coins, orders, spins').eq('id', userId).single();
-    if (userFetchError || !u) {
-        console.error("Lỗi lấy user khi redeem code:", userFetchError);
-        return res.status(404).json({ error: "Không tìm thấy người dùng." });
-    }
-
-    const updateData = {
-        coins: (u.coins || 0) + rewardCoin,
-        orders: (u.orders || 0) + rewardOrders,
-        spins: (u.spins || 0) + rewardSpins
-    };
-
-    const walletOk = await touchWallet(userId, updateData);
-    if (!walletOk) {
-        return res.status(500).json({ error: "Lỗi khi cộng thưởng cho người dùng." });
-    }
-    if (rewardCoin) logTransaction(userId, 'coin', rewardCoin, `Nhập code "${code}"`);
-    if (rewardOrders) logTransaction(userId, 'orders', rewardOrders, `Nhập code "${code}"`);
-
-    // KHÔNG còn ghi vào activity_log / banner toàn server nữa: việc nhập code + phần thưởng nhận được giờ
-    // là RIÊNG TƯ, chỉ chính user đó thấy được qua "Lịch sử nhập code" (GET /api/redeem-history/:userId).
-    // (logTransaction ở trên là để admin xem qua /saoke, khác với banner công khai)
-
-    res.json({ 
-        success: true, 
-        rewardType: gc.rewardType, 
-        rewardAmount: rewardCoin,
-        orders: rewardOrders,
-        spins: rewardSpins
-    });
 });
 
 // Lấy lịch sử nhập code CỦA RIÊNG 1 user (mã code, phần thưởng, thời gian) - chỉ user đó xem được vì phải
 // biết đúng userId của mình (Mini App tự truyền userId của Telegram đang đăng nhập).
 app.get('/api/redeem-history/:userId', async (req, res) => {
+    const historyUserId = String(req.params.userId || '');
+    if (!assertTelegramUser(req, historyUserId)) return res.status(401).json({history:[],error:'Telegram session không hợp lệ.'});
     try {
         // FIX LỖI "NHẬP CODE XONG LỊCH SỬ LẠI KHÔNG CÓ": trước đây SELECT đích danh các cột
         // rewardCoin/rewardOrders/rewardSpins/createdAt - nếu DB thật CHƯA chạy SQL migration thêm các cột
