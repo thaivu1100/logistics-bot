@@ -636,31 +636,16 @@
         </div>
     </div>
 
-    <!-- TRẠNG THÁI BẮT BUỘC: USER ĐÃ ĐƯỢC XÁC NHẬN CHƯA THAM GIA NHÓM -->
-    <div x-show="!isAppLoading && !maintenanceLocked && !bannedScreen && membershipState === 'not_member'" x-cloak
-         class="fixed inset-0 z-[9000] bg-slate-950/95 flex items-center justify-center text-center p-5">
-        <div class="glass w-full max-w-sm rounded-3xl p-5 border border-blue-400/20">
-            <div class="text-5xl mb-3">🔐📦</div>
-            <h2 class="text-base font-black text-yellow-400 uppercase mb-2">Cần tham gia cộng đồng để mở khóa</h2>
-            <p class="text-xs text-slate-300 leading-relaxed mb-4">Bot đã kiểm tra và xác nhận bạn chưa tham gia đủ các nhóm bắt buộc. Hãy tham gia đủ rồi kiểm tra lại.</p>
-            <div class="grid grid-cols-1 gap-2">
-                <a href="https://t.me/khohangkiemtien" target="_blank" class="py-2.5 rounded-xl bg-blue-600 text-white font-black text-xs">📢 Kênh Thông Báo</a>
-                <a href="https://t.me/khohangchatkiemtien" target="_blank" class="py-2.5 rounded-xl bg-yellow-500 text-slate-950 font-black text-xs">👥 Nhóm Cộng Đồng</a>
-                <button @click="checkGroupMembership()" class="py-2.5 rounded-xl bg-green-600 text-white font-black text-xs">✅ Kiểm tra lại</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- TRẠNG THÁI BẮT BUỘC: KHÔNG THỂ XÁC MINH / LỖI KẾT NỐI. Không bao giờ giả thành NOT_MEMBER. -->
-    <div x-show="!isAppLoading && !maintenanceLocked && !bannedScreen && (membershipState === 'check_failed' || bootError || membershipCheckInProgress)" x-cloak
+    <!-- LỖI KHỞI TẠO DỮ LIỆU: chỉ dùng cho lỗi Telegram identity / server / Supabase thật sự.
+         Kiểm tra membership KHÔNG còn dùng màn lỗi này; membership hoạt động đơn giản như phiên bản cũ. -->
+    <div x-show="!isAppLoading && !maintenanceLocked && !bannedScreen && bootError" x-cloak
          class="fixed inset-0 z-[9000] bg-slate-950/95 flex items-center justify-center text-center p-5">
         <div class="glass w-full max-w-sm rounded-3xl p-5 border border-amber-400/20">
             <div class="text-5xl mb-3">⚠️</div>
-            <h2 class="text-base font-black text-amber-400 uppercase mb-2">Không thể xác minh lúc này</h2>
-            <p class="text-xs text-slate-300 leading-relaxed mb-4"
-               x-text="bootError ? 'Không thể tải đầy đủ dữ liệu kết nối lúc này. Dữ liệu của bạn không bị ghi đè. Vui lòng thử lại.' : (membershipCheckInProgress ? 'Đang kiểm tra lại trạng thái nhóm, vui lòng chờ...' : 'Không thể kiểm tra trạng thái nhóm lúc này. Vui lòng thử lại.')"></p>
-            <button @click="bootError ? retryBootInitialization() : checkGroupMembership()"
-                    :disabled="_bootRetryInFlight || membershipCheckInProgress"
+            <h2 class="text-base font-black text-amber-400 uppercase mb-2">Không thể tải dữ liệu lúc này</h2>
+            <p class="text-xs text-slate-300 leading-relaxed mb-4">Không thể tải đầy đủ dữ liệu kết nối lúc này. Dữ liệu của bạn không bị ghi đè. Vui lòng thử lại.</p>
+            <button @click="retryBootInitialization()"
+                    :disabled="_bootRetryInFlight"
                     class="w-full py-2.5 rounded-xl bg-green-600 text-white font-black text-xs disabled:opacity-60">✅ Kiểm tra lại</button>
         </div>
     </div>
@@ -728,7 +713,7 @@
         </div>
 
         <!-- NÚT NHẠC NỀN NỔI: chỉ BẬT/TẮT (không chọn bài), 4 bài tự phát lặp lại tuần tự -->
-        <button x-show="membershipState === 'member' && joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak @click="toggleMusic()" class="music-fab" :class="musicOn ? 'playing' : ''">
+        <button x-show="joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak @click="toggleMusic()" class="music-fab" :class="musicOn ? 'playing' : ''">
             <span x-text="musicOn ? '🎶' : '🔇'"></span>
         </button>
 
@@ -762,7 +747,7 @@
     </div>
 
     <!-- BANNER THAM GIA NHÓM (bắt buộc để mở khóa Mini App, có nút X để tắt tạm thời) -->
-    <div x-show="membershipState === 'not_member' && !dismissedJoinBanner" class="join-banner">
+    <div x-show="!joinedGroups && !dismissedJoinBanner" class="join-banner">
         <div class="join-banner-close" @click="dismissedJoinBanner = true">✕</div>
         <div class="font-black text-sm mb-1" x-text="texts.joinBannerTitle"></div>
         <div class="text-[10px] opacity-90 mb-1" x-text="texts.joinBannerDesc"></div>
@@ -774,13 +759,13 @@
     </div>
 
     <!-- BANNER QUẢNG BÁ XEM QC X2 (chỉ hiện khi đã vào được app, có nút X để tắt) -->
-    <div x-show="membershipState === 'member' && joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
+    <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
         <div class="join-banner-close" @click="dismissedPromoBanner = true">✕</div>
         <div class="font-black text-sm mb-1" x-text="texts.promoBannerTitle"></div>
         <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
     </div>
 
-    <div x-show="membershipState === 'member' && joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
+    <div x-show="joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
         <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
                 <div class="relative w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
@@ -1983,11 +1968,10 @@
 
         function app() {
             return {
-                joinedGroups: false, // Chỉ true khi Telegram xác nhận member hợp lệ.
-                membershipState: 'checking', // checking | member | not_member | check_failed
-                bootError: '', // lỗi khởi tạo bắt buộc (identity/server/init timeout) -> luôn có UI retry, không nền trống
+                joinedGroups: false, // Cơ chế cũ: true nếu đủ 2 nhóm, false nếu chưa đủ/không kiểm tra được.
+                bootError: '', // chỉ dành cho lỗi khởi tạo dữ liệu/identity thật sự, không dùng cho membership
                 _appInitializationCompleted: false,
-                _initAppPromise: null, _bootRetryInFlight: false, _membershipCheckPromise: null, membershipCheckInProgress: false, _maintenanceCheckTimer: null,
+                _initAppPromise: null, _bootRetryInFlight: false, _maintenanceCheckTimer: null,
                 _withdrawHistoryTimer: null, _autoSaveTimer: null, _syncLatestUserTimer: null, _produceTimer: null,
                 _smartlinkReturnListenersBound: false, _antiSpamListenerBound: false, _walletWatchersBound: false, _tabWatcherBound: false, _exitSaveListenersBound: false,
                 _chestExchangeInFlight: false,
@@ -2231,14 +2215,6 @@
                 isSavedTelegramUserId(value) {
                     return /^\d{5,20}$/.test(String(value || ''));
                 },
-                hasResolvedUiState() {
-                    return !!(
-                        this.maintenanceLocked ||
-                        this.bannedScreen ||
-                        this.bootError ||
-                        ['member','not_member','check_failed'].includes(this.membershipState)
-                    );
-                },
                 async initApp() {
                     if (this._initAppPromise) return this._initAppPromise;
                     const run = this._initAppInternal();
@@ -2251,7 +2227,7 @@
                 },
                 async retryBootInitialization() {
                     if (this._bootRetryInFlight) return false;
-                    if (!this.bootError) return this.checkGroupMembership();
+                    if (!this.bootError) return true;
                     this._bootRetryInFlight = true;
                     this.isAppLoading = true;
                     try {
@@ -2265,7 +2241,6 @@
                     // Đánh dấu Alpine đã khởi động thành công để script watchdog thuần (không phụ thuộc
                     // Alpine, xem đầu file <body>) biết KHÔNG cần hiện màn "Tải lại trang" nữa.
                     window.__appBootOk = true;
-                    this.membershipState = 'checking';
                     this.joinedGroups = false;
                     this.bootError = '';
                     this._appInitializationCompleted = false;
@@ -2298,7 +2273,6 @@
                             this.user.name = 'Shipper';
                         } else {
                             this.bootError = 'telegram_identity_unavailable';
-                            this.membershipState = 'check_failed';
                             await this.finishAppLoading();
                             return;
                         }
@@ -2457,7 +2431,6 @@
                         // rồi ghi ngược lên Supabase và vô tình rollback progress mới.
                         this._serverHydrationFailed = true;
                         this.bootError = 'server_connection';
-                        this.membershipState = 'check_failed';
                         await this.finishAppLoading();
                         return;
                     }
@@ -2472,16 +2445,11 @@
                         }
                     } catch(e) {}
                     
-                    // Check group membership TRƯỚC KHI tắt loading. Đây là ROOT CAUSE của màn hình trắng cũ:
-                    // loading bị tắt khi joinedGroups vẫn false, trong khi main-container lại x-show theo joinedGroups.
-                    // Bây giờ membership luôn kết thúc ở đúng 1 trong 3 trạng thái hiển thị.
-                    if (this.user.id === MAIN_ADMIN_ID) {
-                        this.membershipState = 'member';
-                        this.joinedGroups = true;
-                        this.dismissedJoinBanner = true;
-                    } else {
-                        await this.checkGroupMembership(true);
-                    }
+                    // Check group membership theo đúng cơ chế đơn giản của phiên bản cũ:
+                    // 1 request /api/verify, kết quả chỉ true/false; không có UNKNOWN/check_failed/retry nhiều tầng.
+                    const memberStatus = this.user.id === MAIN_ADMIN_ID ? true : await this.checkGroupMembership(true);
+                    this.joinedGroups = memberStatus;
+                    this.dismissedJoinBanner = memberStatus;
                     await this.finishAppLoading();
 
                     // Lưu IP
@@ -2654,13 +2622,8 @@
                 // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
                 // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
                 async finishAppLoading() {
-                    // Không bao giờ được tắt loading nếu phía dưới chưa có một UI state hợp lệ.
-                    // Fail-safe cuối cùng này ngăn triệt để trạng thái: loading=false + main hidden + không có panel thay thế.
+                    // Membership false không còn bị coi là lỗi boot: kết thúc loading và để banner tham gia nhóm xử lý như code cũ.
                     if (!this.isAppLoading) return;
-                    if (!this.hasResolvedUiState()) {
-                        this.bootError = 'init_incomplete';
-                        this.membershipState = 'check_failed';
-                    }
                     clearInterval(this._loadingProgressTimer);
                     clearTimeout(this._loadingFailsafeTimer);
                     this.loadingProgress = 100;
@@ -2683,10 +2646,8 @@
                         }, 220);
                         this._loadingFailsafeTimer = setTimeout(() => {
                             if (!this.isAppLoading) return;
-                            if (!this.hasResolvedUiState()) {
-                                this.bootError = 'init_timeout';
-                                this.membershipState = 'check_failed';
-                            }
+                            // Chỉ coi là lỗi boot nếu toàn bộ init thật sự treo quá lâu; membership riêng chỉ check 1 lần tối đa 8 giây.
+                            this.bootError = this.bootError || 'init_timeout';
                             this.finishAppLoading();
                         }, 75000);
                     };
@@ -2724,69 +2685,32 @@
                 },
 
                 async checkGroupMembership(silent = false) {
-                    if (this._membershipCheckPromise) return this._membershipCheckPromise;
-                    this.membershipCheckInProgress = true;
-                    const run = this._checkGroupMembershipInternal(silent);
-                    this._membershipCheckPromise = run;
-                    try {
-                        return await run;
-                    } finally {
-                        if (this._membershipCheckPromise === run) this._membershipCheckPromise = null;
-                        this.membershipCheckInProgress = false;
-                    }
-                },
-                async _checkGroupMembershipInternal(silent = false) {
                     if (this.user?.id === MAIN_ADMIN_ID) {
-                        this.membershipState = 'member';
                         this.joinedGroups = true;
                         this.dismissedJoinBanner = true;
-                        return 'member';
-                    }
-                    if (!this.user?.id) {
-                        this.membershipState = 'check_failed';
-                        this.joinedGroups = false;
-                        if (!silent) this.showNotification('⚠️ Không thể xác định Telegram User ID. Vui lòng thử lại.');
-                        return 'check_failed';
+                        return true;
                     }
                     if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
-                    this.membershipState = 'checking';
                     try {
-                        const res = await fetchReadWithRetry(`${API_URL}/api/verify/${encodeURIComponent(this.user.id)}`, {}, {
-                            attempts: 2,
-                            timeoutMs: 12000,
-                            baseDelayMs: 650
-                        });
+                        // Giống phiên bản cũ: chỉ 1 request, timeout tối đa 8 giây, không retry nhiều tầng.
+                        const res = await fetchWithTimeout(`${API_URL}/api/verify/${this.user.id}`);
                         const data = await res.json().catch(() => ({}));
-
-                        if (res.ok && data.success === true && data.checked === true && data.isMember === true) {
-                            this.membershipState = 'member';
+                        if (data.success) {
                             this.joinedGroups = true;
                             this.dismissedJoinBanner = true;
-                            this.bootError = '';
                             if (!silent) this.showNotification('✅ Xác thực thành công!');
-                            return 'member';
+                            return true;
                         }
-                        if (res.ok && data.success === true && data.checked === true && data.isMember === false) {
-                            this.membershipState = 'not_member';
-                            this.joinedGroups = false;
-                            this.dismissedJoinBanner = false;
-                            this.bootError = '';
-                            if (!silent) this.showNotification('⚠️ Bot xác nhận bạn chưa tham gia đủ nhóm!');
-                            return 'not_member';
-                        }
-
-                        // HTTP 503, Telegram timeout/403/429/network hoặc response không đủ dữ liệu:
-                        // UNKNOWN/CHECK_FAILED, tuyệt đối không giả thành "left".
-                        this.membershipState = 'check_failed';
                         this.joinedGroups = false;
-                        if (!silent) this.showNotification('⚠️ Không thể kiểm tra trạng thái nhóm lúc này. Vui lòng thử lại.');
-                        return 'check_failed';
+                        this.dismissedJoinBanner = false;
+                        if (!silent) this.showNotification('⚠️ Bot chưa phát hiện bạn trong nhóm!');
+                        return false;
                     } catch (e) {
                         console.error("Lỗi kiểm tra nhóm:", e);
-                        this.membershipState = 'check_failed';
                         this.joinedGroups = false;
-                        if (!silent) this.showNotification('⚠️ Không thể kiểm tra trạng thái nhóm lúc này. Vui lòng thử lại.');
-                        return 'check_failed';
+                        this.dismissedJoinBanner = false;
+                        if (!silent) this.showNotification('⚠️ Lỗi kiểm tra nhóm!');
+                        return false;
                     }
                 },
 
