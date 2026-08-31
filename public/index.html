@@ -37,8 +37,6 @@
         .text-neon { text-shadow: 0 0 10px rgba(251, 191, 36, 0.8); color: #fbbf24; }
         button { transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease; }
         button:active { transform: scale(0.95); filter: brightness(0.95); }
-        .anti-autoclick-btn { position: relative; left: var(--jitter-x, 0px); top: var(--jitter-y, 0px); }
-        .low-graphics .anti-autoclick-btn { transition: none !important; }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: rgba(251, 191, 36, 0.4); border-radius: 10px; }
         @keyframes floatingBox { 0%, 100% { transform: translateY(0) scale(1) rotate(0deg); } 50% { transform: translateY(-20px) scale(1.1) rotate(5deg); } }
@@ -635,20 +633,6 @@
             <span>🚚</span><span>📦</span><span>🏠</span>
         </div>
     </div>
-
-    <!-- LỖI KHỞI TẠO DỮ LIỆU: chỉ dùng cho lỗi Telegram identity / server / Supabase thật sự.
-         Kiểm tra membership KHÔNG còn dùng màn lỗi này; membership hoạt động đơn giản như phiên bản cũ. -->
-    <div x-show="!isAppLoading && !maintenanceLocked && !bannedScreen && bootError" x-cloak
-         class="fixed inset-0 z-[9000] bg-slate-950/95 flex items-center justify-center text-center p-5">
-        <div class="glass w-full max-w-sm rounded-3xl p-5 border border-amber-400/20">
-            <div class="text-5xl mb-3">⚠️</div>
-            <h2 class="text-base font-black text-amber-400 uppercase mb-2">Không thể tải dữ liệu lúc này</h2>
-            <p class="text-xs text-slate-300 leading-relaxed mb-4">Không thể tải đầy đủ dữ liệu kết nối lúc này. Dữ liệu của bạn không bị ghi đè. Vui lòng thử lại.</p>
-            <button @click="retryBootInitialization()"
-                    :disabled="_bootRetryInFlight"
-                    class="w-full py-2.5 rounded-xl bg-green-600 text-white font-black text-xs disabled:opacity-60">✅ Kiểm tra lại</button>
-        </div>
-    </div>
         <!-- COIN BOX CONFIRMATION MODAL -->
     <div x-show="showCoinBoxModal" class="modal-overlay" x-cloak @click.self="showCoinBoxModal = false">
         <div class="modal-content">
@@ -663,27 +647,22 @@
 
     </div>
 
-        <!-- MODAL CAPTCHA: reward actions challenge ngẫu nhiên/risk-based; rút tiền vẫn bắt buộc mỗi lần -->
+        <!-- MODAL CAPTCHA: bắt buộc nhập đúng mã trước MỖI lần Giao Hàng / MỖI lần Rút Tiền -->
         <div x-show="captchaShow" class="modal-overlay" x-cloak @click.self="closeCaptcha()">
             <div class="modal-content">
                 <div class="text-5xl mb-2">🔐</div>
-                <h3 class="text-base font-black text-yellow-400 mb-1" x-text="captchaAction === 'withdraw' ? texts.captchaWithdraw : texts.captchaSecurity"></h3>
-                <p class="text-[11px] text-slate-400 mb-3" x-text="captchaType === 'icon' ? ((texts.captchaChooseIcon || 'Hãy chọn biểu tượng') + ' ' + captchaIconTarget) : texts.captchaEnterCode"></p>
-                <div x-show="captchaType === 'code'" class="captcha-box mb-3" :class="{ 'refreshing': captchaRefreshing }" @click="captchaAction === 'withdraw' && newCaptchaCode()">
+                <h3 class="text-base font-black text-yellow-400 mb-1" x-text="captchaShow && captchaAction === 'withdraw' ? texts.captchaWithdraw : texts.captchaDelivery"></h3>
+                <p class="text-[11px] text-slate-400 mb-3" x-text="texts.captchaEnterCode"></p>
+                <div class="captcha-box mb-3" :class="{ 'refreshing': captchaRefreshing }" @click="newCaptchaCode()">
                     <template x-for="(ch, i) in captchaChars" :key="i">
                         <span :style="'--rot:' + ch.rot + 'deg; animation-delay:' + (i * 0.13) + 's'" x-text="ch.ch"></span>
                     </template>
                 </div>
-                <div x-show="captchaType === 'icon'" class="grid grid-cols-3 gap-2 mb-3">
-                    <template x-for="(icon, i) in captchaIconOptions" :key="i">
-                        <button @click="verifyCaptcha(icon)" class="py-3 rounded-xl bg-slate-800 border border-white/10 text-2xl hover:bg-slate-700" x-text="icon"></button>
-                    </template>
-                </div>
-                <input x-show="captchaType === 'code'" type="text" x-model="captchaInput" @keyup.enter="verifyCaptcha()" placeholder="Enter code..." maxlength="5" autocomplete="off"
+                <input type="text" x-model="captchaInput" @keyup.enter="verifyCaptcha()" placeholder="Enter code..." maxlength="5" autocomplete="off"
                        class="w-full bg-slate-800 rounded-xl px-3 py-2.5 text-center text-lg font-black tracking-[6px] border border-white/10 uppercase mb-3" />
                 <div class="flex gap-2">
-                    <button @click="captchaAction === 'withdraw' ? newCaptchaCode() : closeCaptcha()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-xs" x-text="captchaAction === 'withdraw' ? texts.captchaRefresh : texts.close"></button>
-                    <button x-show="captchaType === 'code'" @click="verifyCaptcha()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-xs" x-text="texts.captchaConfirm"></button>
+                    <button @click="newCaptchaCode()" class="flex-1 py-2 bg-slate-700 rounded-xl font-black text-xs" x-text="texts.captchaRefresh"></button>
+                    <button @click="verifyCaptcha()" class="flex-1 py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-xl font-black text-xs" x-text="texts.captchaConfirm"></button>
                 </div>
                 <p x-show="captchaError" class="text-red-400 text-[11px] font-bold mt-2" x-text="captchaError"></p>
             </div>
@@ -765,7 +744,7 @@
         <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
     </div>
 
-    <div x-show="joinedGroups && !bannedScreen && !maintenanceLocked" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
+    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-20 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
         <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
                 <div class="relative w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
@@ -823,7 +802,7 @@
                     <div class="p-2 glass rounded-[20px] text-center card-padding"><p class="text-[6px] font-black uppercase opacity-40" x-text="texts.prodMax"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
                 </div>
                 <div class="space-y-2">
-                    <button @click="jitterRewardButton($event); deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="anti-autoclick-btn w-full py-3 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-base uppercase italic shadow-[0_6px_0_#b45309] active:translate-y-1 active:shadow-none transition-all disabled:opacity-40 disabled:translate-y-1 disabled:shadow-none flex items-center justify-center gap-2 btn-text">
+                    <button @click="deliverWithAd()" :disabled="isShipping || currentProducts <= 0" class="w-full py-3 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black text-base uppercase italic shadow-[0_6px_0_#b45309] active:translate-y-1 active:shadow-none transition-all disabled:opacity-40 disabled:translate-y-1 disabled:shadow-none flex items-center justify-center gap-2 btn-text">
                         <span :class="!isShipping && currentProducts > 0 ? 'truck-idle' : ''">🚚</span>
                         <span x-text="texts.deliver"></span>
                         <span class="bg-red-600 text-white text-[8px] px-2 py-0.5 rounded-full font-black">ADS</span>
@@ -837,15 +816,15 @@
                     </button>
                     <button x-show="canSpeedUp" @click="speedUpProduction()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[25px] font-black text-[10px] uppercase text-purple-300 hover:bg-purple-600/50 transition btn-text" x-text="texts.speedUpBtn"></button>
                 </div>
-                <div x-show="deliveryCount >= 10" class="glass p-3 rounded-[25px] space-y-2 card-padding border border-purple-500/30 bg-purple-900/10">
+                <div x-show="deliveryCount >= 20" class="glass p-3 rounded-[25px] space-y-2 card-padding border border-purple-500/30 bg-purple-900/10">
                     <h3 class="text-sm font-black uppercase text-purple-300">🚚 <span x-text="texts.extraDeliveryTitle"></span></h3>
                     <p class="text-[9px] text-slate-300" x-text="texts.extraDeliveryDesc"></p>
                     <div class="flex items-center justify-between text-[9px] font-black">
-                        <span>📺 <span x-text="texts.extraDeliveryAdsWatched"></span>: <b x-text="Math.min(3, Number(extraDeliveryAdsToday||0)) + '/3'"></b></span>
-                        <span>🚚 <span x-text="texts.extraDeliverySlots"></span>: <b x-text="Math.min(3, Number(extraDeliveryCount||0)) + '/3'"></b></span>
+                        <span>📺 <span x-text="texts.extraDeliveryAdsWatched"></span>: <b x-text="(extraDeliveryAdsToday||0) + '/5'"></b></span>
+                        <span>🚚 <span x-text="texts.deliveryTodayLabel"></span>: <b x-text="(deliveryCount||0) + '/' + deliveryDailyLimit"></b></span>
                     </div>
-                    <button @click="jitterRewardButton($event); watchExtraDeliveryAd()" :disabled="extraDeliveryAdsRemaining <= 0 || _rewardedRunning || _deliveryClaimInFlight" class="anti-autoclick-btn w-full py-2 bg-purple-600 rounded-[20px] font-black text-[10px] uppercase btn-text disabled:opacity-40">
-                        📺 <span x-text="texts.extraDeliveryWatch"></span>
+                    <button @click="watchExtraDeliveryAd()" :disabled="extraDeliveryAdsRemaining <= 0 || _rewardedRunning || _deliveryClaimInFlight" class="w-full py-2 bg-purple-600 rounded-[20px] font-black text-[10px] uppercase btn-text disabled:opacity-40">
+                        📺 <span x-text="texts.extraDeliveryWatch"></span> +2
                     </button>
                     <p class="text-[8px] text-center text-slate-400" x-text="texts.extraDeliveryRemaining + ': ' + extraDeliveryAdsRemaining"></p>
                 </div>
@@ -872,7 +851,7 @@
                     </div>
                 </div>
                 <div class="glass p-2 rounded-[20px] flex flex-col items-center gap-2 border border-yellow-500/20">
-                    <button @click="jitterRewardButton($event); openSmartlinkAd1()" class="anti-autoclick-btn w-full py-2 bg-blue-600/30 border border-blue-500 rounded-xl font-black text-[10px] text-blue-200">🔗 NHẬN THÊM QC / SMARTLINK</button>
+                    <button @click="openSmartlinkAd1()" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-xl font-black text-[10px] text-blue-200">🔗 NHẬN THÊM QC / SMARTLINK</button>
                 </div>
                 <div class="p-3 glass rounded-[25px] flex justify-between items-center card-padding">
                     <span class="text-[7px] font-black uppercase opacity-50" x-text="texts.joinDateLabel"></span>
@@ -892,7 +871,7 @@
                         <span class="text-sm font-black" x-text="texts.chestFreeSpins + spinFree"></span>
                     </div>
                     <div class="mt-3 flex flex-col gap-2">
-                        <button @click="jitterRewardButton($event); watchAdForChest()" :disabled="spinAdCount >= spinAdLimit" class="anti-autoclick-btn w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[9px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text">📺 <span x-text="texts.watchAdChestBtn"></span> (<span x-text="spinAdCount + '/' + spinAdLimit"></span>)</button>
+                        <button @click="watchAdForChest()" :disabled="spinAdCount >= spinAdLimit" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[9px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text">📺 <span x-text="texts.watchAdChestBtn"></span> (<span x-text="spinAdCount + '/' + spinAdLimit"></span>)</button>
                         <button @click="buyChestWithOrders()" :disabled="orders < 500" class="w-full py-2 bg-yellow-600/30 border border-yellow-500 rounded-[25px] font-black text-[9px] uppercase text-yellow-400 hover:bg-yellow-600/50 transition disabled:opacity-40 btn-text" x-text="texts.exchangeChest"></button>
                     </div>
                 </div>
@@ -1000,45 +979,46 @@
                     <button x-show="loginStreakState.recoveryAvailable || loginStreakState.missed" @click="recoverStreak()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[20px] font-black text-[10px] uppercase text-purple-300 btn-text" x-text="texts.streakRecover"></button>
                     <div x-show="streakCelebrating" class="text-center text-yellow-300 font-black text-sm animate-pulse" x-text="texts.streakDay7"></div>
                 </div>
-                <!-- NHIỆM VỤ NHÓM ĐẶC BIỆT: mỗi campaign có persistent marker riêng, claim đúng 1 lần trọn đời. -->
+                <!-- NHIỆM VỤ THAM GIA NHÓM: KHÁC dailyTasks - chỉ nhận đúng 1 LẦN trong toàn bộ vòng đời
+                     tài khoản, KHÔNG reset mỗi ngày. Server luôn tự kiểm tra membership qua Telegram Bot API
+                     trước khi cộng thưởng, không tin bất kỳ trạng thái nào từ client. -->
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
                         <span>👥</span> <span x-text="texts.groupTaskTitle"></span>
                     </h3>
-                    <template x-for="campaign in groupTaskCampaigns" :key="campaign.id">
-                        <div class="task-card flex items-center justify-between p-2.5 bg-slate-800/40 rounded-2xl border border-white/5"
-                             :class="{ 'task-done': !!groupTaskClaims[campaign.id] }">
-                            <div class="flex items-center space-x-2.5 flex-1 min-w-0">
-                                <div class="task-icon-wrap" :class="groupTaskClaims[campaign.id] ? 'icon-done' : ''">
-                                    <span class="text-base" x-text="groupTaskClaims[campaign.id] ? '✅' : '👥'"></span>
-                                </div>
-                                <div class="text-left flex-1 min-w-0">
-                                    <p class="text-xs font-black flex items-center gap-1 flex-wrap">
-                                        <span x-text="'👥 ' + (language === 'vi' ? 'Tham gia ' : 'Join ') + campaign.username"></span>
-                                        <span class="task-once-badge" x-text="texts.onceOnly"></span>
-                                    </p>
-                                    <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
-                                        <span>+200 💰</span><span>+200 📦</span>
-                                    </p>
-                                </div>
+                    <div class="task-card flex items-center justify-between p-2.5 bg-slate-800/40 rounded-2xl border border-white/5"
+                         :class="{ 'task-done': groupTaskClaimed }">
+                        <div class="flex items-center space-x-2.5 flex-1 min-w-0">
+                            <div class="task-icon-wrap" :class="groupTaskClaimed ? 'icon-done' : ''">
+                                <span class="text-base" x-text="groupTaskClaimed ? '✅' : '👥'"></span>
                             </div>
-                            <div class="flex-shrink-0 pl-2">
-                                <span x-show="groupTaskClaims[campaign.id]" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
-                                <div x-show="!groupTaskClaims[campaign.id]" class="flex flex-col items-end gap-1">
-                                    <a :href="campaign.link" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
-                                    <button @click="claimGroupTask(campaign.id)" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.groupTaskCheckBtn"></button>
-                                </div>
+                            <div class="text-left flex-1 min-w-0">
+                                <p class="text-xs font-black flex items-center gap-1 flex-wrap">
+                                    <span x-text="texts.groupTaskName"></span>
+                                    <span class="task-once-badge" x-text="texts.onceOnly"></span>
+                                </p>
+                                <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
+                                    <span>+500 💰</span>
+                                    <span>+500 📦</span>
+                                </p>
                             </div>
                         </div>
-                    </template>
+                        <div class="flex-shrink-0 pl-2">
+                            <span x-show="groupTaskClaimed" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
+                            <div x-show="!groupTaskClaimed" class="flex flex-col items-end gap-1">
+                                <a href="https://t.me/Vua_Dao_Quang" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
+                                <button @click="claimGroupTask()" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.groupTaskCheckBtn"></button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
                         <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.watchAdRewardTitle"></h3>
-                        <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
+                        <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/30 ' + texts.today"></span>
                     </div>
                     <p class="text-[9px] text-slate-400"><span x-text="texts.watchAdRewardDesc"></span> <span class="text-yellow-400 font-black">+50 Coin</span> &amp; <span class="text-yellow-400 font-black" x-text="'+25 ' + texts.ordersTarget"></span>. <span x-text="texts.maxPerDay"></span></p>
-                    <button @click="jitterRewardButton($event); watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning" class="anti-autoclick-btn w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 30 || bonusAdCooldown > 0 || _rewardedRunning" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -1150,6 +1130,7 @@
                             <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond2"></span></li>
                             <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond3"></span></li>
                             <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond4"></span></li>
+                            <li class="flex items-start gap-2"><span class="text-green-400">✅</span> <span x-text="texts.inviteCond5"></span></li>
                         </ul>
                     </div>
                     
@@ -1399,31 +1380,36 @@
             } catch (e) {}
             return __nativeFetch(input, options);
         };
-        function isTransientReadStatus(status) {
-            return [408,425,429,500,502,503,504].includes(Number(status || 0));
-        }
-        async function fetchReadWithRetry(url, options = {}, {
-            attempts = 2,
-            timeoutMs = 15000,
-            baseDelayMs = 600
-        } = {}) {
-            let lastError = null;
-            const total = Math.max(1, Number(attempts || 1));
-            for (let attempt = 0; attempt < total; attempt++) {
-                try {
-                    const res = await fetchWithTimeout(url, { cache:'no-store', ...options }, timeoutMs);
-                    if (!isTransientReadStatus(res.status) || attempt === total - 1) return res;
-                    try { await res.body?.cancel?.(); } catch (_) {}
-                } catch (error) {
-                    lastError = error;
-                    if (attempt === total - 1) throw error;
-                }
-                await new Promise(resolve => setTimeout(resolve, Math.min(2500, baseDelayMs * Math.pow(2, attempt))));
-            }
-            throw lastError || new Error('READ request failed');
-        }
         const BOT_USERNAME = 'KhoHangKiemtien_Bot';
-        // SmartLink provider + URL are selected exclusively by the server.
+        // SMARTLINKS đã được cấu hình trong `server.js` hoặc có thể thêm vào đây
+        const SMARTLINKS_BASE = [
+            "https://omg10.com/4/10406572", "https://omg10.com/4/10406571", "https://omg10.com/4/10406596",
+            "https://omg10.com/4/10406591", "https://omg10.com/4/10406568", "https://omg10.com/4/10406576",
+            "https://omg10.com/4/10406590", "https://omg10.com/4/10406566", "https://omg10.com/4/10406574",
+            "https://omg10.com/4/10406589", "https://omg10.com/4/10406570", "https://omg10.com/4/10406586",
+            "https://omg10.com/4/10406538", "https://omg10.com/4/10406567", "https://omg10.com/4/10406588",
+            "https://omg10.com/4/10406587", "https://omg10.com/4/10406592", "https://omg10.com/4/10406575",
+            "https://omg10.com/4/10406598", "https://omg10.com/4/10406577"
+        ];
+        const MAIN_ADMIN_ID = '6327666718';
+        const THATLOBSTER_SMARTLINK_1 = 'https://thatlobster.com/kfbp84gh9?key=6bf6916a63b85f80db5ac58181438694';
+        const SMARTLINK_ADDED = [
+            'https://thatlobster.com/qeet7sp1ej?key=566f8d33076af8dda956a6226b69f3d5',
+            'https://thatlobster.com/qgj4qst7?key=13be5f4a8dd4a81b4cfc72d2a5cc2dea',
+            'https://thatlobster.com/sx11e8be7u?key=37d984173af681961a887443ecfd00fd',
+            'https://thatlobster.com/i049yxkw?key=f3579f5a7c31dce620279b187ed90a5c',
+            'https://thatlobster.com/htg7mu20?key=a01ff4e5e531578eeaac0648d4e2a3dd',
+            'https://thatlobster.com/rrab6x55?key=09cab93a5aaf2552b32f3814602d94b9',
+            'https://thatlobster.com/ut1vih9z?key=0029ffe34d48f1ce0d1504a2d59317f0',
+            'https://thatlobster.com/e3kfv622w?key=8ccef0990e58824a2d622375d11735fb',
+            'https://thatlobster.com/bqx020sv?key=00a314f6dc6f691f4b765f3d2ec06e85',
+            'https://thatlobster.com/iyqdc9ns?key=d251fa968f87328436a6c083cf6baf1a',
+            'https://thatlobster.com/qs1i0h9z0?key=e6ec51ee1270180b3b18d7e4f5c13ff0',
+            'https://thatlobster.com/tsmufkh4?key=aee6b9d937891432d40e28c9e0ca0cc6',
+            'https://thatlobster.com/j68qriqj?key=40bef72361d42e7ccdb12b8e7ea786f1',
+            'https://thatlobster.com/q0zpx1rxcw?key=d8fcdb5212100bff572648eb29d41527f'
+        ];
+        const SMARTLINKS = [...new Set([THATLOBSTER_SMARTLINK_1, ...SMARTLINKS_BASE, ...SMARTLINK_ADDED])];
 
         // ===== QUẢNG CÁO NỀN: CHỈ 4 LOẠI THỤ ĐỘNG =====
         // GIẢM TẦN SUẤT: các quảng cáo THỤ ĐỘNG này (KHÁC Rewarded Interstitial Giao Hàng và KHÁC tính năng
@@ -1672,7 +1658,7 @@
                 history: 'Lịch sử mở rương', noHistory: 'Chưa có lượt nào',
                 tasksTitle: '📋 Nhiệm vụ', dailyTasks: 'Nhiệm vụ hằng ngày', claimed: '✅ Đã nhận',
                 claim: 'Nhận', monitoring: 'Đang theo dõi...', completeAll: 'Hoàn thành tất cả', onceOnly: 'MỘT LẦN',
-                groupTaskTitle: '👥 Nhiệm vụ đặc biệt', groupTaskName: '👥 Tham gia nhóm', groupTaskJoinBtn: 'THAM GIA', groupTaskCheckBtn: '✅ KIỂM TRA',
+                groupTaskTitle: '👥 Nhiệm vụ đặc biệt', groupTaskName: '👥 Tham gia nhóm', groupTaskJoinBtn: 'Tham gia nhóm', groupTaskCheckBtn: '✅ Kiểm tra tham gia',
                 leaderboardTitle: '🏆 Bảng xếp hạng', weeklyRewards: 'Phần thưởng tuần',
                 director: 'Giám đốc', headDept: '🚛 Trưởng phòng', warehouseMgr: '🚚 Quản lý Kho',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset vào 00:00 Chủ Nhật',
@@ -1706,8 +1692,8 @@
                 bankNamePlaceholder: 'Tên ngân hàng (VD: Vietcombank)', accountNamePlaceholder: 'Tên chủ tài khoản', accountNumberPlaceholder: 'Số tài khoản',
                 momoPhonePlaceholder: 'Số điện thoại Momo', zalopayPhonePlaceholder: 'Số điện thoại ZaloPay', ordersAmountPlaceholder: 'Số đơn hàng muốn rút (tối thiểu 30.000)',
                 convertedAmountLabel: '💰 Số tiền quy đổi:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
-                giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 15 lần/ngày.',
-                inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo hợp lệ', inviteCond4: 'Hoàn thành ít nhất 2 SmartLink hợp lệ',
+                giftcodeLabel: '🎁 Giftcode', watchAdRewardTitle: '📺 Xem QC nhận thưởng', today: 'hôm nay', maxPerDay: 'Tối đa 30 lần/ngày.',
+                inviteCondTitle: 'Điều kiện mời bạn bè', inviteCond1: 'Vào Mini App bằng link giới thiệu', inviteCond2: 'Tham gia đầy đủ nhóm Telegram theo yêu cầu', inviteCond3: 'Xem ít nhất 3 quảng cáo hợp lệ', inviteCond4: 'Hoàn thành ít nhất 2 SmartLink hợp lệ', inviteCond5: 'Có ít nhất 1 lần giao hàng hợp lệ',
                 milestoneNote: '⚠️ Mỗi Mốc Chỉ Nhận 1 Lần. Chỉ Tính Bạn bè Hợp Lệ.',
                 instantRewardTitle: '🎁 Phần Thưởng Mời Bạn Thành Công', instantRewardDesc: 'Mỗi bạn bè mời thành công (đủ điều kiện), bạn nhận ngay:', instantRewardValue: '+750 Coin + 1.500 Đơn Hàng',
                 ipWarningNote: '⚠️ Bạn Bè Phải Làm Đúng Điều Kiện Mới Tính Là Thành Công. 1 Người Dùng Chỉ Được Tạo 1 Tài Khoản / 1 IP. Nếu Admin Phát Hiện Sẽ Xử Lí!!! (CÓ Hệ Thống Check IP)',
@@ -1715,14 +1701,14 @@
                 txCodePrefix: 'Mã #', statusApproved: 'Đã duyệt', statusPending: 'Chờ duyệt', statusRejected: 'Hủy',
                 ewalletLabel: '💳 Ví điện tử', selectBank: 'Chọn ngân hàng', walletPhonePlaceholder: 'Số điện thoại MoMo/ZaloPay', processing: 'Đang xử lý...', readyToClaim: 'Sẵn sàng nhận',
                 streakClaimed: 'Đã nhận', streakMissedShort: 'Bỏ lỡ', streakCurrent: 'Ngày hiện tại', streakDay7: '🎉 Hoàn thành chuỗi 7 ngày!',
-                extraDeliveryTitle: '🚚 Đã giao đủ 10/10 hôm nay', extraDeliveryDesc: '📺 Xem QC nhận +1 lượt giao', watched: 'Đã xem', remainingAds: 'Còn', deliveriesToday: 'Lượt giao hiện tại', adsUnit: 'quảng cáo', deliveryUnit: 'lượt giao',
+                extraDeliveryTitle: '🚚 Đã giao đủ 20/20 hôm nay', extraDeliveryDesc: '📺 Xem quảng cáo để nhận thêm lượt giao', watched: 'Đã xem', remainingAds: 'Còn', deliveriesToday: 'Lượt giao hiện tại', adsUnit: 'quảng cáo', deliveryUnit: 'lượt giao',
                 streakTitle: '🔥 Chuỗi điểm danh', streakDesc: 'Điểm danh chủ động mỗi ngày để nhận thưởng', streakCheckin: '✅ Điểm danh hôm nay', streakChecked: '✅ Đã điểm danh', streakRecover: '🔄 Khôi phục chuỗi bằng quảng cáo', streakMissed: '⚠️ Bạn đã bỏ lỡ ngày này', streakDay: 'Ngày', streakReceived: 'Đã nhận', streakToday: 'Hôm nay', streakLocked: 'Chưa đến', streakRecoveryDone: 'Chuỗi đã được khôi phục.',
                 allTasksBonus: '🎉 Hoàn thành tất cả nhiệm vụ', allTasksBonusDesc: 'Thưởng thêm +1.000 Coin +500 Đơn Hàng +2 lượt mở rương', noTasksYet: 'Đang tải nhiệm vụ...', walletType: '💳 Ví điện tử', chooseWallet: 'Chọn ví', bankSelect: 'Chọn ngân hàng', optionalLegacyBank: 'Ngân hàng hỗ trợ', accountNumberNumeric: 'Số tài khoản chỉ được nhập số', walletPhoneNumeric: 'Số điện thoại ví chỉ được nhập số',
                 passiveAdMessage: 'Quảng cáo tự động không thể hiển thị. Vui lòng thử lại sau.',
                 quizCorrect: 'Đúng', quizWrong: 'Sai', quizSkip: 'Bỏ qua', quizFree: 'Trả lời câu miễn phí', quizMore: 'Thêm câu hỏi', quizAnswerNow: 'Đang có câu hỏi - trả lời ngay!',
                 adError: 'Không thể hoàn tất quảng cáo Rewarded. Vui lòng thử lại.', deliveryLimitReached: 'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.',
-                captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaSecurity:'XÁC MINH BẢO MẬT', captchaChooseIcon:'Hãy chọn biểu tượng', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
-                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliverySlots:'Lượt thêm', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem QC nhận +1 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupMembershipCheckFailed:'Telegram chưa thể xác minh thành viên. Vui lòng thử lại sau hoặc liên hệ Admin.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.',
+                captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
+                accountDigitsOnly:'Số tài khoản/số điện thoại chỉ được chứa chữ số.', accountNameRequired:'Tên Chủ Tài Khoản là bắt buộc.', adBlocked:'Trình chặn quảng cáo có thể đang bật. Vui lòng tắt và thử lại.', adTooEarly:'QC chưa đủ 5 giây.', adVerifyError:'Không thể xác minh Rewarded Interstitial.', allTasksReward:'Thưởng hoàn thành tất cả nhiệm vụ ngày', completeAllFirst:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.', deliveryClaimError:'Không thể nhận lượt giao hàng ngay lúc này.', deliveryTodayLabel:'Lượt giao hôm nay', extraDeliveryAdsWatched:'Đã xem', extraDeliveryRemaining:'Còn', extraDeliveryWatch:'Xem quảng cáo nhận +2 lượt giao', groupNotMember:'Bạn chưa tham gia nhóm nhiệm vụ.', groupMembershipCheckFailed:'Telegram chưa thể xác minh thành viên. Vui lòng thử lại sau hoặc liên hệ Admin.', groupTaskSuccess:'Đã nhận thưởng nhiệm vụ nhóm!', networkTemporary:'Máy chủ tạm thời bận, đang thử lại.', rewardedAlreadyVerified:'Quảng cáo đã được xác minh, không cần xem lại.', selectBankRequired:'Vui lòng chọn ngân hàng.', selectWalletRequired:'Vui lòng chọn MoMo hoặc ZaloPay.', serverConnectionError:'Lỗi kết nối máy chủ.', smartlinkOpened:'🔗 SmartLink quảng cáo đã mở.',
                  smartlinkSectionTitle:'🔗 Làm SmartLink',
                  smartlinkSectionDesc:'Hoàn thành SmartLink để nhận thưởng trực tiếp. Tối đa 30 lượt mỗi ngày.',
                  smartlinkProgressLabel:'Tiến độ hôm nay',
@@ -1733,7 +1719,7 @@
                  smartlinkCompleted:'SmartLink hoàn thành! +25 Coin +25 Đơn Hàng.',
                  smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.', smartlinkTooEarly:'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!',
                  deliveryProcessing:'Đang xử lý giao hàng...',  streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
-                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +1 lượt giao hàng!',
+                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +2 lượt giao hàng!',
                 captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận', captchaLoadError:'Không tạo được CAPTCHA từ máy chủ. Vui lòng thử lại.', captchaIncorrect:'CAPTCHA không đúng. Vui lòng nhập lại!',
                 quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
             },
@@ -1748,7 +1734,7 @@
                 history: 'Chest history', noHistory: 'No history yet',
                 tasksTitle: '📋 Tasks', dailyTasks: 'Daily tasks', claimed: '✅ Claimed',
                 claim: 'Claim', monitoring: 'Monitoring...', completeAll: 'Complete all', onceOnly: 'ONE-TIME',
-                groupTaskTitle: '👥 Special task', groupTaskName: '👥 Join group', groupTaskJoinBtn: 'JOIN', groupTaskCheckBtn: '✅ CHECK',
+                groupTaskTitle: '👥 Special task', groupTaskName: '👥 Join group', groupTaskJoinBtn: 'Join group', groupTaskCheckBtn: '✅ Check membership',
                 leaderboardTitle: '🏆 Leaderboard', weeklyRewards: 'Weekly rewards',
                 director: 'Director', headDept: '🚛 Dept Head', warehouseMgr: '🚚 Warehouse Mgr',
                 topPlayers: 'Top 1-10', resetSunday: '⏳ Reset Sunday 00:00',
@@ -1782,8 +1768,8 @@
                 bankNamePlaceholder: 'Bank name (e.g. Vietcombank)', accountNamePlaceholder: 'Account holder name', accountNumberPlaceholder: 'Account number',
                 momoPhonePlaceholder: 'Momo phone number', zalopayPhonePlaceholder: 'ZaloPay phone number', ordersAmountPlaceholder: 'Orders to withdraw (min. 30,000)',
                 convertedAmountLabel: '💰 Converted amount:', idLabel: '🆔 ID', nameLabel: '👤', joinDateIcon: '📅', truckLevelIcon: '🚛', langIcon: '🌐',
-                giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 15 times/day.',
-                inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads', inviteCond4: 'Complete at least 2 valid SmartLinks',
+                giftcodeLabel: '🎁 Gift code', watchAdRewardTitle: '📺 Watch Ads for Rewards', today: 'today', maxPerDay: 'Max 30 times/day.',
+                inviteCondTitle: 'Invite conditions', inviteCond1: 'Join the Mini App via referral link', inviteCond2: 'Fully join the required Telegram groups', inviteCond3: 'Watch at least 3 ads', inviteCond4: 'Complete at least 2 valid SmartLinks', inviteCond5: 'Complete at least 1 valid delivery',
                 milestoneNote: '⚠️ Each milestone can only be claimed once. Only valid friends count.',
                 instantRewardTitle: '🎁 Successful Invite Reward', instantRewardDesc: 'For every friend you invite successfully (meets all conditions), you instantly get:', instantRewardValue: '+750 Coins + 1,500 Orders',
                 ipWarningNote: '⚠️ Your friend must fully meet the conditions to count as successful. Only 1 account is allowed per IP. Admins will take action if abuse is detected!!! (IP checking system in place)',
@@ -1791,14 +1777,14 @@
                 txCodePrefix: 'Code #', statusApproved: 'Approved', statusPending: 'Pending', statusRejected: 'Rejected',
                 ewalletLabel: '💳 E-Wallet', selectBank: 'Choose a bank', walletPhonePlaceholder: 'MoMo/ZaloPay phone number', processing: 'Processing...', readyToClaim: 'Ready to claim',
                 streakClaimed: 'Claimed', streakMissedShort: 'Missed', streakCurrent: 'Current day', streakDay7: '🎉 7-day streak completed!',
-                extraDeliveryTitle: '🚚 10/10 deliveries completed today', extraDeliveryDesc: '📺 Watch an ad for +1 delivery', watched: 'Watched', remainingAds: 'Remaining', deliveriesToday: 'Current deliveries', adsUnit: 'ads', deliveryUnit: 'deliveries',
+                extraDeliveryTitle: '🚚 20/20 deliveries completed today', extraDeliveryDesc: '📺 Watch an ad to get more delivery attempts', watched: 'Watched', remainingAds: 'Remaining', deliveriesToday: 'Current deliveries', adsUnit: 'ads', deliveryUnit: 'deliveries',
                 streakTitle: '🔥 Check-in Streak', streakDesc: 'Check in manually every day to claim rewards', streakCheckin: '✅ Check in today', streakChecked: '✅ Checked in', streakRecover: '🔄 Recover streak with an ad', streakMissed: '⚠️ You missed this day', streakDay: 'Day', streakReceived: 'Claimed', streakToday: 'Today', streakLocked: 'Locked', streakRecoveryDone: 'Streak recovered.',
                 allTasksBonus: '🎉 Complete all tasks', allTasksBonusDesc: 'Bonus +1,000 Coin +500 Orders +2 chest opens', noTasksYet: 'Loading tasks...', walletType: '💳 E-Wallet', chooseWallet: 'Choose wallet', bankSelect: 'Choose a bank', optionalLegacyBank: 'Supported bank', accountNumberNumeric: 'Account number must contain digits only', walletPhoneNumeric: 'Wallet phone must contain digits only',
                 passiveAdMessage: 'Automatic ad could not be shown. Please try again later.',
                 quizCorrect: 'Correct', quizWrong: 'Wrong', quizSkip: 'Skip', quizFree: 'Answer free question', quizMore: 'More questions', quizAnswerNow: 'A question is ready - answer now!',
                 adError: 'Could not complete the Rewarded ad. Please try again.', deliveryLimitReached: 'You have used all available delivery attempts today.',
-                captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaSecurity:'SECURITY CHECK', captchaChooseIcon:'Choose the icon', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
-                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliverySlots:'Extra deliveries', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +1 delivery', groupNotMember:'You have not joined the task group.', groupMembershipCheckFailed:'Telegram could not verify your membership. Please try again later or contact Admin.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.',
+                captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
+                accountDigitsOnly:'Account number/phone must contain digits only.', accountNameRequired:'Account holder name is required.', adBlocked:'An ad blocker may be enabled. Please disable it and try again.', adTooEarly:'The ad must be watched for at least 5 seconds.', adVerifyError:'Could not verify the Rewarded Interstitial.', allTasksReward:'Daily all-tasks completion reward', completeAllFirst:'You have not completed all tasks today.', deliveryClaimError:'Could not claim the delivery attempt right now.', deliveryTodayLabel:"Today's deliveries", extraDeliveryAdsWatched:'Watched', extraDeliveryRemaining:'Remaining', extraDeliveryWatch:'Watch an ad for +2 deliveries', groupNotMember:'You have not joined the task group.', groupMembershipCheckFailed:'Telegram could not verify your membership. Please try again later or contact Admin.', groupTaskSuccess:'Group task reward claimed!', networkTemporary:'The server is temporarily busy. Retrying.', rewardedAlreadyVerified:'This ad has already been verified. No need to watch it again.', selectBankRequired:'Please choose a bank.', selectWalletRequired:'Please choose MoMo or ZaloPay.', serverConnectionError:'Server connection error.', smartlinkOpened:'🔗 SmartLink ad opened.',
                  smartlinkSectionTitle:'🔗 SmartLink Tasks',
                  smartlinkSectionDesc:'Complete SmartLinks to earn direct rewards. Maximum 30 per day.',
                  smartlinkProgressLabel:"Today's progress",
@@ -1810,7 +1796,7 @@
                  smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.', smartlinkTooEarly:'You must wait at least 5 seconds. Please try again!!',
                  deliveryProcessing:'Delivery is already being processed.',
  streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
-                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +1 delivery slot!',
+                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +2 delivery slots!',
                 captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm', captchaLoadError:'Could not create a server CAPTCHA. Please try again.', captchaIncorrect:'Incorrect CAPTCHA. Please try again!',
                 quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
             }
@@ -1882,6 +1868,7 @@
             };
             if (exact[text]) return exact[text];
             return String(text)
+                .replace('QC chưa đủ 5 giây.','The ad must be watched for at least 5 seconds.')
                 .replace('❌ CAPTCHA không đúng. Vui lòng nhập lại!','❌ Incorrect CAPTCHA. Please try again!')
                 .replace('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.','⚠️ The server is temporarily slow; the latest local backup was restored.')
                 .replace('⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!','⚠️ Failed to load data. Please reload the page.')
@@ -1919,7 +1906,7 @@
                 .replace('+1 Lượt Mở Rương!','+1 Chest Spin!')
                 .replace('Cần ít nhất 500 Đơn Hàng để đổi lượt mở rương.','You need at least 500 Orders to exchange for a chest spin.')
                 .replace('Đổi thành công! +1 Lượt Mở Rương','Exchange successful! +1 Chest Spin')
-                .replace('Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.','You have reached today\u2019s limit of 15 Rewarded ads.')
+                .replace('Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.','You have reached today\u2019s limit of 30 Rewarded ads.')
                 .replace('+50 Coin +25 Đơn Hàng (','+50 Coin +25 Orders (')
                 .replace('Đã copy link mời!','Invite link copied!')
                 .replace('Lỗi chia sẻ. Vui lòng copy thủ công.','Sharing failed. Please copy manually.')
@@ -1968,13 +1955,7 @@
 
         function app() {
             return {
-                joinedGroups: false, // Cơ chế cũ: true nếu đủ 2 nhóm, false nếu chưa đủ/không kiểm tra được.
-                bootError: '', // chỉ dành cho lỗi khởi tạo dữ liệu/identity thật sự, không dùng cho membership
-                _appInitializationCompleted: false,
-                _initAppPromise: null, _bootRetryInFlight: false, _maintenanceCheckTimer: null,
-                _withdrawHistoryTimer: null, _autoSaveTimer: null, _syncLatestUserTimer: null, _produceTimer: null,
-                _smartlinkReturnListenersBound: false, _antiSpamListenerBound: false, _walletWatchersBound: false, _tabWatcherBound: false, _exitSaveListenersBound: false,
-                _chestExchangeInFlight: false,
+                joinedGroups: false, // Mặc định là false để hiển thị banner khi mới vào
                 dismissedJoinBanner: false, dismissedPromoBanner: false,
                 tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
@@ -1983,7 +1964,7 @@
                 // lượt giao hàng ở server" (do lỗi tạm thời) và cờ khoá chống gọi /api/delivery/claim
                 // trùng lặp. Xem deliverWithAd()/retryDeliveryClaim() để biết luồng xử lý đầy đủ.
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
-                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryRewardedOrders: 0, _deliveryGoldenHourActive: false, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 10,
+                _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryRewardedOrders: 0, _deliveryGoldenHourActive: false, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 20,
                 goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
                 _rewardedRunning: false, _rewardedActionId: '', _smartlinkSaving: false, _taskClaimInFlight: false,
                 _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
@@ -1991,10 +1972,10 @@
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
                 _saveQueue: Promise.resolve(), _saveInFlight: false, // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
                 coinBoxVisible: false, coinBoxX: 10, coinBoxY: 10,
-                spinFree: 1, spinAdCount: 0, spinAdLimit: 5, spinAngle: 0, spinHistory: [],
+                spinFree: 1, spinAdCount: 0, spinAdLimit: 10, spinAngle: 0, spinHistory: [],
                 spinItems: [ { label: '❌' }, { label: '100💰' }, { label: '500💰' }, { label: '1k💰' }, { label: '3k📦' }, { label: '💎100k' } ],
                 invitedCount: 0, validInvites: 0, dailyValidInvites: 0, deliveryCountLifetime: 0, rankList: [], adsToday: 0, smartlinksToday: 0,
-                deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 10,
+                deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 20,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, weeklyAdsCount: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
                 isAppLoading: true, loadingProgress: 0, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
@@ -2011,8 +1992,8 @@
                 dailyTasks: [
                     { id:'deliver5', name:'🚚 Giao hàng 5 lần', icon:'🚚', max:5, reward:50, rewardOrders:50, rewardSpins:0, done:false, claimable:false },
                     { id:'deliver10', name:'🚚 Giao hàng 10 lần', icon:'🚚', max:10, reward:100, rewardOrders:100, rewardSpins:0, done:false, claimable:false },
-                    { id:'deliver15', name:'🚚 Giao hàng 12 lần', icon:'🚚', max:12, reward:200, rewardOrders:200, rewardSpins:0, done:false, claimable:false },
-                    { id:'deliver20', name:'🚚 Giao hàng 13 lần', icon:'🚚', max:13, reward:250, rewardOrders:300, rewardSpins:0, done:false, claimable:false },
+                    { id:'deliver15', name:'🚚 Giao hàng 15 lần', icon:'🚚', max:15, reward:200, rewardOrders:200, rewardSpins:0, done:false, claimable:false },
+                    { id:'deliver20', name:'🚚 Giao hàng 20 lần', icon:'🚚', max:20, reward:250, rewardOrders:300, rewardSpins:0, done:false, claimable:false },
                     { id:'x2Once', name:'⚡ Dùng X2', icon:'⚡', max:1, reward:50, rewardOrders:25, rewardSpins:0, done:false, claimable:false, once:true },
                     { id:'upgradeOnce', name:'⬆️ Nâng cấp xe', icon:'⬆️', max:1, reward:100, rewardOrders:50, rewardSpins:0, done:false, claimable:false, once:true },
                     { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, reward:150, rewardOrders:50, rewardSpins:0, done:false, claimable:false },
@@ -2021,15 +2002,9 @@
                     { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, reward:350, rewardOrders:25, rewardSpins:0, done:false, claimable:false },
                     { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, reward:500, rewardOrders:100, rewardSpins:1, done:false, claimable:false }
                 ],
-                allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:10,
+                allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:20,
                 smartlinkCount:0, lastSmartlinkTime:0,
-                groupTaskClaimed: false,
-                groupTaskClaims:{vua_dao_quang_2026_09:false,kiemtienmuakfc_2026_09:false},
-                groupTaskCampaigns:[
-                    {id:'vua_dao_quang_2026_09',username:'@Vua_Dao_Quang',link:'https://t.me/Vua_Dao_Quang'},
-                    {id:'kiemtienmuakfc_2026_09',username:'@kiemtienmuakfc',link:'https://t.me/kiemtienmuakfc'}
-                ],
-                loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false,
+                groupTaskClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
@@ -2049,10 +2024,9 @@
                     { q: 'Cái gì bạn không cầm được dù có nắm chặt?', options: ['Cát', 'Nước', 'Gió', 'Tất cả đều đúng'], answer: 3 },
                     { q: 'Nguyên tố hóa học nào có ký hiệu là “O”?', options: ['Oxy', 'Ozon', 'Oganesson', 'Osmium'], answer: 0 }
                 ],
-                // ===== CAPTCHA: reward actions ngẫu nhiên/risk-based; withdrawal bắt buộc mỗi lần =====
+                // ===== CAPTCHA: bắt buộc MỖI lần giao hàng + MỖI lần rút tiền =====
                 captchaShow: false, captchaCode: '', captchaChars: [], captchaInput: '', captchaError: '',
                 captchaAction: '', captchaRefreshing: false, captchaOnSuccess: null, captchaChallengeId: '', withdrawCaptchaToken: '',
-                captchaType:'code', captchaIconTarget:'', captchaIconOptions:[], captchaSecurityActionId:'', captchaSecurityActionType:'',
                 // ===== NHẠC NỀN: chỉ bật/tắt, danh sách YouTube phát lặp lại tuần tự =====
                 musicOn: false, _musicUserEnabledThisSession: false, musicTrack: 0, _musicEl: null, _ytPlayer: null, _ytReady: false, _ambientAdLast: 0, _musicWatchdog: null, _musicArmed: false,
                 // ===== BXH XEM QC (hàng tuần, reset Chủ Nhật 00:00 cùng BXH mời bạn) =====
@@ -2129,13 +2103,13 @@
                     return remaining > 0;
                 },
                 get deliveryDailyLimit() {
-                    return Math.min(13, 10 + Math.min(3, Math.max(0, Number(this.extraDeliveryCount || 0))));
+                    return Math.min(30, 20 + Math.min(10, Math.max(0, Number(this.extraDeliveryCount || 0))));
                 },
                 get extraDeliveryAdsRemaining() {
-                    return Math.max(0, 3 - Math.min(3, Number(this.extraDeliveryAdsToday || 0)));
+                    return Math.max(0, 5 - Math.min(5, Number(this.extraDeliveryAdsToday || 0)));
                 },
                 get extraDeliveryVisible() {
-                    return Number(this.deliveryCount || 0) >= 10;
+                    return Number(this.deliveryCount || 0) >= 20;
                 },
                 get smartlinkDailyLimit() { return 30; },
                  get smartlinkRemaining() { return Math.max(0, this.smartlinkDailyLimit - Math.min(this.smartlinkDailyLimit, Number(this.smartlinksToday || 0))); },
@@ -2190,94 +2164,50 @@
                 // toàn bộ dữ liệu biến mất. Những lần tải nhanh hơn thì initDataUnsafe.user đã kịp có sẵn nên
                 // không bị lỗi -> đúng hiện tượng "có máy bị, có máy không" người dùng gặp phải. Hàm dưới đây
                 // chờ tối đa 1.5 giây (kiểm tra mỗi 100ms), chỉ khi vẫn không có mới thật sự coi là không có.
-                telegramUserFromInitData() {
-                    try {
-                        const raw = new URLSearchParams(window.Telegram?.WebApp?.initData || '').get('user');
-                        if (!raw) return null;
-                        const user = JSON.parse(raw);
-                        return user?.id ? user : null;
-                    } catch (_) {
-                        return null;
-                    }
-                },
-                async waitForTelegramUser(maxWaitMs = 5000, stepMs = 100) {
+                async waitForTelegramUser(maxWaitMs = 1500, stepMs = 100) {
                     let waited = 0;
                     while (waited < maxWaitMs) {
-                        const unsafeUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-                        if (unsafeUser?.id) return unsafeUser;
-                        const signedInitDataUser = this.telegramUserFromInitData();
-                        if (signedInitDataUser?.id) return signedInitDataUser;
+                        const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
+                        if (u) return u;
                         await new Promise(r => setTimeout(r, stepMs));
                         waited += stepMs;
                     }
-                    return window.Telegram?.WebApp?.initDataUnsafe?.user || this.telegramUserFromInitData() || null;
-                },
-                isSavedTelegramUserId(value) {
-                    return /^\d{5,20}$/.test(String(value || ''));
+                    return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
                 },
                 async initApp() {
-                    if (this._initAppPromise) return this._initAppPromise;
-                    const run = this._initAppInternal();
-                    this._initAppPromise = run;
-                    try {
-                        return await run;
-                    } finally {
-                        if (this._initAppPromise === run) this._initAppPromise = null;
-                    }
-                },
-                async retryBootInitialization() {
-                    if (this._bootRetryInFlight) return false;
-                    if (!this.bootError) return true;
-                    this._bootRetryInFlight = true;
-                    this.isAppLoading = true;
-                    try {
-                        await this.initApp();
-                        return !this.bootError;
-                    } finally {
-                        this._bootRetryInFlight = false;
-                    }
-                },
-                async _initAppInternal() {
                     // Đánh dấu Alpine đã khởi động thành công để script watchdog thuần (không phụ thuộc
                     // Alpine, xem đầu file <body>) biết KHÔNG cần hiện màn "Tải lại trang" nữa.
                     window.__appBootOk = true;
-                    this.joinedGroups = false;
-                    this.bootError = '';
-                    this._appInitializationCompleted = false;
                     // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
                     // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
                     // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
                     await this.checkMaintenanceLock();
-                    if (!this._maintenanceCheckTimer) {
-                        this._maintenanceCheckTimer = setInterval(() => this.checkMaintenanceLock(), 15000);
-                    }
+                    setInterval(() => this.checkMaintenanceLock(), 15000);
                     if (this.maintenanceLocked) { this.finishAppLoading(); return; }
 
-                    // ID Telegram đã lưu trên thiết bị chỉ được dùng làm fallback nếu nó thật sự có dạng Telegram userId.
-                    // Khi ĐANG ở Telegram mà initDataUnsafe chưa hydrate, tuyệt đối không tự sinh guest_xxx rồi đem guest
-                    // đó đi check group / đọc-ghi Supabase, vì sẽ tạo đúng hiện tượng "mất dữ liệu + màn trắng".
+                    // ID được lưu lại trên chính thiết bị này, dùng làm phương án dự phòng khi Telegram
+                    // chưa/không trả về thông tin user kịp lúc app khởi động.
                     const savedDeviceId = localStorage.getItem('shipper_uid') || null;
 
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
                         const tgUser = await this.waitForTelegramUser();
-                        if (tgUser?.id) {
+                        if (tgUser) {
                             this.user.id = tgUser.id.toString();
                             this.user.name = tgUser.first_name || 'Shipper';
                             if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
                             localStorage.setItem('shipper_uid', this.user.id);
-                        } else if (this.isSavedTelegramUserId(savedDeviceId)) {
-                            // Fallback hợp lệ: dùng lại Telegram ID thật đã lưu từ phiên trước trên chính thiết bị.
-                            this.user.id = String(savedDeviceId);
-                            this.user.name = 'Shipper';
                         } else {
-                            this.bootError = 'telegram_identity_unavailable';
-                            await this.finishAppLoading();
-                            return;
+                            // Không lấy được thông tin user từ Telegram lúc này -> DÙNG LẠI id đã lưu trên máy
+                            // (nếu có) thay vì tạo id khách mới ngẫu nhiên, để không bị "mất dữ liệu" khi tải lại.
+                            this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
+                            this.user.name = 'Shipper Demo';
+                            localStorage.setItem('shipper_uid', this.user.id);
                         }
                     } else {
-                        // Ngoài Telegram vẫn giữ cơ chế demo hiện tại để không phá luồng mở web trực tiếp.
+                        // Không chạy trong Telegram (vd mở thẳng bằng trình duyệt) -> vẫn ưu tiên dùng lại id cũ
+                        // trên máy này để tải lại trang không bị mất dữ liệu.
                         this.user.id = savedDeviceId || ('guest_' + Math.floor(Math.random() * 1000000));
                         this.user.name = 'Shipper Demo';
                         localStorage.setItem('shipper_uid', this.user.id);
@@ -2296,19 +2226,12 @@
                         }
                     } catch (_) {}
                     try {
-                        const res = await fetchReadWithRetry(`${API_URL}/api/user/${this.user.id}`, {}, {
-                            attempts: 2,
-                            timeoutMs: 15000,
-                            baseDelayMs: 700
-                        });
+                        const res = await fetchWithTimeout(`${API_URL}/api/user/${this.user.id}`);
                         if (res.status === 404) { // User not found, create new local state
                             console.log("New user detected or user data not found.");
-                            // 404 là phản hồi DB hợp lệ (khác timeout/503), nên mới được phép tạo state ban đầu.
-                            this._serverHydrationFailed = false;
                             this.user.joinDate = new Date().toLocaleDateString('vi-VN');
                             // Initial save for new user (minimal data, referrer handled by bot /start)
-                            const created = await this.saveState();
-                            if (!created) throw new Error('Không thể tạo dữ liệu user mới trên server.');
+                            await this.saveState(); 
                         } else if (res.ok) {
                             let data = await res.json();
                             this._serverHydrationFailed = false;
@@ -2342,7 +2265,7 @@
                             // luôn có sẵn 1 lượt mở rương free dù đã dùng hết. Dùng "??" để CHỈ fallback về 1 khi
                             // giá trị thực sự là null/undefined (user hoàn toàn mới), còn 0 vẫn được giữ nguyên là 0.
                             this.spinFree = data.spins ?? 1; // 'spins' in DB is 'spinFree' in frontend
-                            this.spinAdCount = Math.min(5, Math.max(0, Number(data.spinAdCount || 0)));
+                            this.spinAdCount = data.spinAdCount || 0;
                             this.spinAdProgress = data.spinAdProgress || 0;
                             this.spinHistory = data.spinHistory || [];
                             this.invitedCount = data.invitedCount || 0;
@@ -2353,13 +2276,13 @@
                             this.smartlinksToday = data.smartlinksToday || 0;
                             this.lifetimeAdsWatched = data.lifetimeAdsWatched || 0;
                             this.lifetimeSmartlinks = data.lifetimeSmartlinks || 0;
-                            this.bonusAdsToday = Math.min(15, Math.max(0, Number(data.bonusAdsToday || 0)));
+                            this.bonusAdsToday = data.bonusAdsToday || 0;
                             this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0);
                             this.updateBonusAdCooldown();
                             this.rewardedAdsToday = data.rewardedAdsToday || 0;
-                            this.extraDeliveryAdsToday = Math.min(3, Math.max(0, Number(data.extraDeliveryAdsToday || 0)));
-                            this.extraDeliveryCount = Math.min(3, Math.max(0, Number(data.extraDeliveryCount || 0)));
-                            this.deliveryServerLimit = Math.min(13, Number(data.deliveryLimit || (10 + Math.min(3, this.extraDeliveryCount))));
+                            this.extraDeliveryAdsToday = data.extraDeliveryAdsToday || 0;
+                            this.extraDeliveryCount = data.extraDeliveryCount || 0;
+                            this.deliveryServerLimit = Math.min(30, Number(data.deliveryLimit || (20 + this.extraDeliveryCount)));
                             this.weeklyAdsCount = data.weeklyAdsCount || 0;
                             this.walletSyncedAt = data.walletUpdatedAt || null;
                             if (data.isBanned) {
@@ -2385,10 +2308,7 @@
                                 }));
                             }
                             this.allTasksClaimed = data.allTasksClaimed || false;
-                            const serverGroupClaims = (data.groupTaskCampaignClaims && typeof data.groupTaskCampaignClaims === 'object') ? data.groupTaskCampaignClaims : {};
-                            this.groupTaskClaims.vua_dao_quang_2026_09 = !!(serverGroupClaims.vua_dao_quang_2026_09 ?? data.groupTaskClaimed);
-                            this.groupTaskClaims.kiemtienmuakfc_2026_09 = !!serverGroupClaims.kiemtienmuakfc_2026_09;
-                            this.groupTaskClaimed = this.groupTaskClaims.vua_dao_quang_2026_09;
+                            this.groupTaskClaimed = !!data.groupTaskClaimed;
                             this.deliveryCount = data.deliveryCount || 0;
                             this.chestOpensTotal = data.chestOpensTotal || 0;
                             this.chestOpensToday = data.chestOpensToday || 0;
@@ -2430,10 +2350,13 @@
                         // Snapshot cũ chỉ được dùng làm backup debug; không được để nó trở thành nguồn dữ liệu thứ hai
                         // rồi ghi ngược lên Supabase và vô tình rollback progress mới.
                         this._serverHydrationFailed = true;
-                        this.bootError = 'server_connection';
-                        await this.finishAppLoading();
-                        return;
+                        this.showNotification("⚠️ Không đọc được dữ liệu mới nhất từ máy chủ. Vui lòng thử lại!");
                     }
+                    // FIX LỖI "CHƯA HIỆN ANIMATION LOADING KHI VÀO MINI APP": trước đây hoàn toàn không có
+                    // màn loading nào - giờ tắt overlay loading ngay khi đã tải xong (hoặc lỗi) dữ liệu
+                    // chính của user, các bước còn lại (lưu IP, xếp hạng...) chạy ngầm phía sau không cần
+                    // người dùng phải chờ thêm.
+                    await this.finishAppLoading();
                     this.translateStaticUi();
                     // Đồng bộ trạng thái mốc referral do server quản lý, không tin claimed flag từ client.
                     try {
@@ -2445,12 +2368,10 @@
                         }
                     } catch(e) {}
                     
-                    // Check group membership theo đúng cơ chế đơn giản của phiên bản cũ:
-                    // 1 request /api/verify, kết quả chỉ true/false; không có UNKNOWN/check_failed/retry nhiều tầng.
+                    // Check group membership for banner (only on mini-app load)
                     const memberStatus = this.user.id === MAIN_ADMIN_ID ? true : await this.checkGroupMembership(true);
                     this.joinedGroups = memberStatus;
-                    this.dismissedJoinBanner = memberStatus;
-                    await this.finishAppLoading();
+                    this.dismissedJoinBanner = memberStatus; // Admin chính luôn được bypass nhóm bắt buộc
 
                     // Lưu IP
                     try {
@@ -2485,66 +2406,53 @@
                     // khi mở link ngoài bằng window.open() -> khiến nhiệm vụ SmartLink không bao giờ được tính dù
                     // đã đợi đủ 10 giây. Hàm dùng chung, tự reset smartlinkStartTime ngay khi xử lý để tránh bị
                     // tính 2 lần nếu cả 2 sự kiện cùng bắn.
-                    if (!this._smartlinkReturnListenersBound) {
-                        this._smartlinkReturnListenersBound = true;
-                        document.addEventListener('visibilitychange', () => {
-                            if (!document.hidden && this.smartlinkAttemptId) this.handleSmartlinkReturn();
-                        });
-                        window.addEventListener('focus', () => {
-                            if (this.smartlinkAttemptId) this.handleSmartlinkReturn();
-                        });
-                    }
+                    document.addEventListener('visibilitychange', () => {
+                        if (!document.hidden && this.smartlinkAttemptId) this.handleSmartlinkReturn();
+                    });
+                    window.addEventListener('focus', () => {
+                        if (this.smartlinkAttemptId) this.handleSmartlinkReturn();
+                    });
                     
                     // Chống spam: click quá 5 lần trong 3 giây trên cùng 1 nút sẽ bị chặn + cảnh báo
-                    if (!this._antiSpamListenerBound) {
-                        this._antiSpamListenerBound = true;
-                        document.addEventListener('click', (e) => {
-                            const btn = e.target.closest('button');
-                            if (!btn) return;
-                            const now = Date.now();
-                            const lastSecurityClick = Number(this.lastSecurityClickAt || 0);
-                            if (lastSecurityClick > 0) {
-                                const interval = now - lastSecurityClick;
-                                if (interval > 0 && interval <= 10 * 60 * 1000) {
-                                    this.fraudClickIntervals.push(interval);
-                                    if (this.fraudClickIntervals.length > 60) this.fraudClickIntervals.shift();
-                                }
+                    document.addEventListener('click', (e) => {
+                        const btn = e.target.closest('button');
+                        if (!btn) return;
+                        const now = Date.now();
+                        const lastSecurityClick = Number(this.lastSecurityClickAt || 0);
+                        if (lastSecurityClick > 0) {
+                            const interval = now - lastSecurityClick;
+                            if (interval > 0 && interval <= 10 * 60 * 1000) {
+                                this.fraudClickIntervals.push(interval);
+                                if (this.fraudClickIntervals.length > 60) this.fraudClickIntervals.shift();
                             }
-                            this.lastSecurityClickAt = now;
-                            this.clickTimestamps = (this.clickTimestamps || []).filter(t => now - t < 3000);
-                            this.clickTimestamps.push(now);
-                            if (this.clickTimestamps.length > 5) {
-                                e.preventDefault();
-                                e.stopImmediatePropagation();
-                                this.showNotification('⚠️ Bạn Đang Thao Tác Quá Nhanh, Vui Lòng Chậm Lại!!!');
-                            }
-                        }, true);
-                    }
+                        }
+                        this.lastSecurityClickAt = now;
+                        this.clickTimestamps = (this.clickTimestamps || []).filter(t => now - t < 3000);
+                        this.clickTimestamps.push(now);
+                        if (this.clickTimestamps.length > 5) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            this.showNotification('⚠️ Bạn Đang Thao Tác Quá Nhanh, Vui Lòng Chậm Lại!!!');
+                        }
+                    }, true);
 
                     // Đồng bộ trạng thái rút tiền (Chờ duyệt/Đã duyệt/Hủy) từ server để phản ánh ngay khi admin xử lý
                     this.fetchWithdrawHistory();
                     this.fetchRedeemHistory();
-                    if (this._withdrawHistoryTimer) clearInterval(this._withdrawHistoryTimer);
-                    this._withdrawHistoryTimer = setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
+                    setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
 
                     // Hiệu ứng số "nhảy" mỗi khi coin / đơn hàng tăng lên (chỉ khi tăng, không chạy khi giảm do rút tiền/trừ tiền)
-                    if (!this._walletWatchersBound) {
-                        this._walletWatchersBound = true;
-                        let prevCoins = this.coins, prevOrders = this.orders;
-                        this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
-                        this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
-                    }
-                    if (!this._tabWatcherBound) {
-                        this._tabWatcherBound = true;
-                        this.$watch('tab', (nextTab, previousTab) => {
-                            this.saveState();
-                            if (nextTab === 'tasks') this.syncDailyTasksFromServer().catch(() => {});
-                            if (previousTab && nextTab !== previousTab) {
-                                passiveTabCount += 1;
-                                schedulePassiveAdCheck(650);
-                            }
-                        });
-                    }
+                    let prevCoins = this.coins, prevOrders = this.orders;
+                    this.$watch('coins', v => { if (v > prevCoins) { this.coinsPopped = false; this.$nextTick(() => { this.coinsPopped = true; setTimeout(() => this.coinsPopped = false, 450); }); } prevCoins = v; });
+                    this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
+                    this.$watch('tab', (nextTab, previousTab) => {
+                        this.saveState();
+                        if (nextTab === 'tasks') this.syncDailyTasksFromServer().catch(() => {});
+                        if (previousTab && nextTab !== previousTab) {
+                            passiveTabCount += 1;
+                            schedulePassiveAdCheck(650);
+                        }
+                    });
                     if (this._uiSecondTimer) clearInterval(this._uiSecondTimer);
                     this._uiSecondTimer = setInterval(() => {
                         this.tick++;
@@ -2552,10 +2460,8 @@
                         this.updateBonusAdCooldown();
                         this.updateGoldenHourCountdown();
                     }, 1000);
-                    if (this._autoSaveTimer) clearInterval(this._autoSaveTimer);
-                    this._autoSaveTimer = setInterval(() => this.saveState(), 30000);
-                    if (this._syncLatestUserTimer) clearInterval(this._syncLatestUserTimer);
-                    this._syncLatestUserTimer = setInterval(() => this.syncLatestUser(), 15000);
+                    setInterval(() => this.saveState(), 30000);
+                    setInterval(() => this.syncLatestUser(), 15000);
                     // ===== NHẠC NỀN: mỗi phiên mới luôn TẮT =====
                     // Không autoplay và không tự khôi phục trạng thái phát từ phiên trước.
                     // Giá trị 'shipper_music' vẫn được lưu để tương thích cũ, nhưng không dùng để tự phát.
@@ -2587,42 +2493,39 @@
                     // Lưu NGAY khi người dùng ẩn app (chuyển tab, thu nhỏ, khóa màn hình, vuốt tắt):
                     // đăng ký cả visibilitychange + pagehide + beforeunload vì mỗi WebView Telegram
                     // bắn khác nhau 1 trong các sự kiện này.
-                    if (!this._exitSaveListenersBound) {
-                        this._exitSaveListenersBound = true;
-                        const flushSave = () => { this.saveState(); };
-                        const stopMusicOnExit = () => { try { this.stopMusic(); } catch (e) {} };
-                        document.addEventListener('visibilitychange', () => {
-                            if (document.hidden) {
-                                stopMusicOnExit();
-                                flushSave();
-                            } else if (this.musicOn && this._musicUserEnabledThisSession) {
-                                this.resumeMusic();
-                            }
-                        });
-                        window.addEventListener('pagehide', () => {
+                    const flushSave = () => { this.saveState(); };
+                    const stopMusicOnExit = () => { try { this.stopMusic(); } catch (e) {} };
+                    document.addEventListener('visibilitychange', () => {
+                        if (document.hidden) {
                             stopMusicOnExit();
                             flushSave();
-                        });
-                        window.addEventListener('beforeunload', () => {
-                            stopMusicOnExit();
-                            flushSave();
-                        });
-                        try {
-                            if (window.Telegram?.WebApp?.onEvent) {
-                                Telegram.WebApp.onEvent('viewportChanged', () => {
-                                    if (document.hidden) stopMusicOnExit();
-                                });
-                            }
-                        } catch (e) {}
-                    }
-                    this._appInitializationCompleted = true;
+                        } else if (this.musicOn && this._musicUserEnabledThisSession) {
+                            this.resumeMusic();
+                        }
+                    });
+                    window.addEventListener('pagehide', () => {
+                        stopMusicOnExit();
+                        flushSave();
+                    });
+                    window.addEventListener('beforeunload', () => {
+                        stopMusicOnExit();
+                        flushSave();
+                    });
+                    try {
+                        if (window.Telegram?.WebApp?.onEvent) {
+                            Telegram.WebApp.onEvent('viewportChanged', () => {
+                                if (document.hidden) stopMusicOnExit();
+                            });
+                        }
+                    } catch (e) {}
                 },
                 
                 // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
                 // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
                 // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
                 async finishAppLoading() {
-                    // Membership false không còn bị coi là lỗi boot: kết thúc loading và để banner tham gia nhóm xử lý như code cũ.
+                    // Dừng vòng lặp tăng tiến độ + huỷ mốc chờ dự phòng, ép thanh loading chạy đầy 100%
+                    // rồi mới ẩn màn loading để vào giao diện (đúng yêu cầu: thanh chạy đầy mới vào app).
                     if (!this.isAppLoading) return;
                     clearInterval(this._loadingProgressTimer);
                     clearTimeout(this._loadingFailsafeTimer);
@@ -2635,7 +2538,7 @@
                 // tình bật lại true ở bất kỳ thời điểm nào khác sau khi đã vào giao diện thì không có gì canh
                 // giờ để tự tắt nữa, khiến app đứng im mãi ở màn loading. Alpine tự gọi init() khi khởi tạo
                 // component; dùng $watch để theo dõi isAppLoading XUYÊN SUỐT vòng đời app (không riêng lần đầu),
-                // hễ isAppLoading bật true là tự chạy thanh loading và ép tắt sau tối đa 75 giây (đủ cho bounded retry khi Render/Supabase/Telegram cùng chậm).
+                // hễ isAppLoading bật true là tự chạy thanh loading và ép tắt sau tối đa 10 giây.
                 init() {
                     const armLoadingWatchdog = () => {
                         clearInterval(this._loadingProgressTimer);
@@ -2644,12 +2547,7 @@
                         this._loadingProgressTimer = setInterval(() => {
                             this.loadingProgress = Math.min(92, this.loadingProgress + Math.random() * 7 + 3);
                         }, 220);
-                        this._loadingFailsafeTimer = setTimeout(() => {
-                            if (!this.isAppLoading) return;
-                            // Chỉ coi là lỗi boot nếu toàn bộ init thật sự treo quá lâu; membership riêng chỉ check 1 lần tối đa 8 giây.
-                            this.bootError = this.bootError || 'init_timeout';
-                            this.finishAppLoading();
-                        }, 75000);
+                        this._loadingFailsafeTimer = setTimeout(() => { this.finishAppLoading(); }, 10000);
                     };
                     this.$watch('isAppLoading', (val) => {
                         if (val) armLoadingWatchdog();
@@ -2672,48 +2570,39 @@
                         const res = await fetchWithTimeout(url);
                         if (!res.ok) return;
                         const data = await res.json();
-                        const wasLocked = this.maintenanceLocked;
                         this.maintenanceLocked = !!data.locked;
-                        // Nếu app được mở đúng lúc maintenance và initApp đã dừng sớm, khi Admin mở kho lại
-                        // phải khởi tạo lại từ đầu; nếu chỉ ẩn maintenance overlay thì joinedGroups vẫn chưa
-                        // được xác định và lại rơi vào nền trống.
-                        if (wasLocked && !this.maintenanceLocked && !this._appInitializationCompleted) {
-                            this.isAppLoading = true;
-                            this.initApp().catch(() => {});
-                        }
                     } catch (e) { /* Không đổi trạng thái nếu lỗi mạng */ }
                 },
 
                 async checkGroupMembership(silent = false) {
-                    if (this.user?.id === MAIN_ADMIN_ID) {
-                        this.joinedGroups = true;
-                        this.dismissedJoinBanner = true;
-                        return true;
-                    }
+                    if (this.user?.id === MAIN_ADMIN_ID) { this.joinedGroups = true; this.dismissedJoinBanner = true; return true; }
                     if (!silent) this.showNotification('⏳ Đang kiểm tra tham gia nhóm...');
+                    // FIX LỖI "LOAD XONG NHƯNG KHÔNG VÀO ĐƯỢC GIAO DIỆN TRONG": giao diện chính (main-container)
+                    // chỉ hiện khi joinedGroups === true. Trước đây hàm này dùng fetch() THƯỜNG, không có
+                    // timeout -> nếu request /api/verify bị treo (mạng chờn, server chậm phản hồi), await
+                    // này ở initApp() không bao giờ resolve, khiến joinedGroups mãi mãi giữ giá trị false ban
+                    // đầu dù isAppLoading đã tắt từ trước đó -> người dùng thấy màn loading biến mất nhưng
+                    // giao diện trong (main-container) không bao giờ hiện ra. Đổi sang fetchWithTimeout để
+                    // luôn có kết quả (thành công hoặc thất bại) trong tối đa 8 giây, không treo vô thời hạn.
                     try {
-                        // Giống phiên bản cũ: chỉ 1 request, timeout tối đa 8 giây, không retry nhiều tầng.
                         const res = await fetchWithTimeout(`${API_URL}/api/verify/${this.user.id}`);
-                        const data = await res.json().catch(() => ({}));
+                        const data = await res.json();
                         if (data.success) {
                             this.joinedGroups = true;
                             this.dismissedJoinBanner = true;
                             if (!silent) this.showNotification('✅ Xác thực thành công!');
                             return true;
+                        } else {
+                            if (!silent) this.showNotification('⚠️ Bot chưa phát hiện bạn trong nhóm!');
+                            return false;
                         }
-                        this.joinedGroups = false;
-                        this.dismissedJoinBanner = false;
-                        if (!silent) this.showNotification('⚠️ Bot chưa phát hiện bạn trong nhóm!');
-                        return false;
                     } catch (e) {
                         console.error("Lỗi kiểm tra nhóm:", e);
-                        this.joinedGroups = false;
-                        this.dismissedJoinBanner = false;
                         if (!silent) this.showNotification('⚠️ Lỗi kiểm tra nhóm!');
                         return false;
                     }
                 },
-
+                
                 startCountdown() {
                     const updateCountdown = () => {
                         const now = new Date();
@@ -2846,7 +2735,7 @@
                     return this.texts.smartlinkStart;
                 },
                 bonusAdButtonText() {
-                    if (Number(this.bonusAdsToday || 0) >= 15) {
+                    if (Number(this.bonusAdsToday || 0) >= 30) {
                         return this.language === 'en' ? '✅ DAILY LIMIT REACHED' : '✅ ĐÃ HẾT LƯỢT HÔM NAY';
                     }
                     if (this.bonusAdCooldown > 0) {
@@ -2925,7 +2814,7 @@
                         this.rewardedAdsToday = 0;
                         this.extraDeliveryAdsToday = 0;
                         this.extraDeliveryCount = 0;
-                        this.deliveryServerLimit = 10;
+                        this.deliveryServerLimit = 20;
                         this.withdrawRemain = 1;
                         this.dailyTasks.forEach(t => {
                             t.done = false;
@@ -3047,8 +2936,7 @@
                     return false;
                 },
                 produceLoop() {
-                    if (this._produceTimer) clearInterval(this._produceTimer);
-                    this._produceTimer = setInterval(() => {
+                    setInterval(() => {
                         if (this.currentProducts >= this.maxProducts) return;
                         const elapsed = Date.now() - this.lastProducedAt;
                         let interval = this.productionInterval;
@@ -3069,13 +2957,14 @@
                         return;
                     }
                     if (this.currentProducts <= 0) return;
-                    const limit = Number(this.deliveryDailyLimit || this.deliveryServerLimit || 10);
+                    const limit = Number(this.deliveryDailyLimit || this.deliveryServerLimit || 20);
                     if (Number(this.deliveryCount || 0) >= limit) {
                         this.showNotification('✅ ' + (this.texts.deliveryLimitReached || 'You have reached today\'s delivery limit.'));
                         return;
                     }
                     if (this.captchaShow) return;
-                    this.runDeliverAd();
+                    this.showNotification('🔐 Vui lòng hoàn thành CAPTCHA để bắt đầu giao hàng.');
+                    this.startCaptcha('deliver', () => this.runDeliverAd());
                 },
                 async runDeliverAd() {
                     if (this._rewardedRunning || this._deliveryClaimInFlight) return;
@@ -3149,8 +3038,8 @@
                                 // Chỉ hydrate bằng dữ liệu server đã xác nhận. Không saveState ngay tại đây:
                                 // response Delivery là source-of-truth và một snapshot client cũ không được ghi ngược lại.
                                 this.deliveryCount = Number(d.deliveryCount ?? this.deliveryCount);
-                                this.deliveryServerLimit = Math.min(13, Number(d.limit ?? this.deliveryServerLimit ?? 10));
-                                this.extraDeliveryCount = Math.min(3, Math.max(0, Number(d.extraDeliveryCount ?? this.extraDeliveryCount ?? 0)));
+                                this.deliveryServerLimit = Number(d.limit ?? this.deliveryServerLimit ?? 20);
+                                this.extraDeliveryCount = Number(d.extraDeliveryCount ?? this.extraDeliveryCount ?? 0);
                                 this.orders = Number(d.orders ?? this.orders);
                                 this.currentProducts = Number(d.currentProducts ?? 0);
                                 this.lastProducedAt = Number(d.lastProducedAt ?? Date.now());
@@ -3175,7 +3064,7 @@
                                     localStorage.removeItem('shipper_pending_delivery_claim_token');
                                 } catch (_) {}
                                 this.deliveryCount = Number(d.deliveryCount ?? this.deliveryCount);
-                                this.deliveryServerLimit = Math.min(13, Number(d.limit ?? this.deliveryServerLimit ?? 10));
+                                this.deliveryServerLimit = Number(d.limit ?? this.deliveryServerLimit ?? 20);
                                 this.showNotification('✅ ' + (this.texts.deliveryLimitReached || 'Today\'s delivery limit has been reached.'));
                                 await this.syncDailyTasksFromServer();
                                 return false;
@@ -3501,7 +3390,7 @@
                         }
                     }, 350);
                 },
-                // Xem 1 QC = +1 Lượt Mở Rương ngay, tối đa 5 QC/ngày (spinAdLimit)
+                // Xem 1 QC = +1 Lượt Mở Rương ngay, giới hạn ngày đã tăng từ 5 lên 10 (spinAdLimit)
                 watchAdForChest() {
                     if (this.spinAdCount >= this.spinAdLimit) {
                         this.showNotification('⚠️ Bạn đã xem đủ QC hôm nay (tối đa ' + this.spinAdLimit + ')');
@@ -3525,46 +3414,26 @@
                     };
                     this.playRewardedAd(grantSpin, 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', 'chest-spin');
                 },
-                async buyChestWithOrders() {
-                    if (this._chestExchangeInFlight) return;
+                buyChestWithOrders() {
                     if (this.orders < 500) {
                         this.showNotification('❌ Cần ít nhất 500 Đơn Hàng để đổi lượt mở rương.');
                         return;
                     }
-                    this._chestExchangeInFlight = true;
-                    try {
-                        const res = await fetch(`${API_URL}/api/chest/exchange`, {
-                            method:'POST',
-                            headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({userId:this.user.id})
-                        });
-                        const result = await res.json().catch(() => ({}));
-                        if (!res.ok || !result.success) {
-                            this.showNotification('❌ ' + (result.error || 'Không thể đổi lượt mở rương lúc này.'));
-                            if (result.insufficientOrders) await this.syncLatestUser();
-                            return;
-                        }
-                        this.orders = Number(result.orders ?? this.orders);
-                        this.spinFree = Number(result.spins ?? this.spinFree);
-                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        this.showNotification('🔄 Đổi thành công! +1 Lượt Mở Rương');
-                    } catch (e) {
-                        console.error('Chest exchange:',e);
-                        this.showNotification('⚠️ Không kết nối được máy chủ để đổi lượt rương.');
-                    } finally {
-                        this._chestExchangeInFlight = false;
-                    }
+                    this.orders -= 500;
+                    this.spinFree++;
+                    this.saveState();
+                    this.showNotification('🔄 Đổi thành công! +1 Lượt Mở Rương');
                 },
                 localizeTask(task) {
                     if (!task) return task;
                     const names = {
                         vi: {
-                            deliver5:'🚚 Giao hàng 5 lần', deliver10:'🚚 Giao hàng 10 lần', deliver15:'🚚 Giao hàng 12 lần', deliver20:'🚚 Giao hàng 13 lần',
+                            deliver5:'🚚 Giao hàng 5 lần', deliver10:'🚚 Giao hàng 10 lần', deliver15:'🚚 Giao hàng 15 lần', deliver20:'🚚 Giao hàng 20 lần',
                             x2Once:'⚡ Dùng X2', upgradeOnce:'⬆️ Nâng cấp xe', watch3rewarded:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)',
                             smartlink5:'🔗 Hoàn thành 5 SmartLink', spin1:'🎁 Mở rương', invite1:'👥 Mời 1 bạn thành công', invite5:'👥 Mời 5 bạn thành công'
                         },
                         en: {
-                            deliver5:'🚚 Deliver 5 times', deliver10:'🚚 Deliver 10 times', deliver15:'🚚 Deliver 12 times', deliver20:'🚚 Deliver 13 times',
+                            deliver5:'🚚 Deliver 5 times', deliver10:'🚚 Deliver 10 times', deliver15:'🚚 Deliver 15 times', deliver20:'🚚 Deliver 20 times',
                             x2Once:'⚡ Use X2', upgradeOnce:'⬆️ Upgrade the truck', watch3rewarded:'📺 Watch 3 ads (Rewarded Interstitial only)',
                             smartlink5:'🔗 Complete 5 SmartLinks', spin1:'🎁 Open chest', invite1:'👥 Successfully invite 1 friend', invite5:'👥 Successfully invite 5 friends'
                         }
@@ -3584,9 +3453,9 @@
                         this.allTasksClaimed = !!data.allTasksClaimed;
                         this.deliveryCount = Number(data.deliveryCount ?? this.deliveryCount);
                         this.lastResetDate = data.lastResetDate || data.today || this.lastResetDate;
-                        this.deliveryServerLimit = Math.min(13, Number(data.deliveryLimit ?? this.deliveryServerLimit));
-                        this.extraDeliveryAdsToday = Math.min(3, Math.max(0, Number(data.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday)));
-                        this.extraDeliveryCount = Math.min(3, Math.max(0, Number(data.extraDeliveryCount ?? this.extraDeliveryCount)));
+                        this.deliveryServerLimit = Number(data.deliveryLimit ?? this.deliveryServerLimit);
+                        this.extraDeliveryAdsToday = Number(data.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday);
+                        this.extraDeliveryCount = Number(data.extraDeliveryCount ?? this.extraDeliveryCount);
                         this.rewardedAdsToday = Number(data.rewardedAdsToday ?? this.rewardedAdsToday);
                         this.smartlinkCount = Number(data.smartlinkCount ?? this.smartlinkCount ?? 0);
                         this.smartlinksToday = Number(data.smartlinksToday ?? this.smartlinksToday ?? 0);
@@ -3651,11 +3520,11 @@
                     }
                 },
                 // Card thưởng QC cũ vẫn được giữ nguyên ngoài Daily Tasks: mỗi Rewarded hợp lệ +50 Coin +25 Orders,
-                // tối đa 15 lượt/ngày; tiến độ và phần thưởng vẫn do server xác nhận.
+                // tối đa 30 lượt/ngày; tiến độ và phần thưởng vẫn do server xác nhận.
                 watchBonusAdTask() {
                     this.updateBonusAdCooldown();
-                    if ((this.bonusAdsToday || 0) >= 15) {
-                        this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.');
+                    if ((this.bonusAdsToday || 0) >= 30) {
+                        this.showNotification('⚠️ Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.');
                         return;
                     }
                     if (this.bonusAdCooldown > 0) {
@@ -3669,11 +3538,13 @@
                         this.updateBonusAdCooldown();
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
-                        this.showNotification(`📺 +50 Coin +25 Đơn Hàng (${this.bonusAdsToday}/15)`);
+                        this.showNotification(`📺 +50 Coin +25 Đơn Hàng (${this.bonusAdsToday}/30)`);
                         this.saveState();
                     }, this.texts.adError, 'bonus-task');
                 },
-                async openSmartlinkAd1() { return this.startSmartlink(); },
+                async openSmartlinkAd1() {
+                    return this.startSmartlink(THATLOBSTER_SMARTLINK_1);
+                },
                 inAppResetKey() {
                     const now = new Date();
                     if (now.getHours() < 12) now.setDate(now.getDate() - 1);
@@ -3717,91 +3588,102 @@
                         this._taskClaimInFlight = false;
                     }
                 },
-                async claimGroupTask(campaignId) {
-                    const id=String(campaignId||'');
-                    if (!id || this.groupTaskClaims[id]) return;
+                async claimGroupTask() {
+                    if (this.groupTaskClaimed) return;
                     try {
                         const res = await fetch(`${API_URL}/api/task/group/claim`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
-                            body:JSON.stringify({userId:this.user.id,campaignId:id})
+                            body:JSON.stringify({userId:this.user.id})
                         });
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
-                            if (result.error === 'not_member') this.showNotification(this.texts.groupNotMember || 'Please join the group, then check again.');
-                            else if (result.error === 'membership_check_failed') this.showNotification('❌ ' + (result.message || this.texts.groupMembershipCheckFailed || 'Telegram could not verify group membership.'));
-                            else if (result.rateLimited) this.showNotification('⚠️ Thao tác quá nhanh. Vui lòng thử lại sau.');
-                            else this.showNotification('❌ ' + (result.message || this.texts.taskClaimFailed || 'The task is not eligible or an error occurred.'));
+                            if (result.error === 'not_member') {
+                                this.showNotification(this.texts.groupNotMember || 'Please join the group, then check again.');
+                            } else if (result.error === 'membership_check_failed') {
+                                this.showNotification('❌ ' + (result.message || this.texts.groupMembershipCheckFailed || 'Telegram could not verify group membership.'));
+                            } else {
+                                this.showNotification('❌ ' + (result.message || this.texts.taskClaimFailed || 'The task is not eligible or an error occurred.'));
+                            }
                             return;
                         }
-                        this.groupTaskClaims[id] = true;
-                        if (id === 'vua_dao_quang_2026_09') this.groupTaskClaimed = true;
+                        this.groupTaskClaimed = true;
                         if (typeof result.coins === 'number') this.coins = result.coins;
                         if (typeof result.orders === 'number') this.orders = result.orders;
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         this.saveState().catch(() => {});
-                        if (!result.alreadyClaimed) this.showNotification('✅ ' + (this.texts.groupTaskSuccess || 'Group task completed!') + ' +200 💰 +200 📦');
+                        if (!result.alreadyClaimed) this.showNotification('✅ ' + (this.texts.groupTaskSuccess || 'Group task completed!') + ' +500 💰 +500 📦');
                     } catch (e) {
                         console.error('Claim group task:', e);
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                     }
                 },
-                async startSmartlink() {
+                async startSmartlink(preferredLink = '') {
                     if (this._smartlinkSaving || this.smartlinkStartTime > 0 || this.smartlinkAttemptId) return false;
                     this.updateSmartlinkCooldown();
-                    if (this.smartlinkCooldown > 0) { this.showNotification(this.smartlinkButtonText()); return false; }
+                    if (this.smartlinkCooldown > 0) {
+                        this.showNotification(this.smartlinkButtonText());
+                        return false;
+                    }
                     if (Number(this.smartlinksToday || 0) >= this.smartlinkDailyLimit) {
                         this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
                         return false;
                     }
-                    const actionId=`smartlink:${this.user?.id||'user'}:${Date.now()}:${Math.random().toString(36).slice(2,10)}`;
-                    this._smartlinkSaving=true;
+                    // Increase visibility of the owner-provided priority SmartLink without removing any existing link.
+                    const availableLinks = SMARTLINKS.filter(link => !this.usedSmartlinks.includes(link));
+                    const priorityLink = String(preferredLink || '').trim();
+                    const prioritizeMain = !priorityLink && Math.random() < 0.45;
+                    const randomLink = priorityLink || (prioritizeMain
+                        ? THATLOBSTER_SMARTLINK_1
+                        : (availableLinks.length > 0
+                            ? availableLinks[Math.floor(Math.random() * availableLinks.length)]
+                            : SMARTLINKS[Math.floor(Math.random() * SMARTLINKS.length)]));
+                    if (!randomLink) return false;
+
+                    this._smartlinkSaving = true;
                     try {
-                        const security=await this.ensureRewardActionSecurity('smartlink',actionId);
-                        if (!security.ok) return false;
-                        let response=null,result={};
-                        for (let attempt=0;attempt<3;attempt++) {
-                            try {
-                                response=await fetch(`${API_URL}/api/smartlink/start`,{
-                                    method:'POST',headers:{'Content-Type':'application/json'},
-                                    body:JSON.stringify({userId:this.user.id,sessionId:this.securitySessionId,actionId,challengeToken:security.challengeToken||''})
-                                });
-                                result=await response.json().catch(()=>({}));
-                            } catch(_) { response=null; result={success:false,retry:true}; }
-                            if (response?.ok && result.success && result.attemptId && result.link) break;
-                            if (result.rateLimited || result.limitReached || result.cooldown || result.challengeRequired) break;
-                            if (!(result.retry || !response || [408,409,500,502,503,504].includes(response.status))) break;
-                            await new Promise(r=>setTimeout(r,300*(attempt+1)));
-                        }
-                        if (!response?.ok || !result.success || !result.attemptId || !result.link) {
-                            if (result.rateLimited) this.showNotification('⚠️ Thao tác quá nhanh. Vui lòng thử lại sau.');
-                            else if (result.limitReached) {
-                                if (typeof result.smartlinksToday==='number') this.smartlinksToday=Number(result.smartlinksToday);
+                        const response = await fetch(`${API_URL}/api/smartlink/start`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id, link:randomLink, sessionId:this.securitySessionId})
+                        });
+                        const result = await response.json().catch(() => ({}));
+                        if (!response.ok || !result.success || !result.attemptId) {
+                            if (result.limitReached) {
+                                if (typeof result.smartlinksToday === 'number') this.smartlinksToday = Number(result.smartlinksToday);
                                 this.showNotification(this.texts.smartlinkLimitReached || 'You have reached today’s SmartLink limit.');
                             } else if (result.cooldown && result.nextAllowedAt) {
-                                this.lastSmartlinkTime=Number(result.nextAllowedAt)-30*1000; this.updateSmartlinkCooldown(); this.showNotification(this.smartlinkButtonText());
-                            } else this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'Unable to start SmartLink. Please try again.'));
+                                this.lastSmartlinkTime = Number(result.nextAllowedAt) - 30 * 1000;
+                                this.updateSmartlinkCooldown();
+                                this.showNotification(this.smartlinkButtonText());
+                            } else {
+                                this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'Unable to start SmartLink. Please try again.'));
+                            }
                             return false;
                         }
-                        const serverLink=String(result.link||'');
-                        this.usedSmartlinks=[...this.usedSmartlinks,serverLink].slice(-30);
-                        this.smartlinkStartTime=Number(result.startedAt||Date.now());
-                        this.smartlinkAttemptId=String(result.attemptId);
+
+                        this.usedSmartlinks = [...this.usedSmartlinks, randomLink].slice(-SMARTLINKS.length);
+                        // This timestamp is UI/reload state only. Reward eligibility is checked from server startedAt.
+                        this.smartlinkStartTime = Number(result.startedAt || Date.now());
+                        this.smartlinkAttemptId = String(result.attemptId);
                         try {
-                            localStorage.setItem('shipper_smartlink_start',String(this.smartlinkStartTime));
-                            localStorage.setItem('shipper_smartlink_attempt',this.smartlinkAttemptId);
-                            localStorage.setItem('shipper_smartlink_link',serverLink);
-                            localStorage.setItem('shipper_smartlink_provider',String(result.provider||''));
-                        } catch(_) {}
-                        if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(serverLink);
-                        else window.open(serverLink,'_blank','noopener');
+                            localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
+                            localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
+                            localStorage.setItem('shipper_smartlink_link', randomLink);
+                        } catch (_) {}
+
+                        if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(randomLink);
+                        else window.open(randomLink, '_blank', 'noopener');
                         this.showNotification(this.texts.smartlinkOpened || '🔗 SmartLink opened. Stay on the SmartLink for at least 5 seconds.');
-                        setTimeout(()=>{ if(this.smartlinkAttemptId && !document.hidden) this.handleSmartlinkReturn(); },12000);
+                        setTimeout(() => {
+                            if (this.smartlinkAttemptId && !document.hidden) this.handleSmartlinkReturn();
+                        }, 12000);
                         return true;
-                    } catch(e) {
+                    } catch (e) {
                         console.error('SmartLink start:',e);
                         this.showNotification('⚠️ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                         return false;
-                    } finally { this._smartlinkSaving=false; }
+                    } finally {
+                        this._smartlinkSaving = false;
+                    }
                 },
 
                 clearSmartlinkAttempt() {
@@ -3832,7 +3714,7 @@
                                 result = {success:false,retry:true};
                             }
                             if (response?.ok && result.success) break;
-                            if (result.tooEarly || result.attemptExpired || result.invalidAttempt || result.staleAttempt || result.limitReached) break;
+                            if (result.tooEarly || result.attemptExpired || result.invalidAttempt || result.limitReached) break;
                             if (!result.retry && response && ![408,409,425,429,500,502,503,504].includes(response.status)) break;
                             await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
                         }
@@ -3845,7 +3727,7 @@
                                 : 'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!')));
                             return false;
                         }
-                        if (result.attemptExpired || result.invalidAttempt || result.staleAttempt) {
+                        if (result.attemptExpired || result.invalidAttempt) {
                             this.clearSmartlinkAttempt();
                             this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry));
                             return false;
@@ -3931,21 +3813,21 @@
                     }
                 },
                 async watchExtraDeliveryAd() {
-                    if (this._rewardedRunning || this._deliveryClaimInFlight || this.extraDeliveryAdsRemaining <= 0 || this.deliveryCount < 10) return;
+                    if (this._rewardedRunning || this._deliveryClaimInFlight || this.extraDeliveryAdsRemaining <= 0 || this.deliveryCount < 20) return;
                     await this.playRewardedAd(async (result = {}) => {
-                        this.extraDeliveryAdsToday = Math.min(3, Math.max(0, Number(result.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday)));
-                        this.extraDeliveryCount = Math.min(3, Math.max(0, Number(result.extraDeliveryCount ?? this.extraDeliveryCount)));
+                        this.extraDeliveryAdsToday = Number(result.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday);
+                        this.extraDeliveryCount = Number(result.extraDeliveryCount ?? this.extraDeliveryCount);
                         this.rewardedAdsToday = Number(result.rewardedAdsToday ?? this.rewardedAdsToday);
                         this.adsToday = Number(result.adsToday ?? this.adsToday);
                         this.lifetimeAdsWatched = Number(result.lifetimeAdsWatched ?? this.lifetimeAdsWatched);
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         this.spinFree = Number(result.spins ?? this.spinFree);
-                        this.deliveryServerLimit = Math.min(13, Number(result.deliveryLimit ?? (10 + Math.min(3, this.extraDeliveryCount))));
+                        this.deliveryServerLimit = Number(result.deliveryLimit ?? (20 + this.extraDeliveryCount));
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         await this.syncDailyTasksFromServer();
                         this.saveState().catch(() => {});
-                        this.showNotification(this.texts.extraDeliverySuccess || '🚚 +1 lượt giao hàng!');
+                        this.showNotification(this.texts.extraDeliverySuccess || '🚚 +2 lượt giao hàng!');
                     }, this.texts.adError, 'extra-delivery');
                 },
                 async syncStreakStatus() {
@@ -4229,98 +4111,106 @@
                 // các request luôn tới server ĐÚNG THỨ TỰ và luôn dùng dữ liệu MỚI NHẤT tại thời điểm gửi.
                 // ==================== CAPTCHA ====================
                 setCaptchaVisual(code) {
-                    this.captchaType='code';
-                    this.captchaCode=String(code||'').toUpperCase();
-                    this.captchaChars=[...this.captchaCode].map((ch,i)=>({ch,rot:Math.round((Math.random()*22)-11),i}));
-                    this.captchaInput=''; this.captchaError=''; this.captchaRefreshing=true;
-                    setTimeout(()=>{this.captchaRefreshing=false;},320);
+                    this.captchaCode = String(code || '').toUpperCase();
+                    this.captchaChars = [...this.captchaCode].map((ch, i) => ({ ch, rot: Math.round((Math.random() * 22) - 11), i }));
+                    this.captchaInput = '';
+                    this.captchaError = '';
+                    this.captchaRefreshing = true;
+                    setTimeout(() => { this.captchaRefreshing = false; }, 320);
                 },
                 async loadWithdrawCaptchaChallenge() {
-                    this.captchaRefreshing=true; this.captchaError=''; this.captchaType='code';
+                    this.captchaRefreshing = true;
+                    this.captchaError = '';
                     try {
-                        const res=await fetch(`${API_URL}/api/withdraw/captcha-challenge`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})});
-                        const result=await res.json().catch(()=>({}));
-                        if(!res.ok||!result.success||!result.challengeId||!result.captchaCode) throw new Error(result.error||this.texts.captchaLoadError||'Could not create CAPTCHA.');
-                        this.captchaChallengeId=String(result.challengeId); this.setCaptchaVisual(result.captchaCode); return true;
-                    } catch(e) {
-                        console.error('Withdraw CAPTCHA challenge:',e); this.captchaChallengeId=''; this.captchaCode=''; this.captchaChars=[];
-                        this.captchaError='❌ '+(e?.message||this.texts.captchaLoadError||'Could not create CAPTCHA.'); this.captchaRefreshing=false; return false;
+                        const res = await fetch(`${API_URL}/api/withdraw/captcha-challenge`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id})
+                        });
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success || !result.challengeId || !result.captchaCode) {
+                            throw new Error(result.error || this.texts.captchaLoadError || 'Could not create CAPTCHA.');
+                        }
+                        this.captchaChallengeId = String(result.challengeId);
+                        this.setCaptchaVisual(result.captchaCode);
+                        return true;
+                    } catch (e) {
+                        console.error('Withdraw CAPTCHA challenge:',e);
+                        this.captchaChallengeId = '';
+                        this.captchaCode = '';
+                        this.captchaChars = [];
+                        this.captchaError = '❌ ' + (e?.message || this.texts.captchaLoadError || 'Could not create CAPTCHA.');
+                        this.captchaRefreshing = false;
+                        return false;
                     }
                 },
                 async newCaptchaCode() {
-                    if(this.captchaAction==='withdraw') return this.loadWithdrawCaptchaChallenge();
-                    return true; // reward CAPTCHA is created by server and cannot be regenerated client-side.
+                    if (this.captchaAction === 'withdraw') return this.loadWithdrawCaptchaChallenge();
+                    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                    let code = '';
+                    for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
+                    this.setCaptchaVisual(code);
+                    return true;
                 },
-                async startCaptcha(action,onSuccess) {
-                    this.captchaAction=action; this.captchaOnSuccess=onSuccess; this.captchaShow=true; this.captchaChallengeId='';
-                    this.captchaType='code'; this.captchaIconTarget=''; this.captchaIconOptions=[];
-                    const ready=await this.newCaptchaCode();
-                    this.$nextTick(()=>document.querySelector('.captcha-box')?.scrollIntoView({behavior:'smooth',block:'center'}));
-                    if(!ready&&action==='withdraw') return false; return true;
+                async startCaptcha(action, onSuccess) {
+                    this.captchaAction = action;
+                    this.captchaOnSuccess = onSuccess;
+                    this.captchaShow = true;
+                    this.captchaChallengeId = '';
+                    const ready = await this.newCaptchaCode();
+                    this.$nextTick(() => document.querySelector('.captcha-box')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+                    if (!ready && action === 'withdraw') return false;
+                    return true;
                 },
-                startSecurityChallenge(actionType,actionId,challenge) {
-                    if(this.captchaShow) return Promise.resolve('');
-                    return new Promise(resolve=>{
-                        this.captchaAction='security'; this.captchaSecurityActionType=String(actionType||''); this.captchaSecurityActionId=String(actionId||'');
-                        this.captchaChallengeId=String(challenge?.challengeId||''); this.captchaError=''; this.captchaInput=''; this.captchaCode=''; this.captchaChars=[];
-                        this.captchaType=challenge?.type==='icon'?'icon':'code';
-                        this.captchaIconTarget=String(challenge?.target||''); this.captchaIconOptions=Array.isArray(challenge?.options)?challenge.options.slice(0,6):[];
-                        if(this.captchaType==='code') this.setCaptchaVisual(String(challenge?.captchaCode||''));
-                        this.captchaOnSuccess=resolve; this.captchaShow=true;
-                    });
+                closeCaptcha() {
+                    const cancelledWithdraw = this.captchaAction === 'withdraw' && !this.withdrawCaptchaToken;
+                    this.captchaShow = false;
+                    this.captchaInput = '';
+                    this.captchaError = '';
+                    this.captchaChallengeId = '';
+                    this.captchaAction = '';
+                    this.captchaOnSuccess = null;
+                    if (cancelledWithdraw) this.withdrawSubmitting = false;
                 },
-                async ensureRewardActionSecurity(actionType,actionId) {
-                    try {
-                        const res=await fetch(`${API_URL}/api/security/action-gate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,actionType,actionId})});
-                        const result=await res.json().catch(()=>({}));
-                        if(res.ok&&result.success&&!result.challengeRequired) return {ok:true,challengeToken:''};
-                        if(result.challengeRequired&&result.challenge) {
-                            const token=await this.startSecurityChallenge(actionType,actionId,result.challenge);
-                            return token?{ok:true,challengeToken:String(token)}:{ok:false};
+                async verifyCaptcha() {
+                    const input = String(this.captchaInput || '').trim().toUpperCase();
+                    if (this.captchaAction === 'withdraw') {
+                        if (input.length !== 5 || !this.captchaChallengeId) {
+                            this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
+                            return;
                         }
-                        if(result.rateLimited) this.showNotification('⚠️ Thao tác quá nhanh. Vui lòng thử lại sau.');
-                        else this.showNotification('⚠️ '+(result.error||this.texts.serverConnectionError||'Security check failed.'));
-                        return {ok:false};
-                    } catch(e) {
-                        console.error('Security gate:',e); this.showNotification('⚠️ '+(this.texts.serverConnectionError||'Server connection error.')); return {ok:false};
-                    }
-                },
-                closeCaptcha(success=false) {
-                    const action=this.captchaAction; const resolver=this.captchaOnSuccess;
-                    const cancelledWithdraw=action==='withdraw'&&!this.withdrawCaptchaToken;
-                    this.captchaShow=false; this.captchaInput=''; this.captchaError=''; this.captchaChallengeId=''; this.captchaAction='';
-                    this.captchaSecurityActionId=''; this.captchaSecurityActionType=''; this.captchaIconTarget=''; this.captchaIconOptions=[]; this.captchaType='code'; this.captchaOnSuccess=null;
-                    if(cancelledWithdraw) this.withdrawSubmitting=false;
-                    if(!success&&action==='security'&&typeof resolver==='function') resolver('');
-                },
-                async verifyCaptcha(selectedIcon='') {
-                    const input=this.captchaType==='icon'?String(selectedIcon||''):String(this.captchaInput||'').trim().toUpperCase();
-                    if(this.captchaAction==='withdraw') {
-                        if(input.length!==5||!this.captchaChallengeId){this.captchaError='❌ '+(this.texts.captchaIncorrect||'Incorrect CAPTCHA. Please try again!');return;}
                         try {
-                            const res=await fetch(`${API_URL}/api/withdraw/captcha-verify`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,challengeId:this.captchaChallengeId,captchaInput:input})});
-                            const result=await res.json().catch(()=>({}));
-                            if(!res.ok||!result.verified||!result.withdrawCaptchaToken){const errorText='❌ '+(result.error||this.texts.captchaIncorrect||'Incorrect CAPTCHA. Please try again!');if(!result.retry)await this.loadWithdrawCaptchaChallenge();this.captchaError=errorText;return;}
-                            this.withdrawCaptchaToken=String(result.withdrawCaptchaToken); const fn=this.captchaOnSuccess; this.closeCaptcha(true); if(typeof fn==='function')await Promise.resolve(fn()); return;
-                        } catch(e){console.error('Withdraw CAPTCHA verify:',e);this.captchaError='❌ '+(this.texts.serverConnectionError||'Server connection error.');return;}
+                            const res = await fetch(`${API_URL}/api/withdraw/captcha-verify`, {
+                                method:'POST', headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify({userId:this.user.id, challengeId:this.captchaChallengeId, captchaInput:input})
+                            });
+                            const result = await res.json().catch(() => ({}));
+                            if (!res.ok || !result.verified || !result.withdrawCaptchaToken) {
+                                const errorText = '❌ ' + (result.error || this.texts.captchaIncorrect || 'Incorrect CAPTCHA. Please try again!');
+                                if (!result.retry) await this.loadWithdrawCaptchaChallenge();
+                                this.captchaError = errorText;
+                                return;
+                            }
+                            this.withdrawCaptchaToken = String(result.withdrawCaptchaToken);
+                            const fn = this.captchaOnSuccess;
+                            this.closeCaptcha();
+                            if (typeof fn === 'function') await Promise.resolve(fn());
+                            return;
+                        } catch (e) {
+                            console.error('Withdraw CAPTCHA verify:',e);
+                            this.captchaError = '❌ ' + (this.texts.serverConnectionError || 'Server connection error.');
+                            return;
+                        }
                     }
-                    if(this.captchaAction==='security') {
-                        if(!input||!this.captchaChallengeId){this.captchaError='❌ '+(this.texts.captchaIncorrect||'Incorrect CAPTCHA.');return;}
-                        try {
-                            const res=await fetch(`${API_URL}/api/security/challenge/verify`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,challengeId:this.captchaChallengeId,actionType:this.captchaSecurityActionType,actionId:this.captchaSecurityActionId,answer:input})});
-                            const result=await res.json().catch(()=>({}));
-                            if(!res.ok||!result.verified||!result.challengeToken){this.captchaError='❌ '+(result.error||this.texts.captchaIncorrect||'Incorrect CAPTCHA.');return;}
-                            const fn=this.captchaOnSuccess; this.closeCaptcha(true); if(typeof fn==='function')fn(String(result.challengeToken)); return;
-                        } catch(e){console.error('Security CAPTCHA verify:',e);this.captchaError='❌ '+(this.texts.serverConnectionError||'Server connection error.');return;}
+
+                    // Existing delivery CAPTCHA remains unchanged and local; only withdrawal requires server token.
+                    if (input.length !== 5 || input !== this.captchaCode) {
+                        this.captchaError = '❌ ' + (this.texts.captchaIncorrect || 'CAPTCHA không đúng. Vui lòng nhập lại!');
+                        await this.newCaptchaCode();
+                        return;
                     }
-                },
-                jitterRewardButton(event) {
-                    const el=event?.currentTarget;
-                    if(!el||el.disabled) return;
-                    this._rewardJitterCount=Number(this._rewardJitterCount||0)+1;
-                    if(this._rewardJitterCount<3||this._rewardJitterCount%2!==0) return;
-                    const x=Math.floor(Math.random()*13)-6, y=Math.floor(Math.random()*7)-3;
-                    el.style.setProperty('--jitter-x',`${x}px`); el.style.setProperty('--jitter-y',`${y}px`);
+                    const fn = this.captchaOnSuccess;
+                    this.closeCaptcha();
+                    if (typeof fn === 'function') Promise.resolve(fn()).catch(err => console.error('Captcha action error:', err));
                 },
 
                 // ==================== QUIZ ====================
@@ -4460,21 +4350,18 @@
                     this._rewardedRunning = true;
                     const actionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._rewardedActionId = actionId;
+                    const startedAt = Date.now();
+                    const requiresFiveSeconds = purpose !== 'passive';
+                    const MIN_AD_MS = 5000;
                     let token = '';
                     let sessionStarted = false;
                     let sdkOpened = false;
+                    let visibilityTimer = null;
                     let adVerified = false;
                     try {
                         if (typeof show_11457064 !== 'function' || window.__adBlockLikely) {
                             this.showNotification(this.texts.adBlocked || '🚫 Vui lòng tắt trình chặn quảng cáo để nhận thưởng.');
                             return false;
-                        }
-
-                        let challengeToken = '';
-                        if (['delivery','bonus-task','chest-spin','extra-delivery'].includes(purpose)) {
-                            const security = await this.ensureRewardActionSecurity(purpose, actionId);
-                            if (!security.ok) return false;
-                            challengeToken = String(security.challengeToken || '');
                         }
 
                         let sessionResponse = null;
@@ -4490,8 +4377,7 @@
                                         adType: 'rewarded',
                                         purpose,
                                         sessionId: this.securitySessionId,
-                                        actionId,
-                                        challengeToken
+                                        actionId
                                     })
                                 });
                                 sessionData = await sessionResponse.json().catch(() => ({}));
@@ -4510,25 +4396,8 @@
                                 return false; // chưa có token -> Monetag SDK tuyệt đối không mở
                             }
                             if (purpose === 'bonus-task' && sessionData?.limitReached) {
-                                this.bonusAdsToday = Math.min(15, Number(sessionData.bonusAdsToday ?? this.bonusAdsToday));
-                                this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.');
-                                return false;
-                            }
-                            if (sessionData?.limitReached) {
-                                if (purpose === 'chest-spin') this.spinAdCount = Math.min(5, Number(sessionData.spinAdCount ?? 5));
-                                if (purpose === 'extra-delivery') {
-                                    this.extraDeliveryAdsToday = Math.min(3, Number(sessionData.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday));
-                                    this.extraDeliveryCount = Math.min(3, Number(sessionData.extraDeliveryCount ?? this.extraDeliveryCount));
-                                }
-                                if (purpose === 'delivery') {
-                                    this.deliveryCount = Number(sessionData.deliveryCount ?? this.deliveryCount);
-                                    this.deliveryServerLimit = Math.min(13, Number(sessionData.limit ?? this.deliveryServerLimit));
-                                }
-                                this.showNotification('⚠️ ' + (sessionData.error || this.texts.deliveryLimitReached || 'Đã đạt giới hạn hôm nay.'));
-                                return false;
-                            }
-                            if (sessionData?.rateLimited) {
-                                this.showNotification('⚠️ Thao tác quá nhanh. Vui lòng thử lại sau.');
+                                this.bonusAdsToday = Number(sessionData.bonusAdsToday ?? this.bonusAdsToday);
+                                this.showNotification('⚠️ Bạn đã đạt giới hạn 30 lượt QC Rewarded hôm nay.');
                                 return false;
                             }
                             if (!(sessionData?.retry || !sessionResponse || [408,409,429,500,502,503,504].includes(sessionResponse.status))) break;
@@ -4552,7 +4421,11 @@
                             throw new Error(purpose === 'passive' ? 'Quảng cáo tự động không thể hiển thị.' : 'Rewarded Interstitial không thể mở.');
                         }
 
-                        // Monetag SDK resolved successfully: complete the server session immediately.
+                        // Chỉ passive được bỏ điều kiện 5 giây. Mọi Rewarded có reward vẫn giữ nguyên verification.
+                        if (requiresFiveSeconds) {
+                            const remaining = Math.max(0, MIN_AD_MS - (Date.now() - startedAt));
+                            if (remaining > 0) await new Promise(resolve => { visibilityTimer = setTimeout(resolve, remaining); });
+                        }
 
                         if (this._rewardedActionId !== actionId) return false;
 
@@ -4625,6 +4498,7 @@
                         this.showNotification(e?.message || failMessage);
                         return false;
                     } finally {
+                        if (visibilityTimer) clearTimeout(visibilityTimer);
                         if (sessionStarted && typeof window.notePassiveAdSuppression === 'function') {
                             window.notePassiveAdSuppression();
                         }
@@ -4920,9 +4794,9 @@
                             this.smartlinksToday = d.smartlinksToday ?? this.smartlinksToday;
                             this.smartlinkCount = d.smartlinkCount ?? this.smartlinkCount;
                             this.usedSmartlinks = d.usedSmartlinks ?? this.usedSmartlinks;
-                            this.spinAdCount = Math.min(5, Math.max(0, Number(d.spinAdCount ?? this.spinAdCount)));
+                            this.spinAdCount = d.spinAdCount ?? this.spinAdCount;
                             this.spinAdProgress = d.spinAdProgress ?? this.spinAdProgress;
-                            this.bonusAdsToday = Math.min(15, Math.max(0, Number(d.bonusAdsToday ?? this.bonusAdsToday)));
+                            this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
                             this.bonusAdNextAllowedAt = Number(d.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
                             this.updateBonusAdCooldown();
                             this.lastSmartlinkTime = Number(d.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
@@ -4934,9 +4808,9 @@
                             this.validInvites = d.validInvites ?? this.validInvites;
                             this.deliveryCount = d.deliveryCount ?? this.deliveryCount;
                             this.rewardedAdsToday = d.rewardedAdsToday ?? this.rewardedAdsToday;
-                            this.extraDeliveryAdsToday = Math.min(3, Math.max(0, Number(d.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday)));
-                            this.extraDeliveryCount = Math.min(3, Math.max(0, Number(d.extraDeliveryCount ?? this.extraDeliveryCount)));
-                            this.deliveryServerLimit = Math.min(13, Number(d.deliveryLimit ?? (10 + this.extraDeliveryCount)));
+                            this.extraDeliveryAdsToday = d.extraDeliveryAdsToday ?? this.extraDeliveryAdsToday;
+                            this.extraDeliveryCount = d.extraDeliveryCount ?? this.extraDeliveryCount;
+                            this.deliveryServerLimit = d.deliveryLimit ?? this.deliveryServerLimit;
                             this.chestOpensTotal = d.chestOpensTotal ?? this.chestOpensTotal;
                             this.chestOpensToday = d.chestOpensToday ?? this.chestOpensToday;
                             this.dailyTasks = Array.isArray(d.dailyTasks) ? this.localizeDailyTasks(d.dailyTasks) : this.dailyTasks;
