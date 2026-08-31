@@ -45,6 +45,59 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
+const SUPABASE_READ_TIMEOUT_MS = 6000;
+const SUPABASE_READ_MAX_ATTEMPTS = 2;
+function waitMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+function isTransientSupabaseReadFailure(error, status = 0) {
+    const httpStatus = Number(status || error?.status || 0);
+    if ([408, 425, 429, 500, 502, 503, 504].includes(httpStatus) || httpStatus >= 500) return true;
+    const code = String(error?.code || '').toUpperCase();
+    if (['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT','SUPABASE_READ_TIMEOUT'].includes(code)) return true;
+    const text = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+    return /timeout|timed out|fetch failed|network|socket|connection reset|aborted/.test(text);
+}
+async function runSupabaseRead(buildQuery, {
+    attempts = SUPABASE_READ_MAX_ATTEMPTS,
+    timeoutMs = SUPABASE_READ_TIMEOUT_MS,
+    baseDelayMs = 250
+} = {}) {
+    let lastError = null;
+    let lastStatus = 0;
+    const totalAttempts = Math.max(1, Number(attempts || 1));
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+        const controller = new AbortController();
+        let timer = null;
+        try {
+            let query = buildQuery();
+            if (query && typeof query.abortSignal === 'function') query = query.abortSignal(controller.signal);
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    controller.abort();
+                    const err = new Error(`Supabase read timeout after ${timeoutMs}ms`);
+                    err.code = 'SUPABASE_READ_TIMEOUT';
+                    reject(err);
+                }, timeoutMs);
+            });
+            const result = await Promise.race([Promise.resolve(query), timeout]);
+            if (timer) clearTimeout(timer);
+            lastStatus = Number(result?.status || 0);
+            if (!result?.error) return result;
+            lastError = result.error;
+            if (!isTransientSupabaseReadFailure(lastError, lastStatus) || attempt === totalAttempts - 1) return result;
+        } catch (error) {
+            if (timer) clearTimeout(timer);
+            lastError = error;
+            if (!isTransientSupabaseReadFailure(error, lastStatus) || attempt === totalAttempts - 1) {
+                return { data: null, error, status: lastStatus || 0 };
+            }
+        }
+        await waitMs(Math.min(1500, baseDelayMs * Math.pow(2, attempt)));
+    }
+    return { data: null, error: lastError || new Error('Supabase read failed'), status: lastStatus || 0 };
+}
+
 // ==================== TƯƠNG THÍCH SCHEMA SUPABASE (CHỐNG MẤT DỮ LIỆU) ====================
 // NGUYÊN NHÂN LỖI 42703 ("column users.quizDate does not exist", "users.weeklyAdsCount does not exist"...):
 // code ghi/đọc một số cột mà bảng "users" trên Supabase thật KHÔNG có. Postgres từ chối TOÀN BỘ câu lệnh
@@ -100,7 +153,10 @@ let userColumnsAt = 0;
 async function getUserColumns(forceRefresh = false) {
     if (!forceRefresh && userColumnsCache && Date.now() - userColumnsAt < 5 * 60 * 1000) return userColumnsCache;
     try {
-        const { data, error } = await supabase.from('users').select('*').limit(1);
+        const { data, error } = await runSupabaseRead(
+            () => supabase.from('users').select('*').limit(1),
+            { attempts: 2, timeoutMs: 6000 }
+        );
         if (error) throw error;
         if (Array.isArray(data) && data.length > 0) {
             userColumnsCache = new Set(Object.keys(data[0]));
@@ -110,54 +166,141 @@ async function getUserColumns(forceRefresh = false) {
     } catch (e) {
         console.error('Không đọc được danh sách cột bảng users:', e.message);
     }
-    if (!userColumnsCache) { userColumnsCache = new Set(CORE_USER_COLUMNS); userColumnsAt = Date.now(); }
-    return userColumnsCache;
+    // Fallback chỉ dùng trong request hiện tại; KHÔNG cache 5 phút sau một lỗi READ tạm thời.
+    return userColumnsCache || new Set(CORE_USER_COLUMNS);
 }
 
-// Bộ nhớ đệm cho phần dữ liệu lưu ngoài bảng users: đọc tức thì, ghi gộp mỗi 3 giây để không
-// nặng database và không có 2 request nào ghi đè mất dữ liệu của nhau.
-let userExtraCache = null;
-let userExtraDirty = false;
-let userExtraRevision = 0;
-let userExtraFlushedRevision = 0;
+// Dữ liệu ngoài schema users được lưu theo TỪNG USER trong app_settings.
+// Bản legacy `user_extra_state` chỉ còn là nguồn đọc fallback để tương thích dữ liệu cũ.
+// Không bao giờ coi lỗi READ tạm thời là `{}` hợp lệ rồi ghi ngược, vì điều đó có thể xóa hàng loạt dữ liệu.
+const USER_EXTRA_USER_KEY_PREFIX = `${USER_EXTRA_KEY}:user:`;
+let legacyUserExtraCache = null;
+let legacyUserExtraLoaded = false;
+const userExtraCache = new Map();
+const userExtraLoaded = new Set();
+const userExtraLoadPromises = new Map();
+const userExtraMutationQueues = new Map();
+const userExtraDirty = new Set();
+const userExtraRevision = new Map();
 let userExtraFlushQueue = Promise.resolve();
 let userExtraFlushTimer = null;
-async function loadUserExtraAll() {
-    try {
-        const { data, error } = await supabase.from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
-        if (error) throw error;
-        const value = data?.value;
-        if (!value) return {};
-        if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } }
-        return (typeof value === 'object' && !Array.isArray(value)) ? value : {};
-    } catch (e) {
-        console.error('Không đọc được user_extra_state:', e.message);
-        return {};
+
+function normalizeObjectSettingValue(value, keyName) {
+    if (value === null || value === undefined) return {};
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch (_) {}
+        throw new Error(`app_settings ${keyName} không phải JSON object hợp lệ.`);
     }
+    if (typeof value === 'object' && !Array.isArray(value)) return value;
+    throw new Error(`app_settings ${keyName} không phải object hợp lệ.`);
+}
+async function readAppSettingValueStrict(key) {
+    const { data, error } = await runSupabaseRead(
+        () => supabase.from('app_settings').select('value').eq('key', key).maybeSingle(),
+        { attempts: 2, timeoutMs: 6000 }
+    );
+    if (error) throw error;
+    return { found: !!data, value: data?.value };
+}
+async function loadLegacyUserExtraAll() {
+    if (legacyUserExtraLoaded) return legacyUserExtraCache;
+    const row = await readAppSettingValueStrict(USER_EXTRA_KEY);
+    const value = row.found ? normalizeObjectSettingValue(row.value, USER_EXTRA_KEY) : {};
+    legacyUserExtraCache = value;
+    legacyUserExtraLoaded = true;
+    return legacyUserExtraCache;
+}
+function userExtraSettingKey(userId) {
+    return `${USER_EXTRA_USER_KEY_PREFIX}${String(userId)}`;
+}
+async function loadUserExtraEntry(userId) {
+    const id = String(userId);
+    if (userExtraLoaded.has(id)) return userExtraCache.get(id) || {};
+    if (userExtraLoadPromises.has(id)) return userExtraLoadPromises.get(id);
+    const promise = (async()=>{
+        const row = await readAppSettingValueStrict(userExtraSettingKey(id));
+        let value;
+        if (row.found) {
+            // `{}` là tombstone hợp lệ: user đã được clear/reset và KHÔNG được fallback về legacy cũ.
+            value = normalizeObjectSettingValue(row.value, userExtraSettingKey(id));
+        } else {
+            const legacy = await loadLegacyUserExtraAll();
+            value = legacy[id] && typeof legacy[id] === 'object' && !Array.isArray(legacy[id])
+                ? structuredClone(legacy[id])
+                : {};
+        }
+        userExtraCache.set(id, value);
+        userExtraLoaded.add(id);
+        return value;
+    })();
+    userExtraLoadPromises.set(id,promise);
+    try { return await promise; }
+    finally { if (userExtraLoadPromises.get(id)===promise) userExtraLoadPromises.delete(id); }
+}
+async function acquireUserExtraMutationLock(userId) {
+    const id=String(userId);
+    const previous=userExtraMutationQueues.get(id)||Promise.resolve();
+    let releaseGate;
+    const gate=new Promise(resolve=>{releaseGate=resolve;});
+    const tail=previous.catch(()=>{}).then(()=>gate);
+    userExtraMutationQueues.set(id,tail);
+    await previous.catch(()=>{});
+    let released=false;
+    return ()=>{
+        if(released)return;
+        released=true;
+        releaseGate();
+        if(userExtraMutationQueues.get(id)===tail) userExtraMutationQueues.delete(id);
+    };
 }
 async function getUserExtraAll() {
-    if (!userExtraCache) userExtraCache = await loadUserExtraAll();
-    return userExtraCache;
+    const legacy = structuredClone(await loadLegacyUserExtraAll());
+    const merged = (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) ? legacy : {};
+    const pageSize = 500;
+    for (let from = 0; ; from += pageSize) {
+        const to = from + pageSize - 1;
+        const { data, error } = await runSupabaseRead(
+            () => supabase.from('app_settings')
+                .select('key,value')
+                .like('key', `${USER_EXTRA_USER_KEY_PREFIX}%`)
+                .order('key', { ascending: true })
+                .range(from, to),
+            { attempts: 2, timeoutMs: 6000 }
+        );
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        for (const row of rows) {
+            const id = String(row.key || '').slice(USER_EXTRA_USER_KEY_PREFIX.length);
+            if (!id) continue;
+            merged[id] = normalizeObjectSettingValue(row.value, row.key);
+        }
+        if (rows.length < pageSize) break;
+    }
+    // Dữ liệu dirty trong process hiện tại luôn mới hơn bản DB vừa đọc.
+    for (const [id, value] of userExtraCache.entries()) {
+        if (userExtraLoaded.has(id)) merged[id] = structuredClone(value || {});
+    }
+    return merged;
 }
 async function flushUserExtra() {
     const runFlush = async () => {
-        if (!userExtraCache) return true;
-        if (!userExtraDirty && userExtraFlushedRevision >= userExtraRevision) return true;
-
-        // Snapshot bất biến + queue tuần tự: một flush cũ không thể hoàn tất SAU flush mới rồi ghi đè
-        // mất thay đổi của user khác / request khác trong object user_extra_state dùng chung.
-        const revisionToFlush = userExtraRevision;
-        const snapshot = structuredClone(userExtraCache);
-        const { error } = await supabase.from('app_settings')
-            .upsert({ key: USER_EXTRA_KEY, value: snapshot }, { onConflict: 'key' });
-        if (error) {
-            userExtraDirty = true;
-            console.error('Không lưu được user_extra_state:', error.message);
-            return false;
+        let allOk = true;
+        for (const id of [...userExtraDirty]) {
+            const revisionToFlush = Number(userExtraRevision.get(id) || 0);
+            const snapshot = structuredClone(userExtraCache.get(id) || {});
+            const { error } = await supabase.from('app_settings')
+                .upsert({ key: userExtraSettingKey(id), value: snapshot }, { onConflict: 'key' });
+            if (error) {
+                allOk = false;
+                console.error(`Không lưu được user_extra_state của ${id}:`, error.message);
+                continue;
+            }
+            if (Number(userExtraRevision.get(id) || 0) === revisionToFlush) userExtraDirty.delete(id);
         }
-        userExtraFlushedRevision = Math.max(userExtraFlushedRevision, revisionToFlush);
-        userExtraDirty = userExtraFlushedRevision < userExtraRevision;
-        return true;
+        return allOk;
     };
     userExtraFlushQueue = userExtraFlushQueue.then(runFlush, runFlush);
     return userExtraFlushQueue;
@@ -170,40 +313,77 @@ function scheduleUserExtraFlush() {
     }, 3000);
 }
 async function getUserExtra(userId) {
-    const all = await getUserExtraAll();
-    return all[String(userId)] || {};
+    return loadUserExtraEntry(userId);
 }
 async function saveUserExtra(userId, values) {
-    const all = await getUserExtraAll();
-    const key = String(userId);
-    all[key] = { ...(all[key] || {}), ...values };
-    userExtraRevision += 1;
-    userExtraDirty = true;
-    scheduleUserExtraFlush();
+    const id = String(userId);
+    const release = await acquireUserExtraMutationLock(id);
+    try {
+        const current = await loadUserExtraEntry(id);
+        userExtraCache.set(id, { ...(current || {}), ...(values || {}) });
+        userExtraLoaded.add(id);
+        userExtraRevision.set(id, Number(userExtraRevision.get(id) || 0) + 1);
+        userExtraDirty.add(id);
+        scheduleUserExtraFlush();
+        // Persist ngay trước khi trả control; timer 3s chỉ còn là retry safety-net khi write tạm thất bại.
+        await flushUserExtra();
+    } finally {
+        release();
+    }
 }
 async function saveUserExtraAll(all) {
-    userExtraCache = all || {};
-    userExtraRevision += 1;
-    userExtraDirty = true;
+    const source = all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    for (const [id, value] of Object.entries(source)) {
+        userExtraCache.set(String(id), (value && typeof value === 'object' && !Array.isArray(value)) ? structuredClone(value) : {});
+        userExtraLoaded.add(String(id));
+        userExtraRevision.set(String(id), Number(userExtraRevision.get(String(id)) || 0) + 1);
+        userExtraDirty.add(String(id));
+    }
     return flushUserExtra();
 }
 // Nếu một field đã được ghi vào cột thật thì xoá bản sao cũ trong kho lưu tạm, tránh trường hợp
 // sau này thêm cột vào Supabase mà vẫn đọc nhầm giá trị cũ.
 async function pruneUserExtra(userId, keys) {
     if (!keys || keys.length === 0) return;
-    const all = await getUserExtraAll();
-    const entry = all[String(userId)];
-    if (!entry) return;
-    let changed = false;
-    keys.forEach(k => { if (k in entry) { delete entry[k]; changed = true; } });
-    if (changed) { userExtraRevision += 1; userExtraDirty = true; scheduleUserExtraFlush(); }
+    const id = String(userId);
+    const release = await acquireUserExtraMutationLock(id);
+    try {
+        const entry = await loadUserExtraEntry(id);
+        let changed = false;
+        const next = { ...(entry || {}) };
+        keys.forEach(k => { if (k in next) { delete next[k]; changed = true; } });
+        if (changed) {
+            userExtraCache.set(id, next);
+            userExtraLoaded.add(id);
+            userExtraRevision.set(id, Number(userExtraRevision.get(id) || 0) + 1);
+            userExtraDirty.add(id);
+            scheduleUserExtraFlush();
+        }
+    } finally {
+        release();
+    }
 }
 async function clearUserExtra(userId) {
-    if (userId === null) return saveUserExtraAll({});
-    const all = await getUserExtraAll();
-    delete all[String(userId)];
-    userExtraRevision += 1;
-    userExtraDirty = true;
+    if (userId === null) {
+        const { error: legacyError } = await supabase.from('app_settings').delete().eq('key', USER_EXTRA_KEY);
+        if (legacyError) return false;
+        const { error: perUserError } = await supabase.from('app_settings').delete().like('key', `${USER_EXTRA_USER_KEY_PREFIX}%`);
+        if (perUserError) return false;
+        legacyUserExtraCache = {};
+        legacyUserExtraLoaded = true;
+        userExtraCache.clear();
+        userExtraLoaded.clear();
+        userExtraLoadPromises.clear();
+        userExtraDirty.clear();
+        userExtraRevision.clear();
+        return true;
+    }
+    const id = String(userId);
+    // Ghi tombstone `{}` để legacy aggregate cũ không sống lại sau reset user.
+    userExtraCache.set(id, {});
+    userExtraLoaded.add(id);
+    userExtraRevision.set(id, Number(userExtraRevision.get(id) || 0) + 1);
+    userExtraDirty.add(id);
     return flushUserExtra();
 }
 setInterval(() => { flushUserExtra().catch(() => {}); }, 15000);
@@ -251,17 +431,37 @@ async function saveUserFields(userId, values = {}) {
                 : null;
         }
         if (error) return { error };
-        await pruneUserExtra(userId, Object.keys(known));
+        try { await pruneUserExtra(userId, Object.keys(known)); }
+        catch (pruneError) { console.error(`Không prune được user_extra_state ${userId}:`, pruneError.message); }
     }
-    if (Object.keys(extra).length > 0) await saveUserExtra(userId, extra);
+    if (Object.keys(extra).length > 0) {
+        try {
+            await saveUserExtra(userId, extra);
+        } catch (error) {
+            return { error };
+        }
+    }
     return { error: null };
 }
-// Đọc user đầy đủ = dữ liệu bảng users + các field đang lưu tạm trong app_settings
+// Đọc user đầy đủ = dữ liệu bảng users + các field đang lưu tạm trong app_settings.
+// Nếu users/app_settings READ lỗi thì trả lỗi thật; tuyệt đối không biến lỗi thành state rỗng/default.
 async function readUserRow(userId) {
-    const { data, error } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
-    if (error || !data) return { data: null, error: error || null };
-    const extra = await getUserExtra(userId);
-    return { data: { ...extra, ...data }, error: null };
+    try {
+        // Users row và app_settings extra là 2 READ độc lập -> chạy song song để tổng timeout vẫn nằm
+        // dưới timeout frontend (không cộng dồn 2 chuỗi retry rồi khiến browser AbortController cắt trước).
+        const [userResult, extra] = await Promise.all([
+            runSupabaseRead(
+                () => supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+                { attempts: 2, timeoutMs: 6000 }
+            ),
+            getUserExtra(userId)
+        ]);
+        const { data, error } = userResult || {};
+        if (error || !data) return { data: null, error: error || null };
+        return { data: { ...extra, ...data }, error: null };
+    } catch (error) {
+        return { data: null, error };
+    }
 }
 getUserColumns().then(cols => console.log(`✅ Đã đọc schema bảng users: ${cols.size} cột`)).catch(() => {});
 
@@ -664,7 +864,7 @@ async function safeSendLocalizedMessage(chatId, viText, enText, options = {}) {
 // 2) checked=true, isMember=false -> Telegram xác nhận user chưa tham gia/đã rời;
 // 3) checked=false                -> KHÔNG thể kiểm tra (timeout/403/429/network/bot thiếu quyền...).
 // Tuyệt đối không biến lỗi Telegram thành status='left', vì như vậy frontend sẽ khóa nhầm user thật.
-const MEMBERSHIP_CHECK_TIMEOUT_MS = 7000;
+const MEMBERSHIP_CHECK_TIMEOUT_MS = 5000;
 function isVerifiedTelegramMember(member) {
     const status = String(member?.status || '');
     if (['member', 'administrator', 'creator'].includes(status)) return true;
@@ -694,6 +894,37 @@ async function getChatMemberWithTimeout(chatId, userId) {
         if (timer) clearTimeout(timer);
     }
 }
+function telegramMembershipErrorCode(error) {
+    return Number(error?.response?.error_code || error?.response?.statusCode || error?.status || 0);
+}
+function shouldRetryTelegramMembership(error) {
+    if (error?.code === 'MEMBERSHIP_TIMEOUT') return true;
+    const status = telegramMembershipErrorCode(error);
+    if (status === 429 || status >= 500) return true;
+    const code = String(error?.code || '').toUpperCase();
+    if (['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT'].includes(code)) return true;
+    return /timeout|network|socket|connection reset|fetch failed/i.test(String(error?.message || ''));
+}
+async function getChatMemberWithRetry(chatId, userId, maxAttempts = 2) {
+    if (!Number.isFinite(Number(chatId))) {
+        const err = new Error('Telegram group ID chưa được cấu hình hợp lệ.');
+        err.code = 'MEMBERSHIP_CONFIG';
+        throw err;
+    }
+    let lastError = null;
+    const attempts = Math.max(1, Number(maxAttempts || 1));
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+            return await getChatMemberWithTimeout(chatId, userId);
+        } catch (error) {
+            lastError = error;
+            if (!shouldRetryTelegramMembership(error) || attempt === attempts - 1) throw error;
+            const retryAfter = Math.min(2500, Number(error?.response?.parameters?.retry_after || 0) * 1000);
+            await waitMs(retryAfter || (350 * Math.pow(2, attempt)));
+        }
+    }
+    throw lastError || new Error('membership_check_failed');
+}
 async function checkUserMembership(userId) {
     const uid = String(userId || '');
     if (!uid) {
@@ -701,8 +932,8 @@ async function checkUserMembership(userId) {
     }
     try {
         const results = await Promise.allSettled([
-            getChatMemberWithTimeout(GROUP_1_ID, uid),
-            getChatMemberWithTimeout(GROUP_2_ID, uid)
+            getChatMemberWithRetry(GROUP_1_ID, uid, 2),
+            getChatMemberWithRetry(GROUP_2_ID, uid, 2)
         ]);
         const failed = results.find(r => r.status === 'rejected');
         if (failed) {
@@ -1500,7 +1731,7 @@ async function acquireUserStateWriteLock(userId) {
     };
 }
 
-async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrders = 0, deltaSpins = 0, setFields = {}, maxRetries = 6 } = {}) {
+async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrders = 0, deltaSpins = 0, setFields = {}, minBalances = {}, maxRetries = 6 } = {}) {
     const id = String(userId);
     const numericDeltas = {
         coins: Number(deltaCoins || 0),
@@ -1521,6 +1752,15 @@ async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrder
         if (numericDeltas.coins !== 0) update.coins = Number(current.coins || 0) + numericDeltas.coins;
         if (numericDeltas.orders !== 0) update.orders = Number(current.orders || 0) + numericDeltas.orders;
         if (numericDeltas.spins !== 0) update.spins = Number(current.spins || 0) + numericDeltas.spins;
+
+        for (const field of ['coins','orders','spins']) {
+            if (!Object.prototype.hasOwnProperty.call(update, field)) continue;
+            if (!Object.prototype.hasOwnProperty.call(minBalances || {}, field)) continue;
+            const minimum = Number(minBalances[field]);
+            if (Number.isFinite(minimum) && Number(update[field]) < minimum) {
+                return { error: null, insufficientField: field, data: current };
+            }
+        }
 
         let query = supabase.from('users').update(update).eq('id', id);
         if (numericDeltas.coins !== 0) query = query.eq('coins', Number(current.coins || 0));
@@ -2783,40 +3023,72 @@ bot.command('checkID', async (ctx) => {
     );
 });
 
+async function claimAndRefundPendingWithdrawal(withdrawalId, targetStatus, reason) {
+    const { data: claimedRows, error: claimError } = await supabase.from('withdrawals')
+        .update({ status: targetStatus, reason })
+        .eq('id', withdrawalId)
+        .eq('status', 'pending')
+        .select('*');
+    if (claimError) return { error: claimError, claimed: false };
+    const withdrawal = claimedRows?.[0];
+    if (!withdrawal) return { error: null, claimed: false };
+
+    const refundOrders = Number(withdrawal.ordersAmount || (Math.floor(Number(withdrawal.amount || 0) / 1000) * 10000));
+    const refund = await atomicWalletMutation(withdrawal.userId, { deltaOrders: refundOrders });
+    if (refund.error) {
+        // CAS claim đã khóa duplicate refund. Nếu cộng ví thất bại rõ ràng thì trả status về pending
+        // (chỉ khi vẫn đúng status mình vừa claim) để admin có thể thử lại mà không hoàn hai lần.
+        const { error: rollbackStatusError } = await supabase.from('withdrawals')
+            .update({ status: 'pending', reason: null })
+            .eq('id', withdrawal.id)
+            .eq('status', targetStatus);
+        if (rollbackStatusError) {
+            console.error(`CRITICAL: refund ${withdrawal.id} thất bại và không rollback được status:`, rollbackStatusError.message);
+        }
+        return { error: refund.error, claimed: true, refunded: false, withdrawal, refundOrders };
+    }
+    return {
+        error: null,
+        claimed: true,
+        refunded: true,
+        withdrawal,
+        refundOrders,
+        wallet: refund.data
+    };
+}
+
 // /hoantra - Hoàn trả đơn rút tiền chưa duyệt
 bot.command('hoantra', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const parts = ctx.message.text.split(' ');
     if (parts.length < 2) return ctx.reply("❌ Sử dụng: /hoantra <userId> (hoàn trả tất cả đơn chưa duyệt của user)");
     const targetId = parts[1];
-    
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
+
+    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id').eq('userId', targetId).eq('status', 'pending');
     if (withdrawError) {
         console.error("Lỗi lấy đơn rút để hoàn trả:", withdrawError);
         return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
     }
     if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có đơn chờ duyệt của user này.");
-    
+
     let totalRefundedOrdersValue = 0;
+    let refundedCount = 0;
     for (const w of withdrawals) {
-        // Tính lại số đơn hàng đã bị trừ khi user yêu cầu rút (1000 VNĐ = 10000 đơn hàng)
-        const ordersToRefund = Math.floor((w.amount || 0) / 1000) * 10000; 
-        
-        await supabase.from('withdrawals').update({ status: 'refunded', reason: 'Hoàn trả bởi admin' }).eq('id', w.id);
-        
-        const { data: userData, error: userError } = await supabase.from('users').select('orders').eq('id', targetId).single();
-        if (userError) {
-            console.error("Lỗi lấy user để hoàn trả đơn hàng:", userError);
-            continue; // Bỏ qua nếu lỗi, cố gắng xử lý các yêu cầu rút khác
+        const result = await claimAndRefundPendingWithdrawal(w.id, 'refunded', 'Hoàn trả bởi admin');
+        if (result.error) {
+            console.error(`Lỗi hoàn trả withdrawal ${w.id}:`, result.error.message || result.error);
+            continue;
         }
-        const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await touchWallet(targetId, { orders: newOrders });
-        
-        totalRefundedOrdersValue += ordersToRefund; // Đây là giá trị đơn hàng, không phải số tiền
-        await safeSendLocalizedMessage(targetId, `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${ordersToRefund.toLocaleString()}`, `🔄 Your withdrawal request has been REFUNDED.\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`);
+        if (!result.claimed || !result.refunded) continue;
+        refundedCount += 1;
+        totalRefundedOrdersValue += result.refundOrders;
+        await safeSendLocalizedMessage(targetId,
+            `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${result.refundOrders.toLocaleString()}`,
+            `🔄 Your withdrawal request has been REFUNDED.\n📦 Orders returned: ${result.refundOrders.toLocaleString()}`);
     }
-    
-    ctx.reply(`✅ Đã hoàn trả ${withdrawals.length} đơn của ${targetId}.\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
+
+    if (!refundedCount) return ctx.reply("ℹ️ Các đơn rút này đã được xử lý bởi một thao tác khác hoặc chưa thể hoàn trả.");
+    ctx.reply(`✅ Đã hoàn trả ${refundedCount} đơn của ${targetId}.\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
 });
 
 // /duyet + ID
@@ -2865,34 +3137,33 @@ bot.command('huy', async (ctx) => {
     if (parts.length < 3) return ctx.reply("❌ Sử dụng: /huy <userId> <lý do>");
     const targetId = parts[1];
     const reason = parts.slice(2).join(' ');
-    
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
+
+    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id').eq('userId', targetId).eq('status', 'pending');
     if (withdrawError) {
         console.error("Lỗi lấy đơn rút để hủy:", withdrawError);
         return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
     }
     if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt.");
-    
-    let totalRefundedOrdersValue = 0;
-    for (const w of withdrawals) {
-        // Tính lại số đơn hàng đã bị trừ khi user yêu cầu rút (1000 VNĐ = 10000 đơn hàng)
-        const ordersToRefund = Math.floor((w.amount || 0) / 1000) * 10000; 
 
-        await supabase.from('withdrawals').update({ status: 'rejected', reason: reason }).eq('id', w.id);
-        
-        const { data: userData, error: userError } = await supabase.from('users').select('orders').eq('id', targetId).single();
-        if (userError) {
-            console.error("Lỗi lấy user để hoàn trả đơn hàng khi hủy:", userError);
+    let totalRefundedOrdersValue = 0;
+    let rejectedCount = 0;
+    for (const w of withdrawals) {
+        const result = await claimAndRefundPendingWithdrawal(w.id, 'rejected', reason);
+        if (result.error) {
+            console.error(`Lỗi hủy/refund withdrawal ${w.id}:`, result.error.message || result.error);
             continue;
         }
-        const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await touchWallet(targetId, { orders: newOrders });
-        
-        totalRefundedOrdersValue += ordersToRefund;
-        await safeSendLocalizedMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${ordersToRefund.toLocaleString()}`, `❌ Your withdrawal request was *REJECTED*.\n📝 Reason: ${reason}\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`, { parse_mode: 'Markdown' });
+        if (!result.claimed || !result.refunded) continue;
+        rejectedCount += 1;
+        totalRefundedOrdersValue += result.refundOrders;
+        await safeSendLocalizedMessage(targetId,
+            `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${result.refundOrders.toLocaleString()}`,
+            `❌ Your withdrawal request was *REJECTED*.\n📝 Reason: ${reason}\n📦 Orders returned: ${result.refundOrders.toLocaleString()}`,
+            { parse_mode: 'Markdown' });
     }
-    
-    ctx.reply(`✅ Đã hủy yêu cầu rút tiền của ${targetId}.\n📝 Lý do: ${reason}\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
+
+    if (!rejectedCount) return ctx.reply("ℹ️ Các đơn rút này đã được xử lý bởi một thao tác khác hoặc chưa thể hoàn trả.");
+    ctx.reply(`✅ Đã hủy ${rejectedCount} yêu cầu rút tiền của ${targetId}.\n📝 Lý do: ${reason}\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
 });
 
 // /donrutall - Thống kê đơn rút chưa duyệt + check IP trùng
@@ -3661,20 +3932,28 @@ app.post('/api/save-ip/:id', async (req, res) => {
 // API lấy user (kèm level stats)
 app.get('/api/user/:id', async (req, res) => {
     let { data, error } = await readUserRow(req.params.id);
+    if (error) {
+        console.error("Lỗi lấy user:", error);
+        return res.status(503).json({ error: "Failed to fetch user data", retry: true });
+    }
+    if (!data) return res.status(404).json({ error: "User not found" });
+
     // Sang ngày mới (0h00 giờ VN) thì SERVER tự reset, nên tải lại app hay tắt/mở bot đều KHÔNG
     // tạo thêm lượt câu hỏi / SmartLink / nhiệm vụ như trước.
-    if (data && !isCurrentVietnamDay(data.lastResetDate)) {
+    if (!isCurrentVietnamDay(data.lastResetDate)) {
         const { error: resetError } = await saveUserFields(req.params.id, {
             ...dailyResetFields(), walletUpdatedAt: new Date().toISOString()
         });
-        if (!resetError) ({ data } = await readUserRow(req.params.id));
-    }
-    if (!data) {
-        if (!error || error.code === 'PGRST116') { // Not Found
-            return res.status(404).json({ error: "User not found" });
+        if (resetError) {
+            console.error("Lỗi reset ngày khi tải user:", resetError);
+            return res.status(503).json({ error: "Daily state is temporarily unavailable", retry: true });
         }
-        console.error("Lỗi lấy user:", error);
-        return res.status(500).json({ error: "Failed to fetch user data" });
+        const refreshed = await readUserRow(req.params.id);
+        if (refreshed.error || !refreshed.data) {
+            console.error("Lỗi đọc lại user sau reset ngày:", refreshed.error);
+            return res.status(503).json({ error: "Failed to refresh user data", retry: true });
+        }
+        data = refreshed.data;
     }
     // Parse referralMilestones if stored as JSON string (bọc try/catch để 1 dòng dữ liệu hỏng
     // không làm crash cả request, khiến client không bao giờ nhận được phản hồi)
@@ -3753,6 +4032,10 @@ app.post('/api/user/:id', async (req, res) => {
         }
 
         let { data: current, error: currentError } = await readUserRow(userId);
+        if (currentError) {
+            console.error(`Không đọc được user ${userId} trước khi save:`, currentError.message || currentError);
+            return res.status(503).json({ success:false, retry:true, error:'Dữ liệu server tạm thời chưa đọc được, chưa lưu snapshot client.' });
+        }
         if (!current) {
             // Chưa có bản ghi (mở Mini App trước khi /start) -> tạo mới ngay để KHÔNG mất dữ liệu người dùng
             const { known: seedRow } = await splitUserFields({
@@ -4890,6 +5173,35 @@ app.post('/api/chest/open', async (req,res) => {
     }
 });
 
+// Đổi 500 Đơn Hàng = +1 lượt mở rương: wallet phải do SERVER xử lý, không cho client tự trừ/cộng.
+app.post('/api/chest/exchange', async (req,res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if (!userId) return res.status(400).json({success:false,error:'Thiếu userId.'});
+    try {
+        const mutation = await atomicWalletMutation(userId, {
+            deltaOrders: -500,
+            deltaSpins: 1,
+            minBalances: { orders: 0 }
+        });
+        if (mutation.error) {
+            return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        }
+        if (mutation.insufficientField === 'orders') {
+            return res.status(400).json({success:false,insufficientOrders:true,error:'Cần ít nhất 500 Đơn Hàng để đổi lượt mở rương.'});
+        }
+        return res.json({
+            success:true,
+            orders:Number(mutation.data?.orders || 0),
+            spins:Number(mutation.data?.spins || 0),
+            walletUpdatedAt:mutation.data?.walletUpdatedAt || null
+        });
+    } catch(e) {
+        console.error('Lỗi đổi Đơn Hàng lấy lượt rương:',e);
+        return res.status(500).json({success:false,retry:true,error:'Không thể đổi lượt rương lúc này.'});
+    }
+});
+
 // ==================== NÂNG CẤP XE (SAU KHI XEM REWARDED AD) ====================
 // FIX LỖI "NÂNG CẤP XE BÁO THÀNH CÔNG NHƯNG KHÔNG TRỪ COIN / KHÔNG TĂNG LEVEL": trước đây việc nâng cấp
 // (trừ coin + tăng truckLevel) được xử lý HOÀN TOÀN Ở CLIENT trong index.txt, rồi mới gọi saveState() để
@@ -5574,14 +5886,27 @@ function makeAdToken() { return `${Date.now()}_${Math.random().toString(36).slic
 
 // Persistent idempotency records for server-authoritative Rewarded actions and SmartLink.
 const PERSISTENT_EVENT_PREFIX = 'reward_event:';
+async function readPersistentEventStrict(key) {
+    const { data, error } = await runSupabaseRead(
+        () => supabase.from('app_settings').select('value').eq('key', key).maybeSingle(),
+        { attempts: 2, timeoutMs: 6000 }
+    );
+    if (error) throw error;
+    if (!data) return null;
+    if (data.value === null || data.value === undefined) return null;
+    if (typeof data.value === 'string') {
+        try {
+            const parsed = JSON.parse(data.value);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch (_) {}
+        throw new Error(`Persistent marker ${key} chứa JSON không hợp lệ.`);
+    }
+    if (typeof data.value === 'object' && !Array.isArray(data.value)) return data.value;
+    throw new Error(`Persistent marker ${key} không phải object hợp lệ.`);
+}
 async function readPersistentEvent(key) {
     try {
-        const { data, error } = await supabase.from('app_settings').select('value').eq('key', key).maybeSingle();
-        if (error || !data?.value) return null;
-        if (typeof data.value === 'string') {
-            try { return JSON.parse(data.value); } catch (_) { return null; }
-        }
-        return (typeof data.value === 'object' && !Array.isArray(data.value)) ? data.value : null;
+        return await readPersistentEventStrict(key);
     } catch (e) {
         console.error('Persistent reward event read failed:', e.message);
         return null;
@@ -5603,10 +5928,14 @@ async function createPersistentEventOnce(key, value) {
         const { error } = await supabase.from('app_settings').insert({ key, value });
         if (!error) return { created: true, value, error: null };
         if (error.code === '23505') {
-            const existing = await readPersistentEvent(key);
-            return existing
-                ? { created: false, value: existing, error: null }
-                : { created: false, value: null, error: new Error(`Marker ${key} đã tồn tại nhưng chưa đọc lại được.`) };
+            try {
+                const existing = await readPersistentEventStrict(key);
+                return existing
+                    ? { created: false, value: existing, error: null }
+                    : { created: false, value: null, error: new Error(`Marker ${key} đã tồn tại nhưng không có value.`) };
+            } catch (readError) {
+                return { created: false, value: null, error: readError };
+            }
         }
         return { created: false, value: null, error };
     } catch (error) {
@@ -5664,7 +5993,7 @@ function isValidGoldenHourEvent(event, dayKey) {
 function isValidGoldenHourSchedule(schedule, dayKey) {
     if (!schedule || schedule.dayKey !== dayKey || !Array.isArray(schedule.events)) return false;
     if (schedule.events.length > GOLDEN_HOUR_MAX_EVENTS_PER_DAY) return false;
-    if (schedule.events.length === 0 && Number(schedule.legacyConsumedCount || 0) < GOLDEN_HOUR_MAX_EVENTS_PER_DAY) return false;
+    if (schedule.events.length === 0 && Number(schedule.legacyConsumedCount || 0) < GOLDEN_HOUR_MAX_EVENTS_PER_DAY && schedule.scheduleClosedForDay !== true) return false;
     const events = schedule.events.map(normalizeGoldenHourEvent).sort((a,b)=>a.startAt-b.startAt);
     for (let i=0;i<events.length;i++) {
         if (!isValidGoldenHourEvent(events[i], dayKey)) return false;
@@ -5697,6 +6026,29 @@ function buildGoldenHourSchedule(dayKey) {
 // Migrate schedule legacy 3 event của CHÍNH ngày đang chạy mà không "random lại từ đầu" rồi vô tình
 // phát sinh event thứ 3/4. Những event đã start được tính là đã tiêu thụ; chỉ phần quota còn lại mới
 // được phép giữ/tạo tiếp. Event đang active được giữ để không cắt X2 giữa chừng.
+function buildSafeFutureGoldenHourEvent(dayKey, earliestStartAt, existingStarts = [], suffix = 'migrated') {
+    const dayStart = vietnamDayStartMs(dayKey);
+    const minAt = dayStart + GOLDEN_HOUR_MIN_START_MINUTE * 60000;
+    const maxAt = dayStart + GOLDEN_HOUR_MAX_START_MINUTE * 60000;
+    let startAt = Math.max(Number(earliestStartAt || 0), minAt);
+    startAt = Math.ceil(startAt / 60000) * 60000;
+    const gapMs = GOLDEN_HOUR_MIN_GAP_MINUTES * 60000;
+    while (startAt <= maxAt) {
+        if ((existingStarts || []).every(existing => Math.abs(startAt - Number(existing || 0)) >= gapMs)) {
+            const minute = Math.round((startAt - dayStart) / 60000);
+            return {
+                id:`${dayKey}-${suffix}-${minute}`,
+                startAt,
+                endAt:startAt + GOLDEN_HOUR_DURATION_MS
+            };
+        }
+        startAt += 60000;
+    }
+    return null;
+}
+// Migrate schedule legacy 3 event của CHÍNH ngày đang chạy mà không "random lại từ đầu" rồi vô tình
+// phát sinh event thứ 3/4. Những event đã start được tính là đã tiêu thụ; chỉ phần quota còn lại mới
+// được phép giữ/tạo tiếp. Event đang active được giữ nếu nó nằm trong quota 2 event đầu tiên.
 function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
     const legacyEvents = Array.isArray(existing?.events)
         ? existing.events.map(normalizeGoldenHourEvent).filter(e=>isValidGoldenHourEvent(e,dayKey)).sort((a,b)=>a.startAt-b.startAt)
@@ -5708,7 +6060,10 @@ function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
     const remainingCount = Math.max(0, GOLDEN_HOUR_MAX_EVENTS_PER_DAY-consumedCount);
     const activeEvent = started.slice(0,GOLDEN_HOUR_MAX_EVENTS_PER_DAY).reverse().find(e=>now<e.endAt) || null;
     const selected = activeEvent ? [activeEvent] : [];
-    const lastConsumedStartAt = started.length ? Number(started[started.length-1].startAt) : 0;
+    // IMPORTANT: nếu legacy có event thứ 3 đã start thì ngày đó vẫn phải coi quota đã đủ 2,
+    // nhưng gap cho event còn lại (khi mới tiêu thụ 1) phải tính từ event ĐÃ tiêu thụ trong quota.
+    const countedStarted = started.slice(0,GOLDEN_HOUR_MAX_EVENTS_PER_DAY);
+    const lastConsumedStartAt = countedStarted.length ? Number(countedStarted[countedStarted.length-1].startAt) : 0;
 
     let futureCandidates = legacyEvents.filter(e=>e.startAt>now);
     if (lastConsumedStartAt) {
@@ -5716,7 +6071,7 @@ function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
     }
 
     if (consumedCount===0) {
-        // Chưa event nào xảy ra: giữ tối đa 2 mốc legacy nếu chúng đáp ứng gap mới >=5 giờ.
+        // Chưa event nào xảy ra: ưu tiên giữ 2 mốc legacy hợp lệ nếu chúng đã cách nhau >=5 giờ.
         let pair = null;
         for (let i=0;i<futureCandidates.length && !pair;i++) {
             for (let j=i+1;j<futureCandidates.length;j++) {
@@ -5726,15 +6081,43 @@ function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
                 }
             }
         }
-        if (pair) selected.push(...pair);
-        else {
-            const fresh=buildGoldenHourSchedule(dayKey);
-            const freshFuture=fresh.events.filter(e=>Number(e.startAt)>now);
-            if (freshFuture.length===2) selected.push(...freshFuture);
-            else if (freshFuture.length===1) selected.push(freshFuture[0]);
+        if (pair) {
+            selected.push(...pair);
+        } else {
+            const first = futureCandidates[0] || buildSafeFutureGoldenHourEvent(dayKey, now + 60000, [], 'repair-1');
+            if (first) selected.push(first);
+            if (selected.length < GOLDEN_HOUR_MAX_EVENTS_PER_DAY) {
+                const existingStarts = selected.map(e=>Number(e.startAt));
+                let second = buildSafeFutureGoldenHourEvent(
+                    dayKey,
+                    Math.max(now + 60000, Number(first?.startAt || 0) + GOLDEN_HOUR_MIN_GAP_MINUTES*60000),
+                    existingStarts,
+                    'repair-2'
+                );
+                // Nếu không còn đủ 5 giờ PHÍA SAU mốc legacy, thử đặt một mốc an toàn PHÍA TRƯỚC nó.
+                if (!second && first) {
+                    const candidateBefore = buildSafeFutureGoldenHourEvent(dayKey, now + 60000, [], 'repair-2b');
+                    if (candidateBefore && Number(first.startAt)-Number(candidateBefore.startAt)>=GOLDEN_HOUR_MIN_GAP_MINUTES*60000) {
+                        second = candidateBefore;
+                    }
+                }
+                if (second) selected.push(second);
+            }
         }
-    } else if (remainingCount>0 && futureCandidates.length>0) {
-        selected.push(futureCandidates[0]);
+    } else if (remainingCount>0) {
+        // Đã xảy ra đúng 1 event: chỉ được thêm TỐI ĐA 1 event và phải cách event đó >=5 giờ.
+        const legacyFuture = futureCandidates[0] || null;
+        if (legacyFuture) {
+            selected.push(legacyFuture);
+        } else {
+            const generated = buildSafeFutureGoldenHourEvent(
+                dayKey,
+                Math.max(now + 60000, lastConsumedStartAt + GOLDEN_HOUR_MIN_GAP_MINUTES*60000),
+                selected.map(e=>Number(e.startAt)),
+                'repair-last'
+            );
+            if (generated) selected.push(generated);
+        }
     }
 
     const deduped = [];
@@ -5745,6 +6128,7 @@ function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
         if (deduped.length>=GOLDEN_HOUR_MAX_EVENTS_PER_DAY) break;
     }
 
+    const scheduleClosedForDay = deduped.length===0 && consumedCount < GOLDEN_HOUR_MAX_EVENTS_PER_DAY;
     return {
         dayKey,
         createdAt:Number(existing?.createdAt || Date.now()),
@@ -5752,6 +6136,7 @@ function migrateLegacyGoldenHourSchedule(existing, dayKey, now = Date.now()) {
         migratedFromLegacy:true,
         legacyConsumedCount:consumedCount,
         legacyLastConsumedStartAt:lastConsumedStartAt || null,
+        scheduleClosedForDay,
         events:deduped
     };
 }
@@ -5761,7 +6146,9 @@ async function ensureGoldenHourSchedule(dayKey = vietnamDayKey()) {
     goldenHourSchedulePromiseDay = dayKey;
     goldenHourSchedulePromise = (async()=>{
         const key = goldenHourScheduleKey(dayKey);
-        const existing = await readPersistentEvent(key);
+        // Scheduler/quota là fail-closed theo PERSISTENCE: nếu Supabase tạm lỗi thì không được
+        // coi marker "không tồn tại" rồi random/tạo lịch mới.
+        const existing = await readPersistentEventStrict(key);
         if (isValidGoldenHourSchedule(existing, dayKey)) {
             goldenHourScheduleCache = {...existing,events:[...existing.events].sort((a,b)=>Number(a.startAt)-Number(b.startAt))};
             return goldenHourScheduleCache;
@@ -5784,15 +6171,29 @@ async function ensureGoldenHourSchedule(dayKey = vietnamDayKey()) {
 
         let chosen = generated;
         if (existing) {
-            // Chỉ repair đúng key Golden Hour của ngày hiện tại; không đụng bất kỳ user/app_settings khác.
-            const repaired = await writePersistentEvent(key, generated, 4);
+            // Repair legacy/invalid schedule phải có 1 plan DUY NHẤT persist trước. Hai Render instance
+            // cùng migrate sẽ cùng dùng plan thắng insert, không thể random rồi ghi đè lịch của nhau.
+            const repairKey = `golden_hour_repair:v3:${dayKey}`;
+            const repairOnce = await createPersistentEventOnce(repairKey, generated);
+            if (repairOnce.error) throw repairOnce.error;
+            const repairPlan = repairOnce.value;
+            if (!isValidGoldenHourSchedule(repairPlan, dayKey)) {
+                throw new Error('Golden Hour repair plan không hợp lệ.');
+            }
+            const repaired = await writePersistentEvent(key, repairPlan, 4);
             if (!repaired) throw new Error('Không lưu được Golden Hour schedule đã migrate/repair.');
-            const readBack = await readPersistentEvent(key);
-            if (isValidGoldenHourSchedule(readBack, dayKey)) chosen = readBack;
+            const readBack = await readPersistentEventStrict(key);
+            if (!isValidGoldenHourSchedule(readBack, dayKey)) {
+                throw new Error('Golden Hour schedule đọc lại không hợp lệ.');
+            }
+            chosen = readBack;
         } else {
             const created = await createPersistentEventOnce(key, generated);
             if (created.error) throw created.error;
-            if (isValidGoldenHourSchedule(created.value, dayKey)) chosen = created.value;
+            if (!isValidGoldenHourSchedule(created.value, dayKey)) {
+                throw new Error('Golden Hour schedule vừa tạo không hợp lệ.');
+            }
+            chosen = created.value;
         }
         goldenHourScheduleCache = {...chosen,events:[...(chosen.events||[])].sort((a,b)=>Number(a.startAt)-Number(b.startAt))};
         return goldenHourScheduleCache;
@@ -6654,6 +7055,8 @@ app.post('/api/withdraw', async (req, res) => {
     const accountInfoText = normalizedMethod === 'bank' ? `${String(bankName).trim()} - ${normalizedAccountName} - ${normalizedAccountNumber}` : `${normalizedWalletType} - ${normalizedAccountNumber}`;
 
     let captchaReservation = null;
+    let captchaClaimKey = '';
+    let captchaClaimOwned = false;
     let ordersDebited = false;
     const restoreCaptchaReservation = async () => {
         if (!captchaReservation) return;
@@ -6666,14 +7069,39 @@ app.post('/api/withdraw', async (req, res) => {
         }, 3);
         captchaReservation = null;
     };
+    const releaseCaptchaClaim = async () => {
+        if (!captchaClaimOwned || !captchaClaimKey) return;
+        const { error } = await supabase.from('app_settings').delete().eq('key', captchaClaimKey);
+        if (error) console.error('Không release được withdrawal CAPTCHA claim:', error.message);
+        else captchaClaimOwned = false;
+    };
 
     try {
+        // Distributed one-time claim: in-memory withdrawalProcessing/acquireWithdrawalQueue chỉ khóa 1 process.
+        // Marker UNIQUE này chặn 2 Render instance cùng tiêu thụ một CAPTCHA và tạo 2 withdrawal.
+        captchaClaimKey = persistentEventKey('withdraw-captcha-claim', captchaToken);
+        const captchaClaim = await createPersistentEventOnce(captchaClaimKey, {
+            userId: withdrawalUserId,
+            status:'processing',
+            claimedAt:Date.now(),
+            result:null
+        });
+        if (captchaClaim.error) {
+            return res.status(503).json({success:false,retry:true,error:'Chưa khóa được yêu cầu rút tiền. Vui lòng thử lại.'});
+        }
+        if (!captchaClaim.created) {
+            if (captchaClaim.value?.result?.success) return res.json({...captchaClaim.value.result,idempotent:true});
+            return res.status(409).json({success:false,retry:true,error:'Yêu cầu rút tiền này đang được xử lý hoặc đã được tiếp nhận.'});
+        }
+        captchaClaimOwned = true;
+
         // Reserve the verified CAPTCHA token BEFORE touching Orders. This closes the replay window where
         // a successful withdrawal could be repeated if the final token-consume persistence failed.
         captchaReservation = {...captchaGrant,used:true,status:'processing',processingAt:Date.now(),result:null};
         const captchaReserved = await writePersistentEvent(captchaTokenKey,captchaReservation,4);
         if (!captchaReserved) {
             captchaReservation = null;
+            await releaseCaptchaClaim();
             return res.status(503).json({success:false,retry:true,error:'Chưa khóa được CAPTCHA rút tiền. Vui lòng thử lại, không cần tạo CAPTCHA mới.'});
         }
 
@@ -6696,6 +7124,7 @@ app.post('/api/withdraw', async (req, res) => {
         }
         if (!updatedRows || updatedRows.length === 0) {
             await restoreCaptchaReservation();
+            await releaseCaptchaClaim();
             return res.status(409).json({ error: "Số dư của bạn vừa thay đổi, vui lòng thử lại." });
         }
         ordersDebited = true;
@@ -6716,11 +7145,7 @@ app.post('/api/withdraw', async (req, res) => {
         if (withdrawInsertError) {
             // CHỐNG MẤT ĐƠN HÀNG: đơn hàng đã bị trừ trước khi tạo đơn rút. Nếu tạo đơn rút thất bại
             // thì hoàn lại đúng số đã trừ, thay vì để người dùng mất trắng số dư như trước.
-            const { data: afterFail } = await readUserRow(userId);
-            const rollback = await saveUserFields(userId, {
-                orders: Number(afterFail?.orders || 0) + ordersAmount,
-                walletUpdatedAt: new Date().toISOString()
-            });
+            const rollback = await atomicWalletMutation(userId, { deltaOrders: ordersAmount });
             if (!rollback.error) {
                 ordersDebited = false;
                 await restoreCaptchaReservation();
@@ -6744,11 +7169,23 @@ app.post('/api/withdraw', async (req, res) => {
         } else {
             captchaReservation = null;
         }
+        // Lưu kết quả vào distributed claim. Nếu write này tạm lỗi thì marker processing ban đầu vẫn còn,
+        // tiếp tục fail-closed chống duplicate thay vì xóa claim rồi cho tạo đơn thứ hai.
+        const claimFinalSaved = await writePersistentEvent(captchaClaimKey, {
+            userId:withdrawalUserId,
+            status:'consumed',
+            claimedAt:captchaClaim?.value?.claimedAt || Date.now(),
+            consumedAt:Date.now(),
+            result:withdrawResult
+        }, 4);
+        if (!claimFinalSaved) console.error('Không lưu được kết quả distributed withdrawal claim', txCode);
+        captchaClaimOwned = false; // giữ marker vĩnh viễn dù final write thành công hay tạm fail
 
         // Trả về ĐÚNG giá trị orders + walletUpdatedAt vừa lưu để client SET trực tiếp (không tự trừ cục bộ nữa)
         res.json(withdrawResult);
         } catch (error) {
             if (!ordersDebited && captchaReservation) await restoreCaptchaReservation();
+            if (!ordersDebited) await releaseCaptchaClaim();
             console.error("Lỗi trong quá trình rút tiền:", error);
             res.status(500).json({ error: "Lỗi tạo yêu cầu rút tiền hoặc cập nhật đơn hàng." });
         }
@@ -6952,28 +7389,41 @@ app.post('/api/admin/update-withdrawal', async (req, res) => {
         if (status === 'success') await notifyWithdrawalSuccessToGroup(current);
         return res.json({success:true,idempotent:true});
     }
-    const { data: updatedRows, error } = await supabase.from('withdrawals')
-        .update({ status, reason }).eq('id', id).eq('status', current.status).select('*');
-    if (error) {
-        console.error("Lỗi cập nhật trạng thái rút tiền:", error);
-        return res.status(500).json({ success: false, error: error.message });
-    }
-    if (!updatedRows || updatedRows.length === 0) {
-        return res.status(409).json({success:false,retry:true,error:'Đơn rút vừa được xử lý bởi thao tác khác.'});
-    }
-    const updatedWithdrawal=updatedRows[0];
+    let updatedWithdrawal = null;
+    let refundOrders = 0;
 
-    // Hoàn trả đơn hàng nếu đơn đang Chờ duyệt bị chuyển sang Từ chối/Hoàn trả
+    // Pending -> rejected/refunded phải claim bằng CAS + cộng Orders bằng atomic wallet mutation.
+    // Hai admin/callback chạy đồng thời chỉ một flow claim được status='pending'.
     if (current.status === 'pending' && (status === 'rejected' || status === 'refunded')) {
-        const refundOrders = current.ordersAmount || (Math.floor((current.amount || 0) / 1000) * 10000);
-        const { data: u } = await supabase.from('users').select('orders').eq('id', current.userId).single();
-        if (u) await touchWallet(current.userId, { orders: (u.orders || 0) + refundOrders });
+        const refundResult = await claimAndRefundPendingWithdrawal(id, status, reason);
+        if (refundResult.error) {
+            console.error("Lỗi cập nhật/hoàn trả đơn rút tiền:", refundResult.error);
+            return res.status(500).json({ success: false, error: refundResult.error.message || 'Không hoàn trả được đơn rút.' });
+        }
+        if (!refundResult.claimed || !refundResult.refunded) {
+            return res.status(409).json({success:false,retry:true,error:'Đơn rút vừa được xử lý bởi thao tác khác.'});
+        }
+        updatedWithdrawal = refundResult.withdrawal;
+        refundOrders = refundResult.refundOrders;
         await safeSendLocalizedMessage(current.userId,
             `❌ Yêu cầu rút tiền #${current.txCode || current.id} đã bị *HỦY*.\n📝 Lý do: ${reason || 'Không có'}\n📦 Đã hoàn trả: ${refundOrders.toLocaleString()} Đơn Hàng`,
             `❌ Withdrawal #${current.txCode || current.id} was *REJECTED*.\n📝 Reason: ${reason || 'Not provided'}\n📦 Refunded: ${refundOrders.toLocaleString()} Orders`,
             { parse_mode: 'Markdown' }
         );
-    } else if (status === 'success') {
+    } else {
+        const { data: updatedRows, error } = await supabase.from('withdrawals')
+            .update({ status, reason }).eq('id', id).eq('status', current.status).select('*');
+        if (error) {
+            console.error("Lỗi cập nhật trạng thái rút tiền:", error);
+            return res.status(500).json({ success: false, error: error.message });
+        }
+        if (!updatedRows || updatedRows.length === 0) {
+            return res.status(409).json({success:false,retry:true,error:'Đơn rút vừa được xử lý bởi thao tác khác.'});
+        }
+        updatedWithdrawal=updatedRows[0];
+    }
+
+    if (status === 'success') {
         await safeSendLocalizedMessage(current.userId,
             `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!
 💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
@@ -7162,7 +7612,7 @@ function promoSlotScheduledAt(dayKey,slotId) {
     return Date.parse(`${dayKey}T${hour}+07:00`);
 }
 async function readPromoManualSeed() {
-    return readPersistentEvent(KIEMTIENMUAKFC_MANUAL_SEED_KEY);
+    return readPersistentEventStrict(KIEMTIENMUAKFC_MANUAL_SEED_KEY);
 }
 async function seedManualPromoPostOnce() {
     const existing=await readPromoManualSeed();
@@ -7191,8 +7641,10 @@ async function latestPromoSentAt(dayKey) {
         latest=Math.max(latest,Number(manual.lastSentAt||manual.sentAt||0));
     }
     for (const slotId of ['slot1','slot2']) {
-        const marker=await readPersistentEvent(promoSlotKey(dayKey,slotId));
-        latest=Math.max(latest,Number(marker?.sentAt||0));
+        const marker=await readPersistentEventStrict(promoSlotKey(dayKey,slotId));
+        // reserved/failed đều có thể là "Telegram đã nhận nhưng response bị mất", nên dùng thời điểm
+        // attempt/reservation làm mốc gap bảo thủ để tuyệt đối không gửi bài kế tiếp quá sớm.
+        latest=Math.max(latest,Number(marker?.sentAt||marker?.attemptedAt||marker?.reservedAt||0));
     }
     return latest;
 }
@@ -7201,50 +7653,65 @@ async function promoPostsConsumedToday(dayKey) {
     const manual=await readPromoManualSeed();
     if (manual?.status==='sent' && manual?.dayKey===dayKey) count+=1;
     for (const slotId of ['slot1','slot2']) {
-        const marker=await readPersistentEvent(promoSlotKey(dayKey,slotId));
-        // "reserved" is deliberately counted as consumed: after crash between sendMediaGroup and final marker,
-        // at-most-once is safer than risking a duplicate public album.
-        if (marker && ['reserved','sent'].includes(marker.status)) count+=1;
+        const marker=await readPersistentEventStrict(promoSlotKey(dayKey,slotId));
+        // reserved/failed đều tính quota: lỗi mạng sau sendMediaGroup là trạng thái mơ hồ, Telegram có thể
+        // đã đăng thành công. At-most-once an toàn hơn retry rồi tạo album trùng hoặc bài thứ 3.
+        if (marker && ['reserved','sent','failed'].includes(marker.status)) count+=1;
     }
     return count;
 }
 function promoFallbackInput(index) {
     return Input.fromBuffer(Buffer.from(KIEMTIENMUAKFC_PROMO_BASE64[index],'base64'),`kiemtienmuakfc-promo-${index+1}.png`);
 }
+function telegramApiErrorCode(error) {
+    return Number(error?.response?.error_code || error?.response?.statusCode || error?.status || 0);
+}
 async function sendKiemTienMuaKfcPromoAlbum() {
-    let fileIds=await readPromoPhotoFileIds();
-    let useFileIds=fileIds.length===3;
-    let lastError=null;
-    for (let attempt=0;attempt<3;attempt++) {
-        try {
-            const sources=useFileIds ? fileIds : [promoFallbackInput(0),promoFallbackInput(1),promoFallbackInput(2)];
-            const messages=await bot.telegram.sendMediaGroup(KIEMTIENMUAKFC_PROMO_CHAT,[
-                {type:'photo',media:sources[0],caption:KIEMTIENMUAKFC_PROMO_TEXT,parse_mode:'HTML'},
-                {type:'photo',media:sources[1]},
-                {type:'photo',media:sources[2]}
-            ]);
-            if (!useFileIds && Array.isArray(messages) && messages.length>=3) {
-                const extracted=messages.slice(0,3).map(m=>Array.isArray(m?.photo)&&m.photo.length ? String(m.photo[m.photo.length-1].file_id||'') : '');
-                if (extracted.every(Boolean)) await savePromoPhotoFileIds(extracted);
-            }
-            return {ok:true,messages};
-        } catch(e) {
-            lastError=e;
-            console.error(`Promo album attempt ${attempt+1} failed:`,e?.message||e);
-            // Stored Telegram file_id can become unusable; fallback to the exact embedded PNGs on next retry.
-            useFileIds=false;
-            if (attempt<2) await new Promise(r=>setTimeout(r,1500*(attempt+1)));
+    const fileIds=await readPromoPhotoFileIds();
+    const useFileIds=fileIds.length===3;
+    const sendAlbum=async(sources)=>{
+        const messages=await bot.telegram.sendMediaGroup(KIEMTIENMUAKFC_PROMO_CHAT,[
+            {type:'photo',media:sources[0],caption:KIEMTIENMUAKFC_PROMO_TEXT,parse_mode:'HTML'},
+            {type:'photo',media:sources[1]},
+            {type:'photo',media:sources[2]}
+        ]);
+        return messages;
+    };
+    try {
+        const sources=useFileIds ? fileIds : [promoFallbackInput(0),promoFallbackInput(1),promoFallbackInput(2)];
+        const messages=await sendAlbum(sources);
+        if (!useFileIds && Array.isArray(messages) && messages.length>=3) {
+            const extracted=messages.slice(0,3).map(m=>Array.isArray(m?.photo)&&m.photo.length ? String(m.photo[m.photo.length-1].file_id||'') : '');
+            if (extracted.every(Boolean)) await savePromoPhotoFileIds(extracted);
         }
+        return {ok:true,messages};
+    } catch(error) {
+        console.error('Promo album send failed:',error?.message||error);
+        // Chỉ retry khi Telegram trả 400 CHẮC CHẮN do file_id cache không dùng được: request đó bị
+        // Telegram từ chối nên không thể đã đăng. Network timeout/429/5xx là trạng thái mơ hồ -> KHÔNG retry.
+        if (useFileIds && telegramApiErrorCode(error)===400) {
+            try {
+                const messages=await sendAlbum([promoFallbackInput(0),promoFallbackInput(1),promoFallbackInput(2)]);
+                if (Array.isArray(messages) && messages.length>=3) {
+                    const extracted=messages.slice(0,3).map(m=>Array.isArray(m?.photo)&&m.photo.length ? String(m.photo[m.photo.length-1].file_id||'') : '');
+                    if (extracted.every(Boolean)) await savePromoPhotoFileIds(extracted);
+                }
+                return {ok:true,messages};
+            } catch(fallbackError) {
+                console.error('Promo album embedded fallback failed:',fallbackError?.message||fallbackError);
+                return {ok:false,error:fallbackError};
+            }
+        }
+        return {ok:false,error};
     }
-    return {ok:false,error:lastError};
 }
 async function processPromoSlot(dayKey,slotId,reason='watchdog') {
     const now=Date.now();
     const scheduledAt=promoSlotScheduledAt(dayKey,slotId);
     if (!Number.isFinite(scheduledAt) || now<scheduledAt) return false;
     const markerKey=promoSlotKey(dayKey,slotId);
-    const existing=await readPersistentEvent(markerKey);
-    // reserved is intentionally treated as consumed after a crash: at-most-once beats duplicate posting.
+    const existing=await readPersistentEventStrict(markerKey);
+    // Bất kỳ marker nào cũng chặn slot này chạy lại; failed có thể là send thành công nhưng mất response.
     if (existing) return existing.status==='sent';
 
     const consumedToday=await promoPostsConsumedToday(dayKey);
@@ -7287,12 +7754,18 @@ function scheduleNextPromoExactTimer() {
     promoExactTimer=setTimeout(async()=>{ await queuePromoReconcile('exact-timer'); scheduleNextPromoExactTimer(); },Math.max(1,nextAt-Date.now()));
 }
 async function startPromoScheduler() {
-    // Seed the already-sent manual post BEFORE any recovery/watchdog logic so startup can never post immediately.
-    await seedManualPromoPostOnce();
-    await queuePromoReconcile('startup-recovery');
-    scheduleNextPromoExactTimer();
-    if (promoWatchdogTimer) clearInterval(promoWatchdogTimer);
-    promoWatchdogTimer=setInterval(()=>{ queuePromoReconcile('watchdog'); },KIEMTIENMUAKFC_PROMO_WATCHDOG_MS);
+    try {
+        // Seed the already-sent manual post BEFORE any recovery/watchdog logic so startup can never post immediately.
+        await seedManualPromoPostOnce();
+        await queuePromoReconcile('startup-recovery');
+    } catch (e) {
+        // Supabase/Telegram startup tạm lỗi thì KHÔNG đăng fail-open; watchdog phía dưới sẽ thử lại hữu hạn theo chu kỳ.
+        console.error('Promo scheduler startup reconcile:', e?.message || e);
+    } finally {
+        scheduleNextPromoExactTimer();
+        if (promoWatchdogTimer) clearInterval(promoWatchdogTimer);
+        promoWatchdogTimer=setInterval(()=>{ queuePromoReconcile('watchdog'); },KIEMTIENMUAKFC_PROMO_WATCHDOG_MS);
+    }
 }
 // ==================== END PROMO ALBUM SCHEDULER ====================
 
