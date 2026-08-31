@@ -859,113 +859,19 @@ async function safeSendLocalizedMessage(chatId, viText, enText, options = {}) {
     return safeSendMessage(chatId, language === 'en' ? enText : viText, options);
 }
 
-// Hàm kiểm tra thành viên nhóm — PHÂN BIỆT 3 TRẠNG THÁI:
-// 1) checked=true, isMember=true  -> đã là thành viên hợp lệ;
-// 2) checked=true, isMember=false -> Telegram xác nhận user chưa tham gia/đã rời;
-// 3) checked=false                -> KHÔNG thể kiểm tra (timeout/403/429/network/bot thiếu quyền...).
-// Tuyệt đối không biến lỗi Telegram thành status='left', vì như vậy frontend sẽ khóa nhầm user thật.
-const MEMBERSHIP_CHECK_TIMEOUT_MS = 5000;
-function isVerifiedTelegramMember(member) {
-    const status = String(member?.status || '');
-    if (['member', 'administrator', 'creator'].includes(status)) return true;
-    if (status === 'restricted') return member?.is_member === true;
-    return false;
-}
-function isVerifiedTelegramNotMember(member) {
-    const status = String(member?.status || '');
-    if (['left', 'kicked'].includes(status)) return true;
-    if (status === 'restricted') return member?.is_member !== true;
-    return false;
-}
-async function getChatMemberWithTimeout(chatId, userId) {
-    let timer = null;
-    try {
-        return await Promise.race([
-            bot.telegram.getChatMember(chatId, userId),
-            new Promise((_, reject) => {
-                timer = setTimeout(() => {
-                    const err = new Error(`getChatMember timeout after ${MEMBERSHIP_CHECK_TIMEOUT_MS}ms`);
-                    err.code = 'MEMBERSHIP_TIMEOUT';
-                    reject(err);
-                }, MEMBERSHIP_CHECK_TIMEOUT_MS);
-            })
-        ]);
-    } finally {
-        if (timer) clearTimeout(timer);
-    }
-}
-function telegramMembershipErrorCode(error) {
-    return Number(error?.response?.error_code || error?.response?.statusCode || error?.status || 0);
-}
-function shouldRetryTelegramMembership(error) {
-    if (error?.code === 'MEMBERSHIP_TIMEOUT') return true;
-    const status = telegramMembershipErrorCode(error);
-    if (status === 429 || status >= 500) return true;
-    const code = String(error?.code || '').toUpperCase();
-    if (['ETIMEDOUT','ECONNRESET','ECONNREFUSED','EAI_AGAIN','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT'].includes(code)) return true;
-    return /timeout|network|socket|connection reset|fetch failed/i.test(String(error?.message || ''));
-}
-async function getChatMemberWithRetry(chatId, userId, maxAttempts = 2) {
-    if (!Number.isFinite(Number(chatId))) {
-        const err = new Error('Telegram group ID chưa được cấu hình hợp lệ.');
-        err.code = 'MEMBERSHIP_CONFIG';
-        throw err;
-    }
-    let lastError = null;
-    const attempts = Math.max(1, Number(maxAttempts || 1));
-    for (let attempt = 0; attempt < attempts; attempt++) {
-        try {
-            return await getChatMemberWithTimeout(chatId, userId);
-        } catch (error) {
-            lastError = error;
-            if (!shouldRetryTelegramMembership(error) || attempt === attempts - 1) throw error;
-            const retryAfter = Math.min(2500, Number(error?.response?.parameters?.retry_after || 0) * 1000);
-            await waitMs(retryAfter || (350 * Math.pow(2, attempt)));
-        }
-    }
-    throw lastError || new Error('membership_check_failed');
-}
+// Hàm kiểm tra thành viên nhóm
 async function checkUserMembership(userId) {
-    const uid = String(userId || '');
-    if (!uid) {
-        return { checked: false, isMember: null, membershipCheckFailed: true, error: 'missing_user_id' };
-    }
     try {
-        const results = await Promise.allSettled([
-            getChatMemberWithRetry(GROUP_1_ID, uid, 2),
-            getChatMemberWithRetry(GROUP_2_ID, uid, 2)
+        // Sử dụng Promise.all để kiểm tra song song, tiết kiệm thời gian
+        const [m1, m2] = await Promise.all([
+            bot.telegram.getChatMember(GROUP_1_ID, userId).catch(() => ({ status: 'left' })),
+            bot.telegram.getChatMember(GROUP_2_ID, userId).catch(() => ({ status: 'left' }))
         ]);
-        const failed = results.find(r => r.status === 'rejected');
-        if (failed) {
-            const reason = failed.reason;
-            console.error(`Lỗi check member ${uid}:`, reason?.message || reason);
-            return {
-                checked: false,
-                isMember: null,
-                membershipCheckFailed: true,
-                error: 'membership_check_failed'
-            };
-        }
-        const [m1, m2] = results.map(r => r.value);
-        const records = [m1, m2];
-        const recognized = records.every(m => isVerifiedTelegramMember(m) || isVerifiedTelegramNotMember(m));
-        if (!recognized) {
-            console.error(`Lỗi check member ${uid}: Telegram trả status không xác định`, records.map(m => m?.status));
-            return {
-                checked: false,
-                isMember: null,
-                membershipCheckFailed: true,
-                error: 'membership_check_failed'
-            };
-        }
-        return {
-            checked: true,
-            isMember: records.every(isVerifiedTelegramMember),
-            membershipCheckFailed: false
-        };
+        const validStatuses = ['member', 'administrator', 'creator'];
+        return validStatuses.includes(m1.status) && validStatuses.includes(m2.status);
     } catch (e) {
-        console.error(`Lỗi check member ${uid}:`, e.message);
-        return { checked: false, isMember: null, membershipCheckFailed: true, error: 'membership_check_failed' };
+        console.error(`Lỗi check member ${userId}:`, e.message);
+        return false;
     }
 }
 
@@ -1867,11 +1773,8 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     if (userRecord.referrerCounted) return { ok: false, reason: 'already_counted' };
     if (userRecord.isBanned) return { ok: false, reason: 'banned' };
 
-    const membership = precomputedIsMember !== null
-        ? { checked: true, isMember: !!precomputedIsMember }
-        : await checkUserMembership(userId);
-    if (!membership.checked) return { ok: false, reason: 'membership_check_failed' };
-    if (!membership.isMember) return { ok: false, reason: 'not_member' };
+    const isMember = precomputedIsMember !== null ? !!precomputedIsMember : await checkUserMembership(userId);
+    if (!isMember) return { ok: false, reason: 'not_member' };
 
     if ((userRecord.lifetimeAdsWatched || 0) < 3) return { ok: false, reason: 'not_enough_ads' };
     if ((userRecord.lifetimeSmartlinks || 0) < 2) return { ok: false, reason: 'not_enough_smartlinks' };
@@ -2170,8 +2073,7 @@ bot.start(async (ctx) => {
                     // công, kèm nhắc nhở ĐÚNG các điều kiện còn thiếu thực tế (không hiển thị điều kiện đã
                     // đủ). Thưởng + thông báo "thành công" thật sự chỉ được gửi trong tryFinalizeReferral()
                     // khi bạn bè ĐÃ đủ điều kiện.
-                    const membershipAtInvite = await checkUserMembership(userId);
-                    const isMemberAtInvite = membershipAtInvite.checked ? membershipAtInvite.isMember : null;
+                    const isMemberAtInvite = await checkUserMembership(userId);
                     const refLanguage = await getStoredUserLanguage(referrerId);
                     const conditionsText = buildReferralPendingConditionsText(userRecord, isMemberAtInvite, refLanguage);
                     await safeSendMessage(referrerId, refLanguage === 'en'
@@ -2208,16 +2110,10 @@ bot.start(async (ctx) => {
         }
         language = normalizeUserLanguage(userRecord.language);
 
-        // Kiểm tra tham gia nhóm. Lỗi Telegram là UNKNOWN, không được giả thành chưa tham gia.
-        const membership = await checkUserMembership(userId);
-        if (!membership.checked) {
-            return ctx.reply(language === 'en'
-                ? '⚠️ Membership verification is temporarily unavailable. Please try again in a few seconds.'
-                : '⚠️ Tạm thời không thể kiểm tra trạng thái nhóm. Vui lòng thử lại sau ít giây.',
-                botMainReplyKeyboard(language));
-        }
+        // Kiểm tra tham gia nhóm theo cơ chế đơn giản của phiên bản cũ.
+        const isMember = await checkUserMembership(userId);
 
-        if (membership.isMember) {
+        if (isMember) {
             // Nếu có referrer và chưa được đếm hợp lệ -> thử xác nhận (cần đủ nhóm + đủ 3 QC đã xem)
             await tryFinalizeReferral(userId, true);
 
@@ -2267,15 +2163,9 @@ bot.on('callback_query', async (ctx) => {
         try {
             await ctx.answerCbQuery(language === 'en' ? '🔍 Checking...' : '🔍 Đang kiểm tra...');
 
-            const membership = await checkUserMembership(userId);
-            if (!membership.checked) {
-                return ctx.answerCbQuery(language === 'en'
-                    ? '⚠️ Could not verify membership right now. Please try again.'
-                    : '⚠️ Không thể kiểm tra trạng thái nhóm lúc này. Vui lòng thử lại.',
-                    { show_alert: true }).catch(() => {});
-            }
+            const isMember = await checkUserMembership(userId);
 
-            if (membership.isMember) {
+            if (isMember) {
                 const { data: userRecord, error: userError } = await supabase.from('users').select('*').eq('id', userId).single();
                 if (userError) {
                     console.error("Lỗi lấy user trong callback:", userError);
@@ -2309,14 +2199,8 @@ bot.on('callback_query', async (ctx) => {
 bot.hears(['🚀 Mở Kho Hàng', '🚀 Open Warehouse'], async (ctx) => {
     const userId = String(ctx.from?.id || '');
     const language = await getStoredUserLanguage(userId);
-    const membership = await checkUserMembership(userId);
-    if (!membership.checked) {
-        return ctx.reply(language === 'en'
-            ? '⚠️ Membership verification is temporarily unavailable. Please try again shortly.'
-            : '⚠️ Tạm thời không thể kiểm tra trạng thái nhóm. Vui lòng thử lại sau ít giây.',
-            botMainReplyKeyboard(language));
-    }
-    if (!membership.isMember) {
+    const isMember = await checkUserMembership(userId);
+    if (!isMember) {
         return ctx.reply(language === 'en'
             ? '⚠️ Please join both required Telegram groups first, then use /start to verify.'
             : '⚠️ Vui lòng tham gia đủ 2 nhóm Telegram bắt buộc trước, sau đó dùng /start để xác minh.',
@@ -3855,38 +3739,18 @@ app.use('/api', (req, res, next) => {
 // API kiểm tra tham gia nhóm từ frontend
 app.get('/api/verify/:id', async (req, res) => {
     try {
-        const membership = await checkUserMembership(req.params.id);
-        if (!membership.checked) {
-            return res.status(503).json({
-                success: false,
-                checked: false,
-                isMember: null,
-                membershipCheckFailed: true,
-                error: 'membership_check_failed'
-            });
-        }
+        const isMember = await checkUserMembership(req.params.id);
         // FIX LỖ HỔNG: trước đây route này chỉ trả về true/false, không thử chốt lượt mời bạn. Nếu user
         // bấm "✅ Kiểm tra" ngay trong Mini App (thay vì qua bot) sau khi đã lỡ xem đủ 3 QC từ trước, lượt
         // mời sẽ không bao giờ được tính vì onAdWatched() chỉ gọi check-referral khi lifetimeAdsWatched<=3.
         // Gọi tại đây để MỌI đường xác nhận thành viên đều tự thử chốt, không phụ thuộc thứ tự thao tác.
-        if (membership.isMember) {
+        if (isMember) {
             tryFinalizeReferral(req.params.id, true).catch(() => {});
         }
-        return res.json({
-            success: true,
-            checked: true,
-            isMember: membership.isMember,
-            membershipCheckFailed: false
-        });
+        res.json({ success: isMember });
     } catch (e) {
         console.error("Lỗi API verify:", e);
-        return res.status(503).json({
-            success: false,
-            checked: false,
-            isMember: null,
-            membershipCheckFailed: true,
-            error: 'membership_check_failed'
-        });
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
