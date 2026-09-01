@@ -1299,6 +1299,7 @@
                             <div class="mt-2 text-[11px] leading-relaxed text-slate-200 space-y-1">
                                 <p>👤 <b>Tên Mail:</b> Dùng <b>TÊN TIẾNG VIỆT</b></p>
                                 <p class="text-slate-400">Ví dụ: buimanh2736@gmail.com • nguyenduc452@gmail.com</p>
+                                <p>🔑 <b>Mật Khẩu:</b> <span class="text-yellow-300 font-black">dongcute@00</span></p>
                                 <p>🎂 <b>Ngày, Tháng:</b> Tùy chọn</p>
                                 <p>📅 <b>Năm:</b> <span class="text-yellow-300 font-black">BẮT BUỘC ĐẶT NĂM 2000</span></p>
                             </div>
@@ -2291,8 +2292,11 @@
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
                             if (result.jobMailBanned) this.jobMailBanned = true;
-                            if (result.migrationRequired) this.showNotification('❌ JOB MAIL đang được Admin cấu hình database.');
-                            else if (result.serviceRoleRequired) this.showNotification('❌ JOB MAIL đang được Admin cấu hình bảo mật server.');
+                            if (result.migrationRequired || result.serviceRoleRequired) {
+                                this.showNotification('❌ JOB MAIL chưa được cấu hình đầy đủ trên máy chủ.');
+                            } else {
+                                this.showNotification('❌ ' + (result.error || 'Không tải được JOB MAIL lúc này.'));
+                            }
                             return;
                         }
                         this.jobMailBanned = !!result.jobMailBanned;
