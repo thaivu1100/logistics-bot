@@ -41,7 +41,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    alter table giftcode_redemptions add column if not exists userName text;
 //    alter table giftcode_redemptions add column if not exists createdAt timestamptz default now();
 // 4) JOB MAIL — chạy TOÀN BỘ block dưới đây 1 lần trong SQL Editor trước khi dùng JOB MAIL:
-//    Đồng thời thêm SUPABASE_SERVICE_ROLE_KEY vào Environment của Render (chỉ server, KHÔNG đưa ra frontend).
+//    Đồng thời thêm SUPABASE_SERVICE_ROLE_KEY vào Environment của máy chủ chạy Node.js (VPS/Render/PM2/systemd; chỉ server, KHÔNG đưa ra frontend).
 //
 //    alter table users add column if not exists job_mail_banned boolean not null default false;
 //    alter table users add column if not exists "walletUpdatedAt" timestamptz;
@@ -155,13 +155,18 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const jobMailSupabase = SUPABASE_SERVICE_ROLE_KEY
     ? createClient(process.env.SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth:{ persistSession:false, autoRefreshToken:false } })
     : null;
+// Không làm crash toàn bot nếu máy chủ chưa có secret JOB MAIL. Chỉ khóa riêng JOB MAIL và ghi chẩn đoán
+// vào server log; tuyệt đối không log giá trị key và không fallback sang ANON.
+if (!SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('❌ JOB MAIL CONFIG: thiếu SUPABASE_SERVICE_ROLE_KEY trong environment của tiến trình Node.js. Hãy cấu hình biến này trên máy chủ rồi restart bot/service.');
+}
 function jobMailDb() {
     if (jobMailSupabase) return jobMailSupabase;
-    const error = new Error('JOB MAIL yêu cầu SUPABASE_SERVICE_ROLE_KEY trên server.');
+    const error = new Error('JOB MAIL chưa được cấu hình database client riêng trên máy chủ.');
     error.code = 'JOB_MAIL_SERVICE_ROLE_MISSING';
     throw error;
 }
@@ -2055,9 +2060,9 @@ function jobMailDbUnavailable(error) {
 }
 function jobMailSetupMessage(error) {
     if (String(error?.code || '') === 'JOB_MAIL_SERVICE_ROLE_MISSING') {
-        return '❌ Thiếu SUPABASE_SERVICE_ROLE_KEY trên Render. JOB MAIL được khóa không cho ANON truy cập trực tiếp.';
+        return '❌ JOB MAIL chưa được cấu hình đầy đủ trên máy chủ. Vui lòng hoàn tất cấu hình máy chủ rồi thử lại.';
     }
-    return '❌ Hãy chạy SQL migration JOB MAIL ở đầu server.js trên Supabase SQL Editor trước.';
+    return '❌ JOB MAIL chưa được cấu hình database đầy đủ trên máy chủ. Vui lòng hoàn tất cấu hình rồi thử lại.';
 }
 function jobMailAdminMenuKeyboard() {
     return { inline_keyboard: [
