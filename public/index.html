@@ -156,6 +156,11 @@
         .job-mail-video-frame { width:100%; aspect-ratio:16/9; border:0; border-radius:14px; background:#020617; }
         .job-mail-history-email { overflow-wrap:anywhere; word-break:break-word; min-width:0; }
         .job-mail-stat-grid > div { min-width:0; }
+        .job-mail-status-card { min-width:0; overflow:hidden; overflow-wrap:anywhere; }
+        .job-mail-tip-card { min-width:0; overflow:hidden; overflow-wrap:anywhere; word-break:normal; }
+        .job-mail-tip-title { font-size:12px; line-height:1.45; font-weight:900; text-align:center; color:#fde68a; overflow-wrap:anywhere; }
+        .job-mail-tip-body { font-size:10px; line-height:1.55; color:#e2e8f0; }
+        .job-mail-tip-divider { overflow:hidden; white-space:nowrap; text-align:center; color:rgba(251,191,36,.55); letter-spacing:.02em; }
 
         /* ==================== FIX LAG GRAPHICS MODE ==================== */
         /* Chỉ giảm PRESENTATION/PERFORMANCE. Không ẩn container nghiệp vụ, wallet, input code hay navigation. */
@@ -327,6 +332,12 @@
         .truck-idle { animation: truckDrive 1.6s ease-in-out infinite; display: inline-block; }
 
         .stagger-item { opacity: 0; animation: fadeInUp 0.4s ease-out forwards; }
+        /* FIX LAG tắt animation toàn cục nên phải ép mọi stagger-item về trạng thái cuối, nếu không opacity:0 sẽ làm mất nội dung nghiệp vụ. */
+        .low-graphics .stagger-item {
+            opacity: 1 !important;
+            transform: none !important;
+            animation: none !important;
+        }
 
         /* ===== Khu vực Nhiệm vụ - chủ đề "con đường giao hàng" ===== */
         .task-card { position: relative; transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; overflow: hidden; }
@@ -1284,6 +1295,23 @@
                     </div>
                 </div>
 
+                <div x-show="!jobMailAvailabilityLoaded" x-cloak class="job-mail-status-card glass rounded-[22px] p-4 text-center border border-slate-500/20">
+                    <div class="text-xs font-black text-slate-300">⏳ Đang kiểm tra trạng thái JOB MAIL...</div>
+                </div>
+                <div x-show="jobMailAvailabilityLoaded && jobMailOpen" x-cloak class="job-mail-status-card glass rounded-[22px] p-4 text-center border border-emerald-500/30 bg-emerald-950/20">
+                    <div class="text-sm font-black text-emerald-300">🟢 JOB MAIL ĐANG MỞ</div>
+                    <div class="mt-1 text-[11px] text-slate-200">⏰ Nhận mail đến 21:00 hôm nay.</div>
+                </div>
+                <div x-show="jobMailAvailabilityLoaded && !jobMailOpen" x-cloak class="job-mail-status-card glass rounded-[22px] p-4 text-center border border-red-500/30 bg-red-950/20">
+                    <div class="text-sm font-black text-red-300">🔴 JOB MAIL ĐÃ ĐÓNG</div>
+                    <div class="mt-2 text-[11px] leading-relaxed text-slate-200">
+                        <p>⏰ Thời gian nhận mail: <b>06:00 – 21:00</b></p>
+                        <p x-show="jobMailManualLocked" class="mt-1 text-amber-300">🔐 Admin đang tạm khóa nhận JOB MAIL mới.</p>
+                        <p x-show="!jobMailManualLocked && !jobMailScheduleOpen" class="mt-1">🌅 Hệ thống sẽ tự mở lại lúc 06:00 sáng.</p>
+                        <p x-show="jobMailManualLocked" class="mt-1 text-slate-400">Hệ thống chỉ nhận lại khi Admin bỏ khóa và đang trong khung 06:00–21:00.</p>
+                    </div>
+                </div>
+
                 <template x-if="jobMailBanned">
                     <div class="glass rounded-[22px] p-5 text-center border border-red-500/30 bg-red-950/20">
                         <div class="text-4xl">⛔</div>
@@ -1331,7 +1359,7 @@
                             <div class="mt-2 text-[11px] leading-relaxed space-y-1">
                                 <p>⚡ Thông thường: <b>DUYỆT TRONG NGÀY</b></p>
                                 <p>⏳ Trường hợp đặc biệt: <b>1–2 NGÀY</b></p>
-                                <p>🌙 Mail gửi <b>SAU 21:00</b> ➡️ tính sang <b>NGÀY HÔM SAU</b></p>
+                                <p>⏰ Hệ thống nhận mail từ <b>06:00 đến trước 21:00</b> mỗi ngày.</p>
                             </div>
                         </div>
 
@@ -1349,11 +1377,32 @@
                             <div class="text-center text-xs font-black leading-relaxed">📢 MN NHỚ ĐỌC KỸ TOÀN BỘ YÊU CẦU<br>🙏❤️ CẢM ƠN MN ĐÃ HỢP TÁC!</div>
                         </div>
 
+                        <div class="job-mail-tip-card glass rounded-[22px] p-4 border border-yellow-400/25">
+                            <div class="job-mail-tip-title">📧✨ 5 CÁCH TẠO GMAIL ÍT BỊ HẠN CHẾ SĐT ✨📧</div>
+                            <div class="job-mail-tip-body mt-3 space-y-1.5">
+                                <p>📍 Bạn có thể thử tạo Gmail qua các cách sau:</p>
+                                <div class="mt-2 space-y-1">
+                                    <p>🎮 1. Tạo trực tiếp trong một số app/game</p>
+                                    <p>▶️ 2. Tạo thông qua YouTube</p>
+                                    <p>🛒 3. Tạo trên CH Play</p>
+                                    <p>📩 4. Tạo trực tiếp trong ứng dụng Gmail</p>
+                                    <p>🌐 5. Tạo trên trình duyệt Web/ẩn danh</p>
+                                </div>
+                                <div class="job-mail-tip-divider py-1">━━━━━━━━━━━━━━━</div>
+                                <p class="font-black text-amber-300">⚠️ LƯU Ý QUAN TRỌNG</p>
+                                <p>📱 Theo kinh nghiệm sử dụng, 1 thiết bị chỉ nên tạo khoảng 2–3 Gmail/tuần.</p>
+                                <p>⏳ Sau khoảng 1 tuần có thể thử tạo tiếp.</p>
+                                <p>🚫 Không nên tạo quá nhiều tài khoản liên tục trong thời gian ngắn vì Google có thể yêu cầu xác minh số điện thoại hoặc các bước xác minh bổ sung.</p>
+                                <p>💡 Tần suất xác minh thực tế có thể thay đổi tùy thiết bị, mạng và hệ thống kiểm tra của Google.</p>
+                            </div>
+                        </div>
+
                         <div class="glass rounded-[22px] p-4">
                             <h3 class="text-sm font-black text-yellow-300">📩 GỬI GMAIL</h3>
                             <p class="text-[10px] text-slate-400 mt-1">Chỉ nhập địa chỉ Gmail. Hệ thống không yêu cầu và không lưu mật khẩu.</p>
+                            <p class="text-[10px] text-blue-300 mt-1">📌 Tối thiểu mỗi lần: <b x-text="jobMailMinBatch"></b> Gmail.</p>
                             <textarea x-model="jobMailInput" class="job-mail-textarea mt-3 bg-slate-950/70 rounded-2xl border border-white/10 p-3 text-xs outline-none focus:border-blue-500" placeholder="Nhập Gmail tại đây...&#10;Mỗi tài khoản Gmail một dòng.&#10;&#10;Ví dụ:&#10;buimanh2736@gmail.com&#10;nguyenduc452@gmail.com"></textarea>
-                            <button @click="submitJobMails()" :disabled="jobMailSubmitting || !jobMailInput.trim()" class="mt-3 w-full py-3 rounded-2xl bg-blue-600 disabled:opacity-40 font-black text-sm">
+                            <button @click="submitJobMails()" :disabled="jobMailSubmitting || !jobMailInput.trim() || !jobMailAvailabilityLoaded || !jobMailOpen" class="mt-3 w-full py-3 rounded-2xl bg-blue-600 disabled:opacity-40 font-black text-sm">
                                 <span x-show="!jobMailSubmitting">📨 GỬI MAIL DUYỆT</span><span x-show="jobMailSubmitting">⏳ ĐANG GỬI...</span>
                             </button>
                         </div>
@@ -2097,6 +2146,8 @@
                 tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
                 // JOB MAIL: chỉ lưu email + metadata trạng thái, tuyệt đối không có password.
                 jobMailInput:'', jobMailSubmitting:false, jobMailLoading:false, jobMailBanned:false, jobMailSubmitResult:null,
+                jobMailOpen:false, jobMailManualLocked:false, jobMailScheduleOpen:false, jobMailAvailabilityLoaded:false,
+                jobMailNextOpenAt:null, jobMailCloseAt:null, jobMailMinBatch:1,
                 jobMailStats:{total:0,pending:0,approved:0,rejected:0,rewardOrders:0}, jobMailHistory:[], jobMailPage:1, jobMailTotalPages:1, jobMailVideoOpen:'',
                 jobMailVideos:[
                     {id:'phone-create',title:'📱 Cách tạo Gmail trên điện thoại',url:'https://youtube.com/shorts/PTqJUfbeCMg?si=-xS-3EnAHoVPtjSl',embed:'https://www.youtube.com/embed/PTqJUfbeCMg'},
@@ -2283,6 +2334,25 @@
                     try { return new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)); }
                     catch (_) { return String(value); }
                 },
+                applyJobMailAvailability(result = {}) {
+                    if (!result || typeof result !== 'object') return;
+                    if (Object.prototype.hasOwnProperty.call(result, 'jobMailOpen')) {
+                        this.jobMailOpen = !!result.jobMailOpen;
+                        this.jobMailManualLocked = !!result.jobMailManualLocked;
+                        this.jobMailScheduleOpen = !!result.jobMailScheduleOpen;
+                        this.jobMailNextOpenAt = result.nextOpenAt || null;
+                        this.jobMailCloseAt = result.closeAt || null;
+                        const minBatch = Number(result.jobMailMinBatch);
+                        if (Number.isFinite(minBatch) && minBatch >= 1) this.jobMailMinBatch = Math.trunc(minBatch);
+                        this.jobMailAvailabilityLoaded = true;
+                    } else if (Number.isFinite(Number(result.jobMailMinBatch)) && Number(result.jobMailMinBatch) >= 1) {
+                        this.jobMailMinBatch = Math.trunc(Number(result.jobMailMinBatch));
+                    }
+                },
+                jobMailErrorText(result, fallback) {
+                    const message = String(result?.error || fallback || 'Không thể xử lý JOB MAIL lúc này.').trim();
+                    return /^[❌⛔⚠️🔒🔴]/u.test(message) ? message : `❌ ${message}`;
+                },
                 async loadJobMail(page = 1) {
                     if (!this.user?.id || this.jobMailLoading) return;
                     this.jobMailLoading = true;
@@ -2290,12 +2360,13 @@
                         const safePage = Math.max(1, Number(page || 1));
                         const res = await fetchWithTimeout(`${API_URL}/api/job-mail/me/${this.user.id}?page=${safePage}`, {}, 15000);
                         const result = await res.json().catch(() => ({}));
+                        this.applyJobMailAvailability(result);
                         if (!res.ok || !result.success) {
                             if (result.jobMailBanned) this.jobMailBanned = true;
                             if (result.migrationRequired || result.serviceRoleRequired) {
                                 this.showNotification('❌ JOB MAIL chưa được cấu hình đầy đủ trên máy chủ.');
                             } else {
-                                this.showNotification('❌ ' + (result.error || 'Không tải được JOB MAIL lúc này.'));
+                                this.showNotification(this.jobMailErrorText(result, 'Không tải được JOB MAIL lúc này.'));
                             }
                             return;
                         }
@@ -2316,9 +2387,23 @@
                 },
                 async submitJobMails() {
                     if (this.jobMailSubmitting || this.jobMailBanned) return;
+                    if (!this.jobMailAvailabilityLoaded) {
+                        await this.loadJobMail(1);
+                        if (!this.jobMailAvailabilityLoaded) {
+                            this.showNotification('❌ Chưa xác định được trạng thái JOB MAIL. Vui lòng thử lại.');
+                            return;
+                        }
+                    }
+                    if (!this.jobMailOpen) {
+                        this.showNotification(this.jobMailManualLocked
+                            ? '❌ JOB MAIL hiện đang được Admin tạm khóa.'
+                            : '❌ JOB MAIL hiện đã đóng. Thời gian nhận mail từ 06:00 đến 21:00.');
+                        return;
+                    }
                     const lines = String(this.jobMailInput || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
-                    if (!lines.length) {
-                        this.showNotification('❌ Vui lòng nhập ít nhất 1 Gmail.');
+                    const minBatch = Math.max(1, Number(this.jobMailMinBatch || 1));
+                    if (lines.length < minBatch) {
+                        this.showNotification(`❌ Mỗi lần gửi cần ít nhất ${minBatch} Gmail.`);
                         return;
                     }
                     // Validation frontend chỉ phục vụ UX; server vẫn validate lại toàn bộ và là source of truth.
@@ -2334,9 +2419,10 @@
                             body:JSON.stringify({ userId:this.user.id, emails:lines })
                         }, 15000);
                         const result = await res.json().catch(() => ({}));
+                        this.applyJobMailAvailability(result);
                         if (!res.ok || !result.success) {
                             if (result.jobMailBanned) this.jobMailBanned = true;
-                            this.showNotification('❌ ' + (result.error || 'Không thể gửi JOB MAIL lúc này.'));
+                            this.showNotification(this.jobMailErrorText(result, 'Không thể gửi JOB MAIL lúc này.'));
                             return;
                         }
                         this.jobMailSubmitResult = result;
