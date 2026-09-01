@@ -146,6 +146,17 @@
         .join-banner-btns { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
         .join-banner-btns a, .join-banner-btns button { font-size: 10px; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
         
+        /* ==================== JOB MAIL ==================== */
+        .job-mail-wrap { min-width:0; overflow:hidden; }
+        .job-mail-hero { position:relative; overflow:hidden; background:linear-gradient(145deg,rgba(30,64,175,.45),rgba(15,23,42,.94) 55%,rgba(146,64,14,.28)); border:1px solid rgba(251,191,36,.22); }
+        .job-mail-hero::after { content:'📩'; position:absolute; right:-12px; top:-18px; font-size:88px; opacity:.08; transform:rotate(10deg); pointer-events:none; }
+        .job-mail-rule { background:rgba(15,23,42,.72); border:1px solid rgba(148,163,184,.13); border-radius:18px; padding:12px; overflow-wrap:anywhere; }
+        .job-mail-danger { background:linear-gradient(145deg,rgba(127,29,29,.32),rgba(15,23,42,.82)); border-color:rgba(248,113,113,.25); }
+        .job-mail-textarea { width:100%; min-height:190px; resize:vertical; user-select:text; -webkit-user-select:text; overflow-wrap:anywhere; }
+        .job-mail-video-frame { width:100%; aspect-ratio:16/9; border:0; border-radius:14px; background:#020617; }
+        .job-mail-history-email { overflow-wrap:anywhere; word-break:break-word; min-width:0; }
+        .job-mail-stat-grid > div { min-width:0; }
+
         /* ==================== FIX LAG GRAPHICS MODE ==================== */
         /* Chỉ giảm PRESENTATION/PERFORMANCE. Không ẩn container nghiệp vụ, wallet, input code hay navigation. */
         .low-graphics *,
@@ -1263,7 +1274,149 @@
                 </div>
             </div>
 
-            <!-- CÀI ĐẶT (KHÔNG còn kiểm tra tham gia nhóm) -->
+            <!-- JOB MAIL -->
+            <div x-show="tab === 'jobmail'" x-transition class="tab-enter space-y-3 job-mail-wrap">
+                <div class="job-mail-hero glass rounded-[24px] p-4 text-center">
+                    <div class="text-2xl font-black tracking-tight">📩📩 YÊU CẦU TẠO MAIL 📩📩</div>
+                    <div class="mt-3 inline-flex flex-col gap-1 px-4 py-2 rounded-2xl bg-yellow-400/10 border border-yellow-400/25">
+                        <span class="text-sm font-black text-yellow-300">💰 RATE: 4K / 1 MAIL</span>
+                        <span class="text-xs font-black text-emerald-300">📦 = 40.000 ĐƠN HÀNG / MAIL</span>
+                    </div>
+                </div>
+
+                <template x-if="jobMailBanned">
+                    <div class="glass rounded-[22px] p-5 text-center border border-red-500/30 bg-red-950/20">
+                        <div class="text-4xl">⛔</div>
+                        <h3 class="mt-2 text-lg font-black text-red-300">JOB MAIL ĐÃ BỊ KHÓA</h3>
+                        <p class="mt-2 text-xs text-slate-300 leading-relaxed">Tài khoản của bạn hiện không được phép tham gia JOB MAIL.<br>Vui lòng liên hệ Admin nếu cần hỗ trợ.</p>
+                    </div>
+                </template>
+
+                <template x-if="!jobMailBanned">
+                    <div class="space-y-3">
+                        <div class="job-mail-rule">
+                            <h3 class="font-black text-sm text-blue-300">📝 1. THÔNG TIN MAIL</h3>
+                            <div class="mt-2 text-[11px] leading-relaxed text-slate-200 space-y-1">
+                                <p>👤 <b>Tên Mail:</b> Dùng <b>TÊN TIẾNG VIỆT</b></p>
+                                <p class="text-slate-400">Ví dụ: buimanh2736@gmail.com • nguyenduc452@gmail.com</p>
+                                <p>🎂 <b>Ngày, Tháng:</b> Tùy chọn</p>
+                                <p>📅 <b>Năm:</b> <span class="text-yellow-300 font-black">BẮT BUỘC ĐẶT NĂM 2000</span></p>
+                            </div>
+                        </div>
+
+                        <div class="job-mail-rule">
+                            <h3 class="font-black text-sm text-cyan-300">⏰ 2. YÊU CẦU VỀ MAIL</h3>
+                            <div class="mt-2 text-[11px] leading-relaxed space-y-1">
+                                <p>✅ Phải là <b>MAIL MỚI TẠO</b></p>
+                                <p>🕒 Thời gian tạo: <b>TỪ 2 NGÀY TRỞ XUỐNG</b></p>
+                            </div>
+                        </div>
+
+                        <div class="job-mail-rule job-mail-danger">
+                            <h3 class="font-black text-sm text-red-300">🚨 3. QUY ĐỊNH BẮT BUỘC</h3>
+                            <div class="mt-2 text-[11px] leading-relaxed space-y-1.5">
+                                <p>⛔ <b>TUYỆT ĐỐI KHÔNG BACK MAIL SAU KHI ĐÃ GIAO</b></p>
+                                <p class="text-red-300 font-black">🔥 BACK MAIL = BAN</p>
+                                <p>🚫 <b>TUYỆT ĐỐI KHÔNG DÍNH SĐT</b></p>
+                                <p>🚫 <b>TUYỆT ĐỐI KHÔNG CÓ MAIL KHÔI PHỤC</b></p>
+                                <p>⚠️ <b>NGHIÊM CẤM TẠO MAIL TỪ BOX ẢO / TOOL</b></p>
+                                <p>✅ <b>TẠO BẰNG TAY 100%</b></p>
+                                <p>📱 Trước khi gửi: <b>BẮT BUỘC XÓA TÀI KHOẢN MAIL KHỎI THIẾT BỊ</b></p>
+                            </div>
+                        </div>
+
+                        <div class="job-mail-rule">
+                            <h3 class="font-black text-sm text-emerald-300">✅ 4. THỜI GIAN DUYỆT</h3>
+                            <div class="mt-2 text-[11px] leading-relaxed space-y-1">
+                                <p>⚡ Thông thường: <b>DUYỆT TRONG NGÀY</b></p>
+                                <p>⏳ Trường hợp đặc biệt: <b>1–2 NGÀY</b></p>
+                                <p>🌙 Mail gửi <b>SAU 21:00</b> ➡️ tính sang <b>NGÀY HÔM SAU</b></p>
+                            </div>
+                        </div>
+
+                        <div class="job-mail-rule job-mail-danger">
+                            <h3 class="font-black text-sm text-red-300">⚠️ 5. XỬ LÝ VI PHẠM</h3>
+                            <div class="mt-2 text-[11px] leading-relaxed space-y-1">
+                                <p>❌ Sai yêu cầu</p><p>❌ Sai thông tin</p>
+                                <p>Sai từ <b>5 LẦN TRỞ LÊN</b>:</p>
+                                <p class="text-center text-base font-black text-red-300">🔴⛔ BAN JOB MAIL ⛔🔴</p>
+                                <p class="text-center font-black">🔥 KHÔNG NGOẠI LỆ</p>
+                            </div>
+                        </div>
+
+                        <div class="glass rounded-[22px] p-4 border border-yellow-400/20">
+                            <div class="text-center text-xs font-black leading-relaxed">📢 MN NHỚ ĐỌC KỸ TOÀN BỘ YÊU CẦU<br>🙏❤️ CẢM ƠN MN ĐÃ HỢP TÁC!</div>
+                        </div>
+
+                        <div class="glass rounded-[22px] p-4">
+                            <h3 class="text-sm font-black text-yellow-300">📩 GỬI GMAIL</h3>
+                            <p class="text-[10px] text-slate-400 mt-1">Chỉ nhập địa chỉ Gmail. Hệ thống không yêu cầu và không lưu mật khẩu.</p>
+                            <textarea x-model="jobMailInput" class="job-mail-textarea mt-3 bg-slate-950/70 rounded-2xl border border-white/10 p-3 text-xs outline-none focus:border-blue-500" placeholder="Nhập Gmail tại đây...&#10;Mỗi tài khoản Gmail một dòng.&#10;&#10;Ví dụ:&#10;buimanh2736@gmail.com&#10;nguyenduc452@gmail.com"></textarea>
+                            <button @click="submitJobMails()" :disabled="jobMailSubmitting || !jobMailInput.trim()" class="mt-3 w-full py-3 rounded-2xl bg-blue-600 disabled:opacity-40 font-black text-sm">
+                                <span x-show="!jobMailSubmitting">📨 GỬI MAIL DUYỆT</span><span x-show="jobMailSubmitting">⏳ ĐANG GỬI...</span>
+                            </button>
+                        </div>
+
+                        <div x-show="jobMailSubmitResult" x-cloak class="glass rounded-[22px] p-4 border border-emerald-500/20">
+                            <h3 class="text-sm font-black text-emerald-300">📩 ĐÃ NHẬN MAIL</h3>
+                            <div class="mt-2 text-xs leading-relaxed">
+                                <div>Tổng nhập: <b x-text="jobMailSubmitResult?.totalInput || 0"></b></div>
+                                <div>✅ Hợp lệ: <b x-text="jobMailSubmitResult?.accepted || 0"></b></div>
+                                <div>♻️ Trùng trong lần gửi: <b x-text="jobMailSubmitResult?.duplicateBatch || 0"></b></div>
+                                <div>♻️ Trùng hệ thống: <b x-text="jobMailSubmitResult?.duplicateSystem || 0"></b></div>
+                                <div>❌ Sai định dạng: <b x-text="jobMailSubmitResult?.invalid || 0"></b></div>
+                                <div>⏳ Đang chờ duyệt thêm: <b x-text="jobMailSubmitResult?.pendingAdded || 0"></b></div>
+                            </div>
+                        </div>
+
+                        <div class="glass rounded-[22px] p-4">
+                            <div class="flex items-center justify-between gap-2"><h3 class="text-sm font-black">📊 JOB MAIL CỦA BẠN</h3><button @click="loadJobMail(jobMailPage)" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800">🔄</button></div>
+                            <div class="job-mail-stat-grid grid grid-cols-2 gap-2 mt-3 text-center">
+                                <div class="bg-slate-900/70 rounded-xl p-2"><div class="text-[9px] text-slate-400">📩 Tổng gửi</div><b x-text="formatNumber(jobMailStats.total)"></b></div>
+                                <div class="bg-slate-900/70 rounded-xl p-2"><div class="text-[9px] text-slate-400">⏳ Chờ duyệt</div><b x-text="formatNumber(jobMailStats.pending)"></b></div>
+                                <div class="bg-slate-900/70 rounded-xl p-2"><div class="text-[9px] text-slate-400">✅ Đã duyệt</div><b x-text="formatNumber(jobMailStats.approved)"></b></div>
+                                <div class="bg-slate-900/70 rounded-xl p-2"><div class="text-[9px] text-slate-400">❌ Từ chối</div><b x-text="formatNumber(jobMailStats.rejected)"></b></div>
+                            </div>
+                            <div class="mt-2 text-center text-xs font-black text-yellow-300">📦 Tổng thưởng: <span x-text="formatNumber(jobMailStats.rewardOrders)"></span> Đơn Hàng</div>
+
+                            <div class="mt-3 space-y-2">
+                                <template x-for="m in jobMailHistory" :key="m.id">
+                                    <div class="bg-slate-950/55 rounded-xl p-2.5 text-[10px] border border-white/5">
+                                        <div class="flex gap-2 items-start justify-between"><span class="job-mail-history-email font-bold" x-text="m.email_original"></span><span class="flex-shrink-0" x-text="jobMailStatusText(m.status)"></span></div>
+                                        <div class="mt-1 text-slate-500" x-text="jobMailFormatDate(m.submitted_at)"></div>
+                                        <div x-show="m.reject_reason" class="mt-1 text-red-300">📝 <span x-text="m.reject_reason"></span></div>
+                                    </div>
+                                </template>
+                                <div x-show="!jobMailLoading && !jobMailHistory.length" class="text-center text-[10px] text-slate-500 py-2">Chưa có lịch sử JOB MAIL.</div>
+                            </div>
+                            <div class="mt-3 flex items-center justify-center gap-2" x-show="jobMailTotalPages > 1">
+                                <button @click="loadJobMail(jobMailPage - 1)" :disabled="jobMailPage <= 1 || jobMailLoading" class="px-3 py-1.5 rounded-lg bg-slate-800 disabled:opacity-30 text-[10px]">◀️ TRƯỚC</button>
+                                <span class="text-[10px] font-black" x-text="jobMailPage + '/' + jobMailTotalPages"></span>
+                                <button @click="loadJobMail(jobMailPage + 1)" :disabled="jobMailPage >= jobMailTotalPages || jobMailLoading" class="px-3 py-1.5 rounded-lg bg-slate-800 disabled:opacity-30 text-[10px]">SAU ▶️</button>
+                            </div>
+                        </div>
+
+                        <div class="glass rounded-[22px] p-4">
+                            <h3 class="text-sm font-black text-purple-300">🎬 HƯỚNG DẪN</h3>
+                            <div class="mt-3 space-y-2">
+                                <template x-for="v in jobMailVideos" :key="v.id">
+                                    <div class="job-mail-rule !p-3">
+                                        <button @click="jobMailVideoOpen = jobMailVideoOpen === v.id ? '' : v.id" class="w-full flex items-center justify-between gap-2 text-left text-[11px] font-black"><span x-text="v.title"></span><span x-text="jobMailVideoOpen === v.id ? '▲' : '▼'"></span></button>
+                                        <template x-if="jobMailVideoOpen === v.id">
+                                            <div class="mt-3">
+                                                <iframe class="job-mail-video-frame" :src="v.embed" title="Video hướng dẫn JOB MAIL" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+                                                <a :href="v.url" target="_blank" rel="noopener" class="mt-2 flex items-center justify-center w-full py-2 rounded-xl bg-red-600/80 font-black text-[10px]">▶️ MỞ VIDEO</a>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- CÀI ĐẶT -->
             <div x-show="tab === 'settings'" x-transition class="tab-enter space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2" x-text="texts.settings"></h2>
                 <div class="glass p-3 rounded-[25px] space-y-2 text-sm card-padding">
@@ -1457,39 +1610,15 @@
             } catch (_) { return true; }
         }
 
-        // ===== SOCIAL BAR + BANNER 320x50 (timer quản lý, không duplicate) =====
-        const THATLOBSTER_SOCIAL_BAR_SRC = 'https://thatlobster.com/c5/d4/82/c5d482f841680852f6e0215c17ad234b.js';
+        // ===== BANNER 320x50 (timer quản lý, không duplicate) =====
         const THATLOBSTER_BANNER_SRC = 'https://thatlobster.com/8ee7fbebb850f04e4e48dda69ae38579/invoke.js';
         let nonRewardedAdsInitialized = false;
-        let socialBarLoadTimer = null;
-        let socialBarLoaded = false;
         let bannerRefreshTimer = null;
         let bannerNextRefreshAt = 0;
         let bannerRefreshOverdue = false;
 
         function miniAppIsForeground() {
             return document.visibilityState === 'visible' && !document.hidden;
-        }
-
-        function scheduleSocialBarAttempt(delayMs) {
-            if (socialBarLoadTimer) clearTimeout(socialBarLoadTimer);
-            socialBarLoadTimer = setTimeout(() => {
-                socialBarLoadTimer = null;
-                if (socialBarLoaded || document.querySelector(`script[src="${THATLOBSTER_SOCIAL_BAR_SRC}"]`)) {
-                    socialBarLoaded = true;
-                    return;
-                }
-                if (!miniAppIsForeground() || isCriticalActionActive()) {
-                    scheduleSocialBarAttempt(5000);
-                    return;
-                }
-                const script = document.createElement('script');
-                script.src = THATLOBSTER_SOCIAL_BAR_SRC;
-                script.async = true;
-                script.dataset.socialBarProvider = 'thatlobster';
-                document.body.appendChild(script);
-                socialBarLoaded = true; // provider tự quản lý hiển thị, tuyệt đối không reload script
-            }, Math.max(0, Number(delayMs || 0)));
         }
 
         function cleanupBanner320x50() {
@@ -1555,7 +1684,6 @@
         function initNonRewardedAds() {
             if (nonRewardedAdsInitialized) return;
             nonRewardedAdsInitialized = true;
-            scheduleSocialBarAttempt(15 * 1000);
             scheduleBannerRefresh(8 * 1000);
 
             document.addEventListener('visibilitychange', () => {
@@ -1728,7 +1856,7 @@
                  smartlinkCompleted:'SmartLink hoàn thành! +25 Coin +25 Đơn Hàng.',
                  smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.', smartlinkTooEarly:'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!',
                  deliveryProcessing:'Đang xử lý giao hàng...',  streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
-                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +1 lượt giao hàng!',
+                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_jobmail: 'JOB MAIL', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +1 lượt giao hàng!',
                 captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận', captchaLoadError:'Không tạo được CAPTCHA từ máy chủ. Vui lòng thử lại.', captchaIncorrect:'CAPTCHA không đúng. Vui lòng nhập lại!',
                 quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
             },
@@ -1805,7 +1933,7 @@
                  smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.', smartlinkTooEarly:'You must wait at least 5 seconds. Please try again!!',
                  deliveryProcessing:'Delivery is already being processed.',
  streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
-                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +1 delivery!',
+                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_jobmail: 'JOB MAIL', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +1 delivery!',
                 captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm', captchaLoadError:'Could not create a server CAPTCHA. Please try again.', captchaIncorrect:'Incorrect CAPTCHA. Please try again!',
                 quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
             }
@@ -1966,6 +2094,15 @@
                 joinedGroups: false, // Mặc định là false để hiển thị banner khi mới vào
                 dismissedJoinBanner: false, dismissedPromoBanner: false,
                 tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
+                // JOB MAIL: chỉ lưu email + metadata trạng thái, tuyệt đối không có password.
+                jobMailInput:'', jobMailSubmitting:false, jobMailLoading:false, jobMailBanned:false, jobMailSubmitResult:null,
+                jobMailStats:{total:0,pending:0,approved:0,rejected:0,rewardOrders:0}, jobMailHistory:[], jobMailPage:1, jobMailTotalPages:1, jobMailVideoOpen:'',
+                jobMailVideos:[
+                    {id:'phone-create',title:'📱 Cách tạo Gmail trên điện thoại',url:'https://youtube.com/shorts/PTqJUfbeCMg?si=-xS-3EnAHoVPtjSl',embed:'https://www.youtube.com/embed/PTqJUfbeCMg'},
+                    {id:'pc-create',title:'💻 Cách tạo Gmail trên PC',url:'https://youtu.be/_FZlCdeNkys?si=y-NsdZFUgr_0V4gk',embed:'https://www.youtube.com/embed/_FZlCdeNkys'},
+                    {id:'phone-remove',title:'📱 Cách xóa tài khoản Gmail trên điện thoại',url:'https://youtu.be/Z_tmesAE_f4?si=LHzF3fyNPeUTyVw',embed:'https://www.youtube.com/embed/Z_tmesAE_f4'},
+                    {id:'pc-signout',title:'💻 Cách đăng xuất tài khoản trên PC',url:'https://youtu.be/uwftVVDKSZM?si=46pW_xvoaujlzbop',embed:'https://www.youtube.com/embed/uwftVVDKSZM'}
+                ],
                 currentProducts: 0, lastProducedAt: Date.now(), maxProducts: 100,
                 productionInterval: 30 * 60 * 1000, productionAmount: 100, isShipping: false,
                 // FIX LỖI GIAO HÀNG SAU QC REWARDED: cờ đánh dấu "đã xem QC hợp lệ nhưng chưa cấp được
@@ -2135,6 +2272,86 @@
                     return mins + ':' + (secs < 10 ? '0' : '') + secs;
                 },
                 
+                jobMailStatusText(status) {
+                    if (status === 'approved') return '✅ Duyệt';
+                    if (status === 'rejected') return '❌ Từ chối';
+                    return '⏳ Chờ';
+                },
+                jobMailFormatDate(value) {
+                    if (!value) return '';
+                    try { return new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)); }
+                    catch (_) { return String(value); }
+                },
+                async loadJobMail(page = 1) {
+                    if (!this.user?.id || this.jobMailLoading) return;
+                    this.jobMailLoading = true;
+                    try {
+                        const safePage = Math.max(1, Number(page || 1));
+                        const res = await fetchWithTimeout(`${API_URL}/api/job-mail/me/${this.user.id}?page=${safePage}`, {}, 15000);
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success) {
+                            if (result.jobMailBanned) this.jobMailBanned = true;
+                            if (result.migrationRequired) this.showNotification('❌ JOB MAIL đang được Admin cấu hình database.');
+                            else if (result.serviceRoleRequired) this.showNotification('❌ JOB MAIL đang được Admin cấu hình bảo mật server.');
+                            return;
+                        }
+                        this.jobMailBanned = !!result.jobMailBanned;
+                        this.jobMailStats = {
+                            total:Number(result.stats?.total || 0), pending:Number(result.stats?.pending || 0),
+                            approved:Number(result.stats?.approved || 0), rejected:Number(result.stats?.rejected || 0),
+                            rewardOrders:Number(result.stats?.rewardOrders || 0)
+                        };
+                        this.jobMailHistory = Array.isArray(result.history) ? result.history : [];
+                        this.jobMailPage = Number(result.page || 1);
+                        this.jobMailTotalPages = Math.max(1, Number(result.totalPages || 1));
+                    } catch (e) {
+                        console.error('JOB MAIL load:',e);
+                    } finally {
+                        this.jobMailLoading = false;
+                    }
+                },
+                async submitJobMails() {
+                    if (this.jobMailSubmitting || this.jobMailBanned) return;
+                    const lines = String(this.jobMailInput || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+                    if (!lines.length) {
+                        this.showNotification('❌ Vui lòng nhập ít nhất 1 Gmail.');
+                        return;
+                    }
+                    // Validation frontend chỉ phục vụ UX; server vẫn validate lại toàn bộ và là source of truth.
+                    const basicGmail = /^[A-Za-z0-9._%+-]+@gmail\.com$/i;
+                    if (!lines.some(v => basicGmail.test(v))) {
+                        this.showNotification('❌ Không có Gmail đúng định dạng để gửi.');
+                        return;
+                    }
+                    this.jobMailSubmitting = true;
+                    try {
+                        const res = await fetchWithTimeout(`${API_URL}/api/job-mail/submit`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({ userId:this.user.id, emails:lines })
+                        }, 15000);
+                        const result = await res.json().catch(() => ({}));
+                        if (!res.ok || !result.success) {
+                            if (result.jobMailBanned) this.jobMailBanned = true;
+                            this.showNotification('❌ ' + (result.error || 'Không thể gửi JOB MAIL lúc này.'));
+                            return;
+                        }
+                        this.jobMailSubmitResult = result;
+                        this.jobMailInput = '';
+                        this.jobMailStats = {
+                            total:Number(result.stats?.total || 0), pending:Number(result.stats?.pending || 0),
+                            approved:Number(result.stats?.approved || 0), rejected:Number(result.stats?.rejected || 0),
+                            rewardOrders:Number(result.stats?.rewardOrders || 0)
+                        };
+                        this.showNotification(`📩 Đã nhận ${Number(result.accepted || 0)} Gmail hợp lệ, đang chờ duyệt.`);
+                        await this.loadJobMail(1);
+                    } catch (e) {
+                        console.error('JOB MAIL submit:',e);
+                        this.showNotification('❌ Lỗi kết nối server khi gửi JOB MAIL.');
+                    } finally {
+                        this.jobMailSubmitting = false;
+                    }
+                },
+
                 canClaimMilestone(idx) {
                     const milestone = this.referralMilestones[idx];
                     return this.validInvites >= milestone.friends && !milestone.claimed;
@@ -2263,6 +2480,7 @@
                             document.documentElement.lang = this.language;
                             document.title = this.language === 'en' ? 'Logistics Warehouse' : 'Kho Hàng Logistics';
                             this.user.name = data.name || this.user.name;
+                            this.jobMailBanned = data.job_mail_banned === true;
                             this.user.referrerId = data.referrerId || null;
                             this.user.referrerCounted = data.referrerCounted || false;
                             this.user.joinDate = data.joinDate || '';
@@ -2469,6 +2687,7 @@
                     this.$watch('tab', (nextTab, previousTab) => {
                         this.saveState();
                         if (nextTab === 'tasks') this.syncDailyTasksFromServer().catch(() => {});
+                        if (nextTab === 'jobmail') this.loadJobMail(1).catch(() => {});
                         if (previousTab && nextTab !== previousTab) {
                             passiveTabCount += 1;
                             schedulePassiveAdCheck(650);
@@ -5061,6 +5280,7 @@
                     { id: 'friends', name: 'Mời bạn', icon: '👥' },
                     { id: 'withdraw', name: 'Rút tiền', icon: '💳' },
                     { id: 'giftcode', name: 'Nhập Code', icon: '🎟️' },
+                    { id: 'jobmail', name: 'JOB MAIL', icon: '📩' },
                     { id: 'settings', name: 'Cài đặt', icon: '⚙️' }
                 ]
             };
