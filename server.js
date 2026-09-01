@@ -2036,9 +2036,14 @@ bot.start(async (ctx) => {
 
 // ==================== JOB MAIL: PERSISTENT + ADMIN-SAFE ====================
 const JOB_MAIL_REWARD_ORDERS = 40000;
+const JOB_MAIL_MIN_BATCH = 1;
 const JOB_MAIL_PAGE_SIZE = 5;
 const JOB_MAIL_HISTORY_PAGE_SIZE = 8;
 const JOB_MAIL_EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@gmail\.com$/i;
+const JOB_MAIL_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+const JOB_MAIL_OPEN_HOUR = 6;
+const JOB_MAIL_CLOSE_HOUR = 21;
+const JOB_MAIL_MANUAL_LOCK_KEY = 'job_mail_manual_locked';
 const JOB_MAIL_REJECT_REASONS = Object.freeze({
     info: 'Sai thông tin',
     duplicate: 'Trùng mail',
@@ -2070,6 +2075,68 @@ function jobMailAdminMenuKeyboard() {
         [{ text:'✅ ĐÃ DUYỆT', callback_data:'jm:list:approved:0' }, { text:'❌ ĐÃ TỪ CHỐI', callback_data:'jm:list:rejected:0' }],
         [{ text:'📊 THỐNG KÊ', callback_data:'jm:stats' }, { text:'👤 THEO USER', callback_data:'jm:userhelp' }]
     ]};
+}
+function jobMailVietnamClockParts(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: JOB_MAIL_TIME_ZONE,
+        year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'
+    }).formatToParts(date);
+    const values = {};
+    for (const part of parts) if (part.type !== 'literal') values[part.type] = part.value;
+    return {
+        year:Number(values.year), month:Number(values.month), day:Number(values.day),
+        hour:Number(values.hour), minute:Number(values.minute), second:Number(values.second)
+    };
+}
+function getJobMailScheduleState(date = new Date()) {
+    const parts = jobMailVietnamClockParts(date);
+    const scheduleOpen = parts.hour >= JOB_MAIL_OPEN_HOUR && parts.hour < JOB_MAIL_CLOSE_HOUR;
+    const today = vietnamDayKey(date);
+    const tomorrow = vietnamDayKey(new Date(date.getTime() + 24 * 60 * 60 * 1000));
+    const nextOpenDay = parts.hour < JOB_MAIL_OPEN_HOUR ? today : tomorrow;
+    const closeDay = parts.hour < JOB_MAIL_CLOSE_HOUR ? today : tomorrow;
+    return {
+        jobMailScheduleOpen:scheduleOpen,
+        nextOpenAt:scheduleOpen ? null : `${nextOpenDay}T06:00:00+07:00`,
+        closeAt:`${closeDay}T21:00:00+07:00`
+    };
+}
+async function getJobMailManualLocked() {
+    const { data, error } = await jobMailDb().from('app_settings').select('value').eq('key', JOB_MAIL_MANUAL_LOCK_KEY).maybeSingle();
+    if (error) throw error;
+    return data?.value === true || data?.value?.locked === true;
+}
+async function setJobMailManualLocked(locked) {
+    const { error } = await jobMailDb().from('app_settings').upsert({ key:JOB_MAIL_MANUAL_LOCK_KEY, value:!!locked }, { onConflict:'key' });
+    if (error) throw error;
+    return !!locked;
+}
+async function getJobMailAvailability(date = new Date()) {
+    // Manual lock được đọc trực tiếp từ Supabase ở MỖI lần kiểm tra; không dùng biến RAM làm source of truth.
+    const jobMailManualLocked = await getJobMailManualLocked();
+    const schedule = getJobMailScheduleState(date);
+    return {
+        jobMailOpen:!jobMailManualLocked && schedule.jobMailScheduleOpen,
+        jobMailManualLocked,
+        ...schedule,
+        nextOpenAt:schedule.nextOpenAt,
+        closeAt:schedule.closeAt,
+        serverNow:date.toISOString(),
+        timeZone:JOB_MAIL_TIME_ZONE
+    };
+}
+function jobMailAvailabilityPayload(availability) {
+    return {
+        jobMailOpen:!!availability?.jobMailOpen,
+        jobMailManualLocked:!!availability?.jobMailManualLocked,
+        jobMailScheduleOpen:!!availability?.jobMailScheduleOpen,
+        nextOpenAt:availability?.nextOpenAt || null,
+        closeAt:availability?.closeAt || null,
+        serverNow:availability?.serverNow || new Date().toISOString(),
+        jobMailTimeZone:JOB_MAIL_TIME_ZONE,
+        jobMailMinBatch:JOB_MAIL_MIN_BATCH
+    };
 }
 async function getJobMailUserStats(userId) {
     const { data, error } = await jobMailDb().rpc('job_mail_user_stats', { p_user_id:String(userId) });
@@ -2142,8 +2209,10 @@ async function duplicateAccountsByReliableIp(userId, ip) {
     } catch (_) {}
     return [...map.values()].slice(0,20);
 }
-function jobMailAdminSummaryText(stats) {
-    return `📩 QUẢN LÝ JOB MAIL\n\n⏳ Chờ duyệt: ${stats.pending.toLocaleString('vi-VN')}\n✅ Duyệt hôm nay: ${stats.todayApproved.toLocaleString('vi-VN')}\n❌ Từ chối hôm nay: ${stats.todayRejected.toLocaleString('vi-VN')}`;
+function jobMailAdminSummaryText(stats, availability) {
+    const openText = availability?.jobMailOpen ? '🟢 Nhận mail: ĐANG MỞ' : '🔴 Nhận mail: ĐANG ĐÓNG';
+    const manualText = availability?.jobMailManualLocked ? 'Có' : 'Không';
+    return `📩 QUẢN LÝ JOB MAIL\n\n${openText}\n🔐 Khóa Admin: ${manualText}\n⏰ Lịch: 06:00–21:00\n\n⏳ Chờ duyệt: ${stats.pending.toLocaleString('vi-VN')}\n✅ Duyệt hôm nay: ${stats.todayApproved.toLocaleString('vi-VN')}\n❌ Từ chối hôm nay: ${stats.todayRejected.toLocaleString('vi-VN')}`;
 }
 async function editJobMailMessage(ctx, text, options = {}) {
     try {
@@ -2155,6 +2224,78 @@ async function editJobMailMessage(ctx, text, options = {}) {
         await ctx.reply(text, options).catch(() => {});
         return false;
     }
+}
+function jobMailPendingCardKeyboard(mailId) {
+    return { inline_keyboard:[[ 
+        { text:'✅ DUYỆT', callback_data:`jm:approve:${mailId}` },
+        { text:'❌ HỦY', callback_data:`jm:reject:${mailId}` }
+    ]] };
+}
+function jobMailPendingCardText(mail, stats) {
+    const username = mail.username ? `@${String(mail.username).replace(/^@/,'')}` : 'Không có';
+    return `📧 MAIL CHỜ DUYỆT\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}\n👤 Username: ${username}\n🌐 IP: ${mail.source_ip || 'Chưa có IP'}\n🕐 ${vietnamTimeText(new Date(mail.submitted_at))}\n\n📩 Tổng gửi: ${Number(stats?.total || 0).toLocaleString('vi-VN')}\n✅ Đã duyệt: ${Number(stats?.approved || 0).toLocaleString('vi-VN')}\n❌ Từ chối: ${Number(stats?.rejected || 0).toLocaleString('vi-VN')}`;
+}
+function jobMailReviewedCardText(mail) {
+    if (!mail) return '⚠️ Không tìm thấy JOB MAIL.';
+    if (mail.status === 'approved') {
+        return `✅ MAIL ĐÃ DUYỆT\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}\n📦 +${Number(mail.reward_orders || JOB_MAIL_REWARD_ORDERS).toLocaleString('vi-VN')} Đơn Hàng\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`;
+    }
+    if (mail.status === 'rejected') {
+        return `❌ MAIL ĐÃ TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}\n📝 Lý do: ${mail.reject_reason || 'Không đạt yêu cầu'}\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`;
+    }
+    return `⏳ MAIL VẪN ĐANG CHỜ DUYỆT\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}`;
+}
+
+// Chỉ lưu message_id để dọn UI Admin theo trang. Đây KHÔNG phải dữ liệu nghiệp vụ và không ảnh hưởng
+// approve/reject; trạng thái mail + reward vẫn luôn lấy từ Supabase/RPC atomic.
+const jobMailAdminPageUi = new Map();
+const jobMailCustomReasonUi = new Map();
+function jobMailAdminUiKey(ctx) {
+    return `${String(ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id || '')}:${String(ctx.from?.id || '')}`;
+}
+function jobMailCallbackMessageId(ctx) {
+    return Number(ctx.callbackQuery?.message?.message_id || 0) || null;
+}
+async function clearJobMailMessageButtons(chatId, messageId) {
+    if (!chatId || !messageId) return;
+    try { await bot.telegram.editMessageReplyMarkup(chatId, messageId, undefined, { inline_keyboard:[] }); } catch (_) {}
+}
+async function cleanupJobMailAdminPage(ctx, preserveMessageId = null) {
+    const key = jobMailAdminUiKey(ctx);
+    const state = jobMailAdminPageUi.get(key);
+    if (!state) return;
+    jobMailAdminPageUi.delete(key);
+    const chatId = state.chatId || ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id;
+    const ids = [...new Set([...(state.cardMessageIds || []), state.navMessageId].filter(Boolean))];
+    for (const messageId of ids) {
+        if (preserveMessageId && Number(messageId) === Number(preserveMessageId)) continue;
+        try {
+            await bot.telegram.deleteMessage(chatId, messageId);
+        } catch (_) {
+            await clearJobMailMessageButtons(chatId, messageId);
+        }
+    }
+}
+async function replyJobMailMessageWithRetry(ctx, text, options = {}) {
+    try {
+        return await ctx.reply(text, options);
+    } catch (e) {
+        const retryAfter = Number(e?.response?.parameters?.retry_after || 0);
+        if (retryAfter > 0 && retryAfter <= 5) {
+            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000 + 100));
+            return ctx.reply(text, options);
+        }
+        throw e;
+    }
+}
+async function renderJobMailCurrentCard(ctx, mail) {
+    if (!mail) return editJobMailMessage(ctx, '⚠️ Không tìm thấy JOB MAIL.', { reply_markup:{ inline_keyboard:[] } });
+    if (mail.status === 'pending') {
+        let stats = null;
+        try { stats = await getJobMailUserStats(mail.user_id); } catch (_) {}
+        return editJobMailMessage(ctx, jobMailPendingCardText(mail, stats), { reply_markup:jobMailPendingCardKeyboard(mail.id) });
+    }
+    return editJobMailMessage(ctx, jobMailReviewedCardText(mail), { reply_markup:{ inline_keyboard:[] } });
 }
 async function renderJobMailList(ctx, status, page = 0) {
     const safeStatus = ['pending','approved','rejected'].includes(status) ? status : 'pending';
@@ -2172,32 +2313,66 @@ async function renderJobMailList(ctx, status, page = 0) {
     if (currentPage !== requestedPage && total > 0) return renderJobMailList(ctx, safeStatus, currentPage);
 
     const rows = data || [];
-    const statsByUser = {};
-    await Promise.all([...new Set(rows.map(r => String(r.user_id)))].map(async id => {
-        try { statsByUser[id] = await getJobMailUserStats(id); } catch (_) { statsByUser[id] = null; }
-    }));
-    const title = safeStatus === 'pending' ? '⏳ MAIL CHỜ DUYỆT' : safeStatus === 'approved' ? '✅ MAIL ĐÃ DUYỆT' : '❌ MAIL ĐÃ TỪ CHỐI';
+    const currentMessageId = jobMailCallbackMessageId(ctx);
+    await cleanupJobMailAdminPage(ctx, currentMessageId);
+
+    if (safeStatus === 'pending') {
+        const nav = [];
+        if (currentPage > 0) nav.push({ text:'◀️ TRƯỚC', callback_data:`jm:list:pending:${currentPage - 1}` });
+        nav.push({ text:`${currentPage + 1}/${totalPages}`, callback_data:'jm:noop' });
+        if (currentPage + 1 < totalPages) nav.push({ text:'SAU ▶️', callback_data:`jm:list:pending:${currentPage + 1}` });
+        const navOptions = { reply_markup:{ inline_keyboard:[nav,[{ text:'↩️ MENU JOB MAIL', callback_data:'jm:menu' }]] } };
+        const navText = `⏳ MAIL CHỜ DUYỆT\nTrang ${currentPage + 1}/${totalPages} • Tổng ${total}${rows.length ? '' : '\n\n📭 Không có mail chờ duyệt.'}`;
+        let navMessageId = currentMessageId;
+        if (currentMessageId) {
+            try {
+                await ctx.editMessageText(navText, navOptions);
+            } catch (e) {
+                const desc = String(e?.response?.description || e?.message || '');
+                if (!/message is not modified/i.test(desc)) {
+                    await clearJobMailMessageButtons(ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id, currentMessageId);
+                    const sentNav = await replyJobMailMessageWithRetry(ctx, navText, navOptions);
+                    navMessageId = sentNav?.message_id || null;
+                }
+            }
+        } else {
+            const sentNav = await replyJobMailMessageWithRetry(ctx, navText, navOptions);
+            navMessageId = sentNav?.message_id || null;
+        }
+
+        const statsByUser = {};
+        await Promise.all([...new Set(rows.map(r => String(r.user_id)))].map(async id => {
+            try { statsByUser[id] = await getJobMailUserStats(id); } catch (_) { statsByUser[id] = null; }
+        }));
+        const cardMessageIds = [];
+        for (const mail of rows) {
+            const sent = await replyJobMailMessageWithRetry(ctx, jobMailPendingCardText(mail, statsByUser[String(mail.user_id)]), {
+                reply_markup:jobMailPendingCardKeyboard(mail.id)
+            });
+            if (sent?.message_id) cardMessageIds.push(sent.message_id);
+        }
+        jobMailAdminPageUi.set(jobMailAdminUiKey(ctx), {
+            chatId:ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id,
+            navMessageId,
+            cardMessageIds,
+            status:'pending',
+            page:currentPage
+        });
+        return;
+    }
+
+    const title = safeStatus === 'approved' ? '✅ MAIL ĐÃ DUYỆT' : '❌ MAIL ĐÃ TỪ CHỐI';
     const parts = [`${title}\n📄 Trang ${currentPage + 1}/${totalPages} • Tổng: ${total}`];
-    const keyboard = [];
     if (!rows.length) parts.push('\n📭 Không có mail trong mục này.');
     rows.forEach((m, idx) => {
-        const st = statsByUser[String(m.user_id)];
-        parts.push(`\n${idx + 1}. 📧 ${m.email_original}\n👤 ${m.user_id}${m.username ? ` • @${String(m.username).replace(/^@/,'')}` : ''}\n🌐 ${m.source_ip || 'Chưa có IP'}\n🕐 ${vietnamTimeText(new Date(m.submitted_at))}${st ? `\n📩 ${st.total} • ✅ ${st.approved} • ❌ ${st.rejected}` : ''}${m.reject_reason ? `\n📝 ${m.reject_reason}` : ''}`);
-        if (safeStatus === 'pending') {
-            keyboard.push([
-                { text:`✅ DUYỆT #${m.id}`, callback_data:`jm:approve:${m.id}` },
-                { text:`❌ HỦY #${m.id}`, callback_data:`jm:reject:${m.id}` }
-            ]);
-        }
+        parts.push(`\n${idx + 1}. 📧 ${m.email_original}\n👤 ${m.user_id}${m.username ? ` • @${String(m.username).replace(/^@/,'')}` : ''}\n🌐 ${m.source_ip || 'Chưa có IP'}\n🕐 ${vietnamTimeText(new Date(m.submitted_at))}${m.reviewed_at ? `\n🧾 ${vietnamTimeText(new Date(m.reviewed_at))}` : ''}${m.reject_reason ? `\n📝 ${m.reject_reason}` : ''}`);
     });
     const nav = [];
     if (currentPage > 0) nav.push({ text:'◀️ TRƯỚC', callback_data:`jm:list:${safeStatus}:${currentPage - 1}` });
     nav.push({ text:`${currentPage + 1}/${totalPages}`, callback_data:'jm:noop' });
     if (currentPage + 1 < totalPages) nav.push({ text:'SAU ▶️', callback_data:`jm:list:${safeStatus}:${currentPage + 1}` });
-    keyboard.push(nav);
-    keyboard.push([{ text:'↩️ MENU JOB MAIL', callback_data:'jm:menu' }]);
-    const options = { reply_markup:{ inline_keyboard:keyboard } };
-    await editJobMailMessage(ctx, parts.join('\n'), options);
+    const keyboard = [nav,[{ text:'↩️ MENU JOB MAIL', callback_data:'jm:menu' }]];
+    await editJobMailMessage(ctx, parts.join('\n'), { reply_markup:{ inline_keyboard:keyboard } });
 }
 async function handleJobMailCallback(ctx) {
     const data = String(ctx.callbackQuery?.data || '');
@@ -2211,9 +2386,11 @@ async function handleJobMailCallback(ctx) {
     try {
         if (data === 'jm:menu') {
             await ctx.answerCbQuery('Đang tải...').catch(() => {});
-            const stats = await getJobMailGlobalStats();
+            const currentMessageId = jobMailCallbackMessageId(ctx);
+            await cleanupJobMailAdminPage(ctx, currentMessageId);
+            const [stats, availability] = await Promise.all([getJobMailGlobalStats(), getJobMailAvailability()]);
             const options = { reply_markup:jobMailAdminMenuKeyboard() };
-            await editJobMailMessage(ctx, jobMailAdminSummaryText(stats), options);
+            await editJobMailMessage(ctx, jobMailAdminSummaryText(stats, availability), options);
             return true;
         }
         if (parts[1] === 'list') {
@@ -2238,39 +2415,69 @@ async function handleJobMailCallback(ctx) {
             await editJobMailMessage(ctx, text, { reply_markup:{ inline_keyboard:[[{text:'↩️ MENU JOB MAIL', callback_data:'jm:menu'}]] } });
             return true;
         }
+        if (parts[1] === 'review') {
+            const mailId = Number(parts[2]);
+            await ctx.answerCbQuery().catch(() => {});
+            const mail = await getJobMailById(mailId);
+            await renderJobMailCurrentCard(ctx, mail);
+            return true;
+        }
         if (parts[1] === 'approve') {
             const mailId = Number(parts[2]);
             await ctx.answerCbQuery('⏳ Đang duyệt...').catch(() => {});
             const result = await approveJobMailAtomic(mailId, ctx.from.id);
+            const mail = await getJobMailById(mailId);
             if (!result?.ok) {
-                const status = result?.status ? ` (${jobMailStatusLabel(result.status)})` : '';
-                await ctx.reply(`⚠️ Mail #${mailId} không thể duyệt${status}. Có thể đã được xử lý bởi admin khác.`);
+                if (mail) await renderJobMailCurrentCard(ctx, mail);
+                else await editJobMailMessage(ctx, `⚠️ Mail #${mailId} không thể duyệt.`, { reply_markup:{ inline_keyboard:[] } });
                 return true;
             }
             if (!result.idempotent) {
                 await safeSendMessage(result.user_id, `✅ MAIL ĐÃ ĐƯỢC DUYỆT\n\n📧 ${result.email}\n📦 +${Number(result.reward_orders || JOB_MAIL_REWARD_ORDERS).toLocaleString('vi-VN')} Đơn Hàng\n🕐 ${vietnamTimeText()}\n\nCảm ơn bạn đã hoàn thành JOB MAIL.`);
             }
-            const text = `✅ ĐÃ DUYỆT\n\n📧 ${result.email || ('#' + mailId)}\n👤 ${result.user_id || 'N/A'}\n📦 +${Number(result.reward_orders || JOB_MAIL_REWARD_ORDERS).toLocaleString('vi-VN')} Đơn Hàng\n🕐 ${vietnamTimeText()}${result.idempotent ? '\n\n♻️ Callback lặp lại — không cộng thưởng lần 2.' : ''}`;
-            await editJobMailMessage(ctx, text, { reply_markup:{ inline_keyboard:[[{text:'↩️ CHỜ DUYỆT',callback_data:'jm:list:pending:0'}],[{text:'↩️ MENU JOB MAIL',callback_data:'jm:menu'}]] } });
+            await editJobMailMessage(ctx, jobMailReviewedCardText(mail || {
+                status:'approved', email_original:result.email || ('#' + mailId), user_id:result.user_id || 'N/A',
+                reward_orders:result.reward_orders || JOB_MAIL_REWARD_ORDERS, reviewed_at:new Date().toISOString()
+            }), { reply_markup:{ inline_keyboard:[] } });
             return true;
         }
         if (parts[1] === 'reject') {
             const mailId = Number(parts[2]);
             await ctx.answerCbQuery('Chọn lý do từ chối').catch(() => {});
             const mail = await getJobMailById(mailId);
-            if (!mail || mail.status !== 'pending') {
-                await ctx.reply(`⚠️ Mail #${mailId} không còn ở trạng thái chờ duyệt.`);
+            if (!mail) {
+                await editJobMailMessage(ctx, `⚠️ Không tìm thấy Mail #${mailId}.`, { reply_markup:{ inline_keyboard:[] } });
+                return true;
+            }
+            if (mail.status !== 'pending') {
+                await renderJobMailCurrentCard(ctx, mail);
                 return true;
             }
             const keyboard = Object.entries(JOB_MAIL_REJECT_REASONS).map(([code,label]) => [{ text:label, callback_data:`jm:reason:${mailId}:${code}` }]);
             keyboard.push([{ text:'✍️ Lý do khác', callback_data:`jm:other:${mailId}` }]);
-            keyboard.push([{ text:'↩️ QUAY LẠI', callback_data:'jm:list:pending:0' }]);
-            await editJobMailMessage(ctx, `❌ LÝ DO TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ${mail.user_id}`, { reply_markup:{ inline_keyboard:keyboard } });
+            keyboard.push([{ text:'↩️ QUAY LẠI', callback_data:`jm:review:${mailId}` }]);
+            await editJobMailMessage(ctx, `❌ LÝ DO TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}`, { reply_markup:{ inline_keyboard:keyboard } });
             return true;
         }
         if (parts[1] === 'other') {
+            const mailId = Number(parts[2]);
             await ctx.answerCbQuery().catch(() => {});
-            await ctx.reply(`✍️ LÝ DO KHÁC\n\nDùng lệnh:\n/reason ${Number(parts[2])} nội dung lý do\n\nLệnh chứa đúng mailId nên không thể áp nhầm sang mail khác.`);
+            const mail = await getJobMailById(mailId);
+            if (!mail || mail.status !== 'pending') {
+                await renderJobMailCurrentCard(ctx, mail);
+                return true;
+            }
+            const messageId = jobMailCallbackMessageId(ctx);
+            if (messageId) {
+                jobMailCustomReasonUi.set(`${String(ctx.from.id)}:${mailId}`, {
+                    chatId:ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id,
+                    messageId
+                });
+                if (jobMailCustomReasonUi.size > 100) jobMailCustomReasonUi.delete(jobMailCustomReasonUi.keys().next().value);
+            }
+            await editJobMailMessage(ctx, `✍️ LÝ DO KHÁC\n\n📧 ${mail.email_original}\n👤 ID: ${mail.user_id}\n\nDùng lệnh:\n/reason ${mailId} nội dung lý do\n\nLệnh chứa đúng mailId nên không thể áp nhầm sang mail khác.`, {
+                reply_markup:{ inline_keyboard:[[{ text:'↩️ QUAY LẠI', callback_data:`jm:review:${mailId}` }]] }
+            });
             return true;
         }
         if (parts[1] === 'reason') {
@@ -2279,14 +2486,13 @@ async function handleJobMailCallback(ctx) {
             await ctx.answerCbQuery('⏳ Đang từ chối...').catch(() => {});
             if (!reason) return true;
             const rejected = await rejectJobMailAtomic(mailId, ctx.from.id, reason);
+            const mail = rejected.row;
             if (!rejected.changed) {
-                await ctx.reply(`⚠️ Mail #${mailId} đã được xử lý trước đó: ${jobMailStatusLabel(rejected.row?.status)}.`);
+                await renderJobMailCurrentCard(ctx, mail);
                 return true;
             }
-            const mail = rejected.row;
             await safeSendMessage(mail.user_id, `❌ ĐÃ TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ${mail.user_id}\n📝 Lý do: ${reason}\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`);
-            const text = `❌ ĐÃ TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ${mail.user_id}\n📝 Lý do: ${reason}\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`;
-            await editJobMailMessage(ctx, text, { reply_markup:{ inline_keyboard:[[{text:'↩️ CHỜ DUYỆT',callback_data:'jm:list:pending:0'}],[{text:'↩️ MENU JOB MAIL',callback_data:'jm:menu'}]] } });
+            await editJobMailMessage(ctx, jobMailReviewedCardText(mail), { reply_markup:{ inline_keyboard:[] } });
             return true;
         }
     } catch (e) {
@@ -3032,8 +3238,8 @@ bot.command('saoke', async (ctx) => {
 bot.command('mail', async (ctx) => {
     if (!isAdmin(ctx)) return;
     try {
-        const stats = await getJobMailGlobalStats();
-        return ctx.reply(jobMailAdminSummaryText(stats), { reply_markup:jobMailAdminMenuKeyboard() });
+        const [stats, availability] = await Promise.all([getJobMailGlobalStats(), getJobMailAvailability()]);
+        return ctx.reply(jobMailAdminSummaryText(stats, availability), { reply_markup:jobMailAdminMenuKeyboard() });
     } catch (e) {
         console.error('/mail:', e);
         return ctx.reply(jobMailDbUnavailable(e) ? jobMailSetupMessage(e) : `❌ Lỗi JOB MAIL: ${e.message}`);
@@ -3096,6 +3302,34 @@ bot.command('unbandmail', async (ctx) => {
     return ctx.reply(`✅ Đã mở khóa JOB MAIL cho user ${targetId}.`);
 });
 
+// /khoajobmail - khóa TOÀN BỘ nhận JOB MAIL mới. Trạng thái persist Supabase app_settings.
+bot.command('khoajobmail', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    try {
+        await setJobMailManualLocked(true);
+        return ctx.reply('🔒 ĐÃ KHÓA JOB MAIL\n\nTất cả người dùng tạm thời không thể gửi JOB MAIL mới.\n\nDữ liệu mail đã gửi trước đó vẫn được giữ nguyên và Admin vẫn có thể duyệt/hủy bình thường.');
+    } catch (e) {
+        console.error('/khoajobmail:', e);
+        return ctx.reply(jobMailDbUnavailable(e) ? jobMailSetupMessage(e) : `❌ Không thể khóa JOB MAIL: ${e.message}`);
+    }
+});
+
+// /mokhoajobmail - chỉ bỏ manual lock; lịch 21:00–06:00 vẫn là source of truth và không bị bypass.
+bot.command('mokhoajobmail', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    try {
+        await setJobMailManualLocked(false);
+        const availability = await getJobMailAvailability();
+        const effective = availability.jobMailScheduleOpen
+            ? '\n\n🟢 Hiện đang trong khung nhận mail 06:00–21:00.'
+            : '\n\n🔴 Hiện đang ngoài khung 06:00–21:00 nên user vẫn chưa thể gửi; hệ thống sẽ tự mở theo lịch.';
+        return ctx.reply(`🔓 ĐÃ MỞ KHÓA JOB MAIL\n\nNgười dùng có thể tiếp tục gửi mail nếu đang nằm trong khung giờ 06:00–21:00.${effective}`);
+    } catch (e) {
+        console.error('/mokhoajobmail:', e);
+        return ctx.reply(jobMailDbUnavailable(e) ? jobMailSetupMessage(e) : `❌ Không thể mở khóa JOB MAIL: ${e.message}`);
+    }
+});
+
 bot.command('reason', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const raw = String(ctx.message?.text || '').replace(/^\/reason(?:@\w+)?\s*/i,'').trim();
@@ -3104,12 +3338,22 @@ bot.command('reason', async (ctx) => {
     const mailId = Number(raw.slice(0, firstSpace));
     const reason = raw.slice(firstSpace + 1).trim().slice(0,300);
     if (!Number.isSafeInteger(mailId) || !reason) return ctx.reply('❌ mailId hoặc lý do không hợp lệ.');
+    const customUiKey = `${String(ctx.from.id)}:${mailId}`;
     try {
         const rejected = await rejectJobMailAtomic(mailId, ctx.from.id, reason);
-        if (!rejected.changed) return ctx.reply(`⚠️ Mail #${mailId} đã được xử lý trước đó: ${jobMailStatusLabel(rejected.row?.status)}.`);
         const mail = rejected.row;
+        const ui = jobMailCustomReasonUi.get(customUiKey);
+        jobMailCustomReasonUi.delete(customUiKey);
+        if (ui?.chatId && ui?.messageId && mail) {
+            try {
+                await bot.telegram.editMessageText(ui.chatId, ui.messageId, undefined, jobMailReviewedCardText(mail), { reply_markup:{ inline_keyboard:[] } });
+            } catch (_) {
+                await clearJobMailMessageButtons(ui.chatId, ui.messageId);
+            }
+        }
+        if (!rejected.changed) return ctx.reply(`⚠️ Mail #${mailId} đã được xử lý trước đó: ${jobMailStatusLabel(mail?.status)}.`);
         await safeSendMessage(mail.user_id, `❌ ĐÃ TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ${mail.user_id}\n📝 Lý do: ${reason}\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`);
-        return ctx.reply(`❌ ĐÃ TỪ CHỐI\n\n📧 ${mail.email_original}\n👤 ${mail.user_id}\n📝 Lý do: ${reason}\n🕐 ${vietnamTimeText(new Date(mail.reviewed_at || Date.now()))}`);
+        return ctx.reply(jobMailReviewedCardText(mail));
     } catch (e) {
         return ctx.reply(jobMailDbUnavailable(e) ? jobMailSetupMessage(e) : `❌ Lỗi: ${e.message}`);
     }
@@ -4216,9 +4460,34 @@ app.post('/api/job-mail/submit', async (req, res) => {
         if (user.isBanned) return res.status(403).json({ success:false, isBanned:true, error:'Tài khoản đã bị khóa.' });
         if (user.job_mail_banned === true) return res.status(403).json({ success:false, jobMailBanned:true, error:'JOB MAIL đã bị khóa cho tài khoản này.' });
 
+        // Source of truth: manual lock persist Supabase + giờ thực tế Asia/Ho_Chi_Minh. Không dùng timer/giờ browser.
+        const availability = await getJobMailAvailability();
+        if (availability.jobMailManualLocked) {
+            return res.status(423).json({
+                success:false,
+                jobMailClosed:true,
+                ...jobMailAvailabilityPayload(availability),
+                error:'❌ JOB MAIL hiện đang được Admin tạm khóa.'
+            });
+        }
+        if (!availability.jobMailScheduleOpen) {
+            return res.status(423).json({
+                success:false,
+                jobMailClosed:true,
+                ...jobMailAvailabilityPayload(availability),
+                error:'❌ JOB MAIL hiện đã đóng. Thời gian nhận mail từ 06:00 đến 21:00.'
+            });
+        }
+
         const rawInput = Array.isArray(req.body?.emails) ? req.body.emails : String(req.body?.emails || '').split(/\r?\n/);
         const nonEmpty = rawInput.map(v => String(v || '').trim()).filter(Boolean);
-        if (!nonEmpty.length) return res.status(400).json({ success:false, error:'Vui lòng nhập ít nhất 1 Gmail.' });
+        if (nonEmpty.length < JOB_MAIL_MIN_BATCH) {
+            return res.status(400).json({
+                success:false,
+                jobMailMinBatch:JOB_MAIL_MIN_BATCH,
+                error:`❌ Mỗi lần gửi cần ít nhất ${JOB_MAIL_MIN_BATCH} Gmail.`
+            });
+        }
 
         let invalid = 0, duplicateBatch = 0;
         const unique = new Map();
@@ -4268,7 +4537,8 @@ app.post('/api/job-mail/submit', async (req, res) => {
             duplicateSystem,
             invalid,
             pendingAdded:inserted.length,
-            stats
+            stats,
+            ...jobMailAvailabilityPayload(availability)
         });
     } catch (e) {
         console.error('JOB MAIL submit:',e);
@@ -4285,12 +4555,13 @@ app.get('/api/job-mail/me/:userId', async (req, res) => {
         if (userError || !user) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
         const page = Math.max(1, Math.trunc(Number(req.query.page || 1)));
         const offset = (page - 1) * JOB_MAIL_HISTORY_PAGE_SIZE;
-        const [stats, historyResult] = await Promise.all([
+        const [stats, historyResult, availability] = await Promise.all([
             getJobMailUserStats(userId),
             jobMailDb().from('job_mails')
                 .select('id,email_original,status,reject_reason,submitted_at,reviewed_at,reward_orders,reward_credited', { count:'exact' })
                 .eq('user_id', userId).order('submitted_at',{ascending:false})
-                .range(offset, offset + JOB_MAIL_HISTORY_PAGE_SIZE - 1)
+                .range(offset, offset + JOB_MAIL_HISTORY_PAGE_SIZE - 1),
+            getJobMailAvailability()
         ]);
         if (historyResult.error) throw historyResult.error;
         const totalPages = Math.max(1, Math.ceil(Number(historyResult.count || 0) / JOB_MAIL_HISTORY_PAGE_SIZE));
@@ -4301,7 +4572,8 @@ app.get('/api/job-mail/me/:userId', async (req, res) => {
             history:historyResult.data || [],
             page:Math.min(page,totalPages),
             totalPages,
-            pageSize:JOB_MAIL_HISTORY_PAGE_SIZE
+            pageSize:JOB_MAIL_HISTORY_PAGE_SIZE,
+            ...jobMailAvailabilityPayload(availability)
         });
     } catch (e) {
         console.error('JOB MAIL me:',e);
