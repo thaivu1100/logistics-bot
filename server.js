@@ -988,10 +988,20 @@ async function persistOnboardingVerified(userId) {
     return { ok:true, verifiedAt:verifyRead.data.onboardingGroupsVerifiedAt || verifiedAt, user:verifyRead.data };
 }
 
-// Hàm kiểm tra IP trùng
+// Hàm kiểm tra IP trùng. Không coi IP rỗng/placeholder là bằng chứng trùng tài khoản.
+function normalizeIpForDuplicateCheck(ip) {
+    const value = String(ip ?? '').trim();
+    if (!value || /^(chưa có|unknown|null|undefined|n\/a)$/i.test(value)) return '';
+    return value;
+}
 async function checkDuplicateIP(userId, ip) {
-    if (!ip) return [];
-    const { data } = await supabase.from('users').select('id, name').eq('ip', ip).neq('id', userId);
+    const normalizedIp = normalizeIpForDuplicateCheck(ip);
+    if (!normalizedIp) return [];
+    const { data, error } = await supabase.from('users').select('id, name').eq('ip', normalizedIp).neq('id', String(userId));
+    if (error) {
+        console.error(`Lỗi kiểm tra IP trùng cho ${userId}:`, error.message);
+        return [];
+    }
     return data || [];
 }
 
@@ -1705,8 +1715,13 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     }
     // Đếm riêng cho BXH TUẦN (được reset về 0 mỗi tuần bởi weeklyLeaderboardReset(), khác với validInvites
     // là tổng trọn đời dùng cho mốc thưởng mời bạn, không bao giờ reset).
-    const weeklyInviteCount = await incrementWeeklyInviteForCurrentWeek(userRecord.referrerId);
-    if (weeklyInviteCount === null) console.error(`Không cập nhật được weeklyValidInvites cho referrer ${userRecord.referrerId}`);
+    const weeklyInviteCount = await incrementWeeklyInviteForCurrentWeek(userRecord.referrerId, userId);
+    if (weeklyInviteCount === null) {
+        console.error(`Không cập nhật được weeklyValidInvites/audit cho referrer ${userRecord.referrerId}`);
+        await atomicIncrement(userRecord.referrerId, 'validInvites', -1);
+        await supabase.from('users').update({ referrerCounted:false }).eq('id',userId).eq('referrerCounted',true);
+        return { ok:false, reason:'weekly_audit_failed' };
+    }
     await atomicIncrement(userRecord.referrerId, 'dailyValidInvites', 1);
     if (newValid > (refUser.invitedCount || 0)) {
         // Dữ liệu invitedCount cũ (trước khi vá lỗi) có thể vẫn còn thấp hơn thực tế -> tự sửa lại cho khớp
@@ -1718,6 +1733,9 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
         deltaOrders: INSTANT_REF_ORDERS
     });
     if (referralWalletMutation.error) {
+        await rollbackWeeklyReferralAuditForCurrentWeek(userRecord.referrerId, userId).catch(()=>false);
+        await atomicIncrement(userRecord.referrerId, 'validInvites', -1);
+        await atomicIncrement(userRecord.referrerId, 'dailyValidInvites', -1);
         await supabase.from('users').update({ referrerCounted: false }).eq('id', userId).eq('referrerCounted', true);
         return { ok: false, reason: 'wallet_update_failed' };
     }
@@ -3375,6 +3393,7 @@ bot.command('checkID', async (ctx) => {
             getLatestJobMailSourceIp(targetId)
         ]);
         const withdrawals = withdrawalsResult.data || [];
+        const sharedWithdrawal = await findSharedWithdrawalDestinationForUser(targetId).catch(() => ({shared:false,count:0,relatedIds:[]}));
         const successStatuses = new Set(['success','approved','completed']);
         const cancelledStatuses = new Set(['cancelled','rejected','refunded']);
         const totalWithdrawn = withdrawals.filter(w => successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
@@ -3404,6 +3423,7 @@ bot.command('checkID', async (ctx) => {
             `👥 Bạn bè mời thành công: ${Number(user.validInvites || 0).toLocaleString('vi-VN')}\n\n` +
             `🌐 IP: ${ip}\n` +
             `♻️ Trùng IP với:${duplicateText}\n\n` +
+            `💳 Shared Withdrawal Destination: ${sharedWithdrawal.shared ? 'Có' : 'Không'}${sharedWithdrawal.shared ? `\n👥 Số Telegram account dùng chung: ${sharedWithdrawal.count}\n🆔 ID liên quan: ${sharedWithdrawal.relatedIds.slice(0,5).join(', ')}` : ''}\n\n` +
             `📩 Tổng Mail đã gửi: ${Number(mailStatsResult.total || 0).toLocaleString('vi-VN')}\n` +
             `✅ Mail được duyệt: ${Number(mailStatsResult.approved || 0).toLocaleString('vi-VN')}\n` +
             `❌ Mail bị từ chối: ${Number(mailStatsResult.rejected || 0).toLocaleString('vi-VN')}\n\n` +
@@ -3740,6 +3760,86 @@ function weeklyPayoutKey(boardType, endedWeekKey, rank, userId) {
     return persistentEventKey('weekly-payout', `${boardType}:${endedWeekKey}:${rank}:${String(userId)}`);
 }
 
+function weeklyReferralAuditPrefix(weekKey, referrerId) {
+    return persistentEventKey('weekly-referral', `${String(weekKey)}:${String(referrerId)}:`);
+}
+function weeklyReferralAuditKey(weekKey, referrerId, referredUserId) {
+    return `${weeklyReferralAuditPrefix(weekKey, referrerId)}${String(referredUserId)}`;
+}
+function weeklyReferralBaselineKey(weekKey, referrerId) {
+    return persistentEventKey('weekly-referral-baseline', `${String(weekKey)}:${String(referrerId)}`);
+}
+async function getOrCreateWeeklyReferralBaseline(weekKey, referrerId) {
+    const key = weeklyReferralBaselineKey(weekKey, referrerId);
+    const existing = await readPersistentEvent(key);
+    if (existing && Number.isFinite(Number(existing.count))) return Math.max(0, Number(existing.count));
+    const { data:user, error } = await readUserRow(String(referrerId));
+    if (error || !user) throw error || new Error('Không đọc được referrer để tạo weekly referral baseline.');
+    const value = { weekKey:String(weekKey), referrerId:String(referrerId), count:Math.max(0,Number(user.weeklyValidInvites || 0)), createdAt:Date.now() };
+    const once = await createPersistentEventOnce(key, value);
+    if (once.error) throw once.error;
+    return Math.max(0,Number((once.value || value).count || 0));
+}
+function parsePersistentValue(value) {
+    if (!value) return null;
+    if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return null; } }
+    return (typeof value === 'object' && !Array.isArray(value)) ? value : null;
+}
+async function listWeeklyReferralAudit(weekKey, referrerId) {
+    const prefix = weeklyReferralAuditPrefix(weekKey, referrerId);
+    const { data, error } = await supabase.from('app_settings').select('key,value').like('key', `${prefix}%`);
+    if (error) throw error;
+    const byReferred = new Map();
+    for (const row of data || []) {
+        const value = parsePersistentValue(row.value) || {};
+        const referredUserId = String(value.referredUserId || String(row.key || '').slice(prefix.length));
+        if (!referredUserId || String(value.weekKey || weekKey) !== String(weekKey) || String(value.referrerId || referrerId) !== String(referrerId)) continue;
+        byReferred.set(referredUserId, { ...value, key:row.key, weekKey:String(weekKey), referrerId:String(referrerId), referredUserId });
+    }
+    return [...byReferred.values()];
+}
+
+async function inspectWeeklyInviteDuplicateIp(referrerId, endedWeekKey) {
+    const audits = await listWeeklyReferralAudit(endedWeekKey, referrerId);
+    const violations = [];
+    for (const audit of audits) {
+        if (String(audit.status || '') === 'rolled_back') continue;
+        const referredUserId = String(audit.referredUserId || '');
+        if (!referredUserId) continue;
+        const { data:user } = await readUserRow(referredUserId);
+        if (!user || user.referrerCounted !== true || String(user.referrerId || '') !== String(referrerId)) continue;
+        const ip = normalizeIpForDuplicateCheck(user.ip);
+        if (!ip) continue;
+        const duplicates = await checkDuplicateIP(referredUserId, ip);
+        const distinct = [...new Map((duplicates || []).filter(d => String(d.id) !== referredUserId).map(d => [String(d.id), { id:String(d.id), name:d.name || 'User' }])).values()];
+        if (distinct.length) violations.push({ referredUserId, ip, duplicates:distinct });
+    }
+    return { disqualified:violations.length > 0, audits, violations };
+}
+
+async function notifyWeeklyInviteDisqualification(entry, prize, endedWeekKey, inspection, payoutId) {
+    const userMarkerKey = persistentEventKey('weekly-disqualify-user-notify', payoutId);
+    const userReserved = await createPersistentEventOnce(userMarkerKey, {status:'reserved',payoutId,reservedAt:Date.now()});
+    if (!userReserved.error && userReserved.created) {
+        const sent = await safeSendLocalizedMessage(entry.id,
+            `⚠️ *KẾT QUẢ BXH MỜI BẠN*\n\nBạn đạt *${prize.label}* với *${entry.score}* lượt mời hợp lệ.\n\nTuy nhiên phần thưởng tuần này không được trao vì hệ thống phát hiện ít nhất một tài khoản được mời trong tuần sử dụng IP trùng với tài khoản khác.\n\n🔐 Đây là cơ chế chống gian lận BXH.`,
+            `⚠️ *INVITE RANKING RESULT*\n\nYou reached *${prize.label}* with *${entry.score}* valid invites.\n\nHowever, this week's reward was not granted because at least one referred account from the week used an IP also used by another account.\n\n🔐 This is an anti-fraud measure for the ranking.`,
+            {parse_mode:'Markdown'});
+        await writePersistentEvent(userMarkerKey,{status:sent?'sent':'failed',payoutId,attemptedAt:Date.now()},2).catch(()=>{});
+    }
+
+    const adminMarkerKey = persistentEventKey('weekly-disqualify-admin-notify', payoutId);
+    const adminReserved = await createPersistentEventOnce(adminMarkerKey, {status:'reserved',payoutId,reservedAt:Date.now()});
+    if (!adminReserved.error && adminReserved.created) {
+        const details = (inspection.violations || []).slice(0,10).map(v =>
+            `- referred ID: ${v.referredUserId}\n  IP: ${v.ip}\n  trùng với IDs: ${v.duplicates.map(d => d.id).join(', ')}`
+        ).join('\n');
+        const text = `🚨 BXH MỜI BẠN — KHÔNG TRAO THƯỞNG\n\nHạng: ${prize.rank}\nUser ID: ${entry.id}\nTên: ${entry.name || 'User'}\nweeklyValidInvites: ${Number(entry.score || 0)}\nEnded Week: ${endedWeekKey}\nReason: duplicate_referral_ip\n\nReferral vi phạm:\n${details || '- Không có chi tiết IP hợp lệ để hiển thị.'}`;
+        const sent = await safeSendMessage(ADMIN_ID, text);
+        await writePersistentEvent(adminMarkerKey,{status:sent?'sent':'failed',payoutId,attemptedAt:Date.now()},2).catch(()=>{});
+    }
+}
+
 async function getInviteWeeklyEntries(limit = 10) {
     const inviteCols = await getUserColumns();
     if (inviteCols.has('weeklyValidInvites')) {
@@ -3808,6 +3908,7 @@ async function ensureWeeklyPayout(boardType, endedWeekKey, entry, prize) {
     const key = weeklyPayoutKey(boardType, endedWeekKey, prize.rank, entry.id);
     let marker = await readPersistentEvent(key);
     let createdByThisProcess = false;
+    if (marker?.status === 'disqualified') return true;
 
     if (!marker) {
         const { data: current, error } = await readUserRow(entry.id);
@@ -3839,6 +3940,34 @@ async function ensureWeeklyPayout(boardType, endedWeekKey, entry, prize) {
         createdByThisProcess = !!once.created;
     }
 
+    // Rule chống gian lận chỉ áp dụng BXH Mời Bạn. Giữ nguyên snapshot/rank, chỉ chặn wallet mutation.
+    if (boardType === 'invite' && marker.status === 'reserved') {
+        let inspection;
+        try {
+            inspection = await inspectWeeklyInviteDuplicateIp(entry.id, endedWeekKey);
+        } catch (e) {
+            console.error(`Không kiểm tra được referral IP cho payout ${payoutId}:`, e.message);
+            return false; // không reset/payout khi chưa xác minh được an toàn
+        }
+        if (inspection.disqualified) {
+            marker = {
+                ...marker,
+                status:'disqualified',
+                reason:'duplicate_referral_ip',
+                duplicateIpDisqualified:true,
+                disqualifiedAt:Date.now(),
+                leaseUntil:0,
+                violations:(inspection.violations || []).slice(0,20).map(v => ({
+                    referredUserId:v.referredUserId, ip:v.ip, duplicateIds:v.duplicates.map(d => d.id)
+                }))
+            };
+            if (!(await writePersistentEvent(key, marker, 4))) return false;
+            await notifyWeeklyInviteDisqualification(entry, prize, endedWeekKey, inspection, payoutId).catch(e => console.error('Lỗi notify weekly disqualification:', e.message));
+            return true;
+        }
+    }
+
+    if (marker.status === 'disqualified') return true;
     if (marker.status !== 'committed') {
         if (!createdByThisProcess && marker.owner && marker.owner !== WEEKLY_PROCESS_ID
             && Number(marker.leaseUntil || 0) > Date.now()) {
@@ -4103,16 +4232,94 @@ function incrementWeeklyAds(userId, eventId = '') {
     });
 }
 
-// Referral hợp lệ dùng boundary lock rồi atomicIncrement; claim referrerCounted hiện hữu vẫn là idempotency chính.
-function incrementWeeklyInviteForCurrentWeek(referrerId) {
+// Referral hợp lệ: mỗi referred user tạo đúng 1 persistent audit theo week/referrer/referred.
+// Lock persistent theo referrer+week giúp multi-instance không làm mất lượt khi 2 referral hoàn tất đồng thời.
+function incrementWeeklyInviteForCurrentWeek(referrerId, referredUserId) {
     return runWeeklyLeaderboardExclusive(async () => {
         const currentWeek = getWeekIdentifier(new Date());
         const ready = await processWeeklyBoard('invite', 1, currentWeek);
         if (!ready) return null;
         const transition = await readPersistentEvent(weeklyTransitionKey('invite'));
         if (transition?.status === 'resetting') return null;
-        return atomicIncrement(referrerId, 'weeklyValidInvites', 1);
+
+        const referrer = String(referrerId || '');
+        const referred = String(referredUserId || '');
+        if (!referrer || !referred) return null;
+        const lockKey = persistentEventKey('weekly-referral-lock', `${currentWeek}:${referrer}`);
+        const release = await acquirePersistentLeaseLock(lockKey, 30 * 1000);
+        if (!release) return null;
+        try {
+            const transitionFresh = await readPersistentEvent(weeklyTransitionKey('invite'));
+            if (transitionFresh?.status === 'resetting') return null;
+
+            // Baseline giữ nguyên toàn bộ weeklyValidInvites đã có trước khi rollout audit trong tuần hiện tại,
+            // tránh làm mất dữ liệu giữa tuần. Các referral mới sau rollout được cộng bằng số audit unique.
+            const baselineCount = await getOrCreateWeeklyReferralBaseline(currentWeek, referrer);
+            const auditKey = weeklyReferralAuditKey(currentWeek, referrer, referred);
+            let audit = await readPersistentEvent(auditKey);
+            if (!audit) {
+                const once = await createPersistentEventOnce(auditKey, {
+                    status:'reserved',
+                    weekKey:currentWeek,
+                    referrerId:referrer,
+                    referredUserId:referred,
+                    countedAt:null,
+                    reservedAt:Date.now()
+                });
+                if (once.error) return null;
+                audit = once.value;
+            }
+
+            const audits = await listWeeklyReferralAudit(currentWeek, referrer);
+            const uniqueReferred = [...new Set(audits.filter(a => String(a.status || '') !== 'rolled_back').map(a => String(a.referredUserId || '')).filter(Boolean))];
+            const targetCount = baselineCount + uniqueReferred.length;
+            const saved = await saveUserFields(referrer, { weeklyValidInvites:targetCount });
+            if (saved.error) return null;
+            if (!(await flushUserExtra())) return null;
+
+            if (audit?.status !== 'counted') {
+                const marked = await writePersistentEvent(auditKey, {
+                    ...(audit || {}),
+                    status:'counted',
+                    weekKey:currentWeek,
+                    referrerId:referrer,
+                    referredUserId:referred,
+                    countedAt:audit?.countedAt || Date.now(),
+                    weeklyCountAfter:targetCount
+                }, 4);
+                if (!marked) return null;
+            }
+            return targetCount;
+        } finally {
+            try { await release(); } catch (_) {}
+        }
     });
+}
+
+async function rollbackWeeklyReferralAuditForCurrentWeek(referrerId, referredUserId) {
+    const weekKey = getWeekIdentifier(new Date());
+    const referrer = String(referrerId || '');
+    const referred = String(referredUserId || '');
+    if (!referrer || !referred) return false;
+    const lockKey = persistentEventKey('weekly-referral-lock', `${weekKey}:${referrer}`);
+    const release = await acquirePersistentLeaseLock(lockKey, 30 * 1000);
+    if (!release) return false;
+    try {
+        const auditKey = weeklyReferralAuditKey(weekKey, referrer, referred);
+        const audit = await readPersistentEvent(auditKey);
+        if (audit && String(audit.status || '') !== 'rolled_back') {
+            if (!(await writePersistentEvent(auditKey,{...audit,status:'rolled_back',rolledBackAt:Date.now()},4))) return false;
+        }
+        const baselineCount = await getOrCreateWeeklyReferralBaseline(weekKey, referrer);
+        const audits = await listWeeklyReferralAudit(weekKey, referrer);
+        const targetCount = baselineCount + new Set(audits.filter(a => String(a.status || '') !== 'rolled_back').map(a => String(a.referredUserId || '')).filter(Boolean)).size;
+        const saved = await saveUserFields(referrer,{weeklyValidInvites:targetCount});
+        if (saved.error) return false;
+        if (!(await flushUserExtra())) return false;
+        return true;
+    } finally {
+        try { await release(); } catch (_) {}
+    }
 }
 
 function scheduleNextVietnamWeeklyReset() {
@@ -7499,7 +7706,82 @@ const SUPPORTED_BANKS = [
  'Vietcombank','BIDV','VietinBank','Agribank','MBBank','Techcombank','VPBank','ACB','Sacombank','HDBank','VIB','TPBank','SHB','MSB','Eximbank','OCB','SeABank','LPBank','Bac A Bank','Nam A Bank','VietABank','ABBank','PVcomBank','KienlongBank','VietBank','BVBank','Public Bank Vietnam','Hong Leong Bank Vietnam','UOB Vietnam','HSBC Vietnam','Standard Chartered Vietnam','CIMB Vietnam','Woori Bank Vietnam','Shinhan Bank Vietnam','DBS Vietnam'
 ];
 const SUPPORTED_EWALLETS = ['momo','zalopay'];
-function normalizeAccountDigits(v){ return String(v??'').trim().replace(/\s+/g,''); }
+function normalizeAccountDigits(v){ return String(v??'').trim().replace(/\D+/g,''); }
+function normalizeWithdrawalProvider(v){ return String(v??'').normalize('NFKC').trim().toLowerCase().replace(/[^a-z0-9]/g,''); }
+function withdrawalDestinationIdentity(row = {}) {
+    const accountNumber = normalizeAccountDigits(row.accountNumber);
+    if (!accountNumber) return null;
+    const methodText = String(row.method || '').toLowerCase();
+    const walletRaw = normalizeWithdrawalProvider(row.walletType);
+    const walletType = walletRaw === 'momo' || methodText.includes('momo') ? 'momo'
+        : (walletRaw === 'zalopay' || methodText.includes('zalopay') ? 'zalopay' : '');
+    if (walletType) {
+        return { type:'ewallet', provider:walletType, accountNumber, key:`ewallet:${walletType}:${accountNumber}` };
+    }
+    const bankName = normalizeWithdrawalProvider(row.bankName);
+    if (!bankName) return null;
+    return { type:'bank', provider:bankName, accountNumber, key:`bank:${bankName}:${accountNumber}` };
+}
+function withdrawalDestinationHash(identity) {
+    return identity?.key ? crypto.createHash('sha256').update(identity.key).digest('hex') : '';
+}
+function validWithdrawalEvidenceStatus(status) {
+    return ['pending','success','approved','completed','paid'].includes(String(status || '').toLowerCase());
+}
+async function findSharedWithdrawalDestinationForUser(userId) {
+    const { data, error } = await supabase.from('withdrawals').select('*');
+    if (error) return { shared:false, count:0, relatedIds:[] };
+    const mine = (data || []).filter(w => String(w.userId) === String(userId));
+    const identities = [...new Map(mine.map(w => { const id=withdrawalDestinationIdentity(w); return id ? [id.key,id] : null; }).filter(Boolean)).values()];
+    for (const identity of identities) {
+        const relatedIds = [...new Set((data || []).filter(w => withdrawalDestinationIdentity(w)?.key === identity.key).map(w => String(w.userId)).filter(Boolean))];
+        if (relatedIds.length >= 2) return { shared:true, count:relatedIds.length, relatedIds, identity };
+    }
+    return { shared:false, count:0, relatedIds:[] };
+}
+async function detectAndAlertSharedWithdrawalDestination(newWithdrawal) {
+    const identity = withdrawalDestinationIdentity(newWithdrawal);
+    if (!identity) return { shared:false, count:0 };
+    const { data, error } = await supabase.from('withdrawals').select('*');
+    if (error) throw error;
+    const matching = (data || []).filter(w => validWithdrawalEvidenceStatus(w.status) && withdrawalDestinationIdentity(w)?.key === identity.key);
+    const relatedIds = [...new Set(matching.map(w => String(w.userId)).filter(Boolean))];
+    if (!relatedIds.includes(String(newWithdrawal.userId))) relatedIds.push(String(newWithdrawal.userId));
+    if (relatedIds.length < 2) return { shared:false, count:relatedIds.length };
+
+    const destinationHash = withdrawalDestinationHash(identity);
+    const markerKey = persistentEventKey('withdraw-destination-alert', `${String(newWithdrawal.userId)}:${String(newWithdrawal.id || newWithdrawal.txCode || '')}:${destinationHash}`);
+    const reserved = await createPersistentEventOnce(markerKey, {
+        status:'reserved', destinationHash, withdrawalId:String(newWithdrawal.id || newWithdrawal.txCode || ''),
+        userId:String(newWithdrawal.userId), accountCount:relatedIds.length, reservedAt:Date.now()
+    });
+    if (reserved.error || !reserved.created) return { shared:true, count:relatedIds.length, duplicateAlert:true };
+
+    const userRows = await Promise.all(relatedIds.map(async id => {
+        const [{data:user}, antiFraud] = await Promise.all([readUserRow(id), getAntiFraudState(id).catch(()=>({state:{}}))]);
+        const history = matching.filter(w => String(w.userId) === id).sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0));
+        const successTotal = history.filter(w => ['success','approved','completed','paid'].includes(String(w.status||'').toLowerCase())).reduce((sum,w)=>sum+Number(w.amount||0),0);
+        const riskState = antiFraud?.state || {};
+        const riskScore = Math.max(0, Math.min(100, Number(riskState.riskScore || 0)));
+        return {
+            id, name:user?.name || 'User', ip:normalizeIpForDuplicateCheck(riskState.ip || user?.ip) || 'Chưa có',
+            total:history.length, successTotal, latest:history[0]?.createdAt || null, riskScore
+        };
+    }));
+
+    const providerDisplay = identity.type === 'bank'
+        ? String(newWithdrawal.bankName || newWithdrawal.method || identity.provider)
+        : (identity.provider === 'momo' ? 'MoMo' : 'ZaloPay');
+    const header = identity.type === 'bank' ? '🚨💳 CẢNH BÁO TRÙNG TÀI KHOẢN RÚT TIỀN' : '🚨💳 CẢNH BÁO TRÙNG VÍ ĐIỆN TỬ';
+    const destinationText = identity.type === 'bank'
+        ? `🏦 Phương thức: Ngân hàng\n🏦 Ngân hàng: ${providerDisplay}\n💳 STK: ${identity.accountNumber}\n👤 Chủ TK: ${String(newWithdrawal.accountName || 'Không có')}`
+        : `📱 Ví: ${providerDisplay}\n📞 SĐT: ${identity.accountNumber}`;
+    const accountsText = userRows.map((u,idx) => `${idx+1}️⃣\n🆔 ID: ${u.id}\n👤 Tên: ${u.name}\n🌐 IP: ${u.ip}\n💰 Số lệnh liên quan: ${u.total}\n💵 Tổng đã rút thành công: ${u.successTotal.toLocaleString('vi-VN')} VNĐ\n🕒 Lần gần nhất: ${u.latest ? vietnamTimeText(new Date(u.latest)) : 'N/A'}\n🛡 Risk Score: ${u.riskScore}/100`).join('\n\n');
+    const text = `${header}\n\n⚠️ Phát hiện ${relatedIds.length} tài khoản Telegram khác nhau rút về cùng một đích.\n\n${destinationText}\n\n👥 TÀI KHOẢN LIÊN QUAN: ${relatedIds.length}\n\n${accountsText}\n\n🔍 ADMIN NÊN KIỂM TRA TRƯỚC KHI DUYỆT.`;
+    const sent = await safeSendMessage(ADMIN_ID, text.slice(0,3900));
+    await writePersistentEvent(markerKey,{status:sent?'sent':'failed',destinationHash,withdrawalId:String(newWithdrawal.id || newWithdrawal.txCode || ''),userId:String(newWithdrawal.userId),accountCount:relatedIds.length,attemptedAt:Date.now()},2).catch(()=>{});
+    return { shared:true, count:relatedIds.length, relatedIds };
+}
 const WITHDRAW_MIN_ORDERS = 30000;      // Tối thiểu 30.000 Đơn Hàng (= 3.000 VNĐ, tỷ giá 1 Order = 0,1 VNĐ giữ nguyên)
 const WITHDRAW_MIN_ADS = 7;             // Xem tối thiểu 7 QC trong ngày
 const WITHDRAW_MIN_SMARTLINKS = 10;     // Bấm tối thiểu 10 SmartLink trong ngày
@@ -7739,6 +8021,15 @@ app.post('/api/withdraw', async (req, res) => {
         }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
+        // Anti-fraud signal read-only: chỉ cảnh báo riêng Admin khi nhiều Telegram ID dùng cùng destination.
+        // Lỗi gửi/kiểm tra cảnh báo tuyệt đối không rollback hoặc reject withdrawal đã tạo thành công.
+        await detectAndAlertSharedWithdrawalDestination({
+            userId, txCode, amount:amountVnd, status:'pending',
+            method:methodLabel, bankName:normalizedMethod === 'bank' ? String(bankName).trim() : null,
+            accountName:normalizedAccountName, accountNumber:normalizedAccountNumber,
+            walletType:normalizedMethod === 'ewallet' ? normalizedWalletType : null
+        }).catch(e => console.error('Lỗi cảnh báo shared withdrawal destination:', e.message));
+
         // Public group notification contains only masked Telegram ID, amount and Vietnam server time.
         await notifyWithdrawalRequestToGroup({userId,amount:amountVnd,txCode});
 
@@ -7824,11 +8115,14 @@ app.post('/api/redeem-code', async (req, res) => {
     let usedCountReserved=false;
     let reservedUsedCount=null;
     try {
-        const {data:user,error:userError}=await readUserRow(userId);
-        if (userError || !user) return res.status(404).json({success:false,error:'Không tìm thấy người dùng.'});
+        const user=await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({success:false,error:'Không tìm thấy người dùng.'});
         if (user.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.'});
-        const currentAds=Math.max(0,Number(user.lifetimeAdsWatched||0));
-        if (currentAds<5) return res.status(403).json({success:false,adRequirement:true,requiredAds:5,currentAds,error:'Bạn cần xem ít nhất 5 QC Rewarded Interstitial hợp lệ trước khi sử dụng Giftcode.'});
+        const currentAds=Math.max(0,Number(user.rewardedAdsToday||0));
+        if (currentAds<5) return res.status(403).json({
+            success:false, adRequirement:true, requiredAds:5, currentAds, dailyRequirement:true, dayKey:vietnamDayKey(),
+            error:'Hôm nay bạn cần xem ít nhất 5 QC Rewarded Interstitial hợp lệ trước khi sử dụng Giftcode.'
+        });
 
         releaseGiftLock=await acquirePersistentLeaseLock(persistentEventKey('giftcode-redeem-lock',code),60*1000);
         if (!releaseGiftLock) return res.status(409).json({success:false,retry:true,error:'Giftcode đang được xử lý. Vui lòng thử lại.'});
