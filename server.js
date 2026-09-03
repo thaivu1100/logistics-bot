@@ -5554,14 +5554,10 @@ app.post('/api/task/claim-all', async (req,res) => {
 });
 
 // ==================== NHIỆM VỤ "THAM GIA NHÓM" — VERSIONED CAMPAIGN ====================
-// Mỗi campaign có marker riêng trong app_settings + mirror groupTaskCampaignClaims trong user_extra_state.
-// campaignId Vua_Dao_Quang được GIỮ NGUYÊN để user đã nhận 500/500 trước đây không thể claim lại.
-const GROUP_TASK_CAMPAIGN_ID = 'vua_dao_quang_2026_09'; // default cho client cũ
+// Chỉ campaign đang active mới nằm trong GROUP_TASK_CAMPAIGNS. Historical marker/claim của campaign cũ
+// vẫn được giữ nguyên trong Supabase/app_settings; không migrate, không reset và không trừ lại phần thưởng.
+const GROUP_TASK_CAMPAIGN_ID = 'kiemtienmuakfc_2026_09';
 const GROUP_TASK_CAMPAIGNS = Object.freeze({
-    vua_dao_quang_2026_09: Object.freeze({
-        id:'vua_dao_quang_2026_09', username:'@Vua_Dao_Quang',
-        joinUrl:'https://t.me/Vua_Dao_Quang', reward:Object.freeze({coins:200,orders:200})
-    }),
     kiemtienmuakfc_2026_09: Object.freeze({
         id:'kiemtienmuakfc_2026_09', username:'@kiemtienmuakfc',
         joinUrl:'https://t.me/kiemtienmuakfc', reward:Object.freeze({coins:200,orders:200})
@@ -5697,7 +5693,7 @@ async function claimGroupTask(userId, campaignId = GROUP_TASK_CAMPAIGN_ID) {
         ({data:user,error:userErr} = await readUserRow(userId));
         if (userErr || !user) return {ok:false,reason:'user_not_found'};
 
-        // A legacy RESERVED Vua marker that never mutated is safely converted to the new 200/200 reward.
+        // Nếu marker reserved cũ chưa mutate và reward cấu hình thay đổi, đồng bộ marker theo campaign active.
         if (marker.status === 'reserved'
             && String(user.lastGroupTaskCampaignPayoutId || '') !== payoutId
             && (Number(marker.coins || 0) !== campaign.reward.coins || Number(marker.orders || 0) !== campaign.reward.orders)) {
