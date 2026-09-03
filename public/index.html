@@ -13,7 +13,7 @@
     <script>
         // ===== TEMP NATIONAL DAY 02/09 START =====
         // Theme trình bày tạm thời: đổi true -> false để tắt toàn bộ trang trí Quốc khánh.
-        window.NATIONAL_DAY_THEME_ENABLED = true;
+        window.NATIONAL_DAY_THEME_ENABLED = false;
         if (window.NATIONAL_DAY_THEME_ENABLED) document.documentElement.classList.add('national-day-theme');
         // ===== TEMP NATIONAL DAY 02/09 END =====
     </script>
@@ -567,6 +567,295 @@
         }
         /* ===== TEMP NATIONAL DAY 02/09 END ===== */
 
+
+
+        /* ==================== MODERN LOGISTICS UI 2026 ====================
+           Presentation-only redesign inspired by the supplied dark premium reference.
+           Business logic, Alpine bindings, ads, Rewarded flow and server APIs are untouched. */
+        :root {
+            --ui-bg: #06080d;
+            --ui-bg-2: #091019;
+            --ui-surface: rgba(13, 18, 26, .88);
+            --ui-surface-2: rgba(17, 24, 34, .82);
+            --ui-surface-3: rgba(22, 31, 44, .72);
+            --ui-line: rgba(255,255,255,.075);
+            --ui-line-strong: rgba(255,255,255,.12);
+            --ui-text: #f5f7fa;
+            --ui-muted: #8d98a8;
+            --ui-blue: #6aa7ff;
+            --ui-blue-strong: #3b82f6;
+            --ui-cyan: #39d3ff;
+            --ui-amber: #f6bd3b;
+            --ui-green: #55d59a;
+            --ui-red: #ff6b78;
+            --ui-radius-xl: 28px;
+            --ui-radius-lg: 22px;
+            --ui-radius-md: 16px;
+            --ui-shadow: 0 22px 60px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.035);
+        }
+        html { background: var(--ui-bg); }
+        body {
+            min-height:100vh;
+            color:var(--ui-text);
+            background:
+                radial-gradient(circle at 8% -5%, rgba(56,107,255,.13), transparent 31%),
+                radial-gradient(circle at 94% 18%, rgba(35,211,255,.07), transparent 28%),
+                linear-gradient(180deg, #05070c 0%, #080d14 52%, #071019 100%) !important;
+            background-attachment:fixed !important;
+            letter-spacing:-.01em;
+        }
+        body::before {
+            content:''; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.32;
+            background-image:linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.012) 1px,transparent 1px);
+            background-size:34px 34px; mask-image:linear-gradient(to bottom,rgba(0,0,0,.65),transparent 72%);
+        }
+        .modern-app { max-width:430px !important; padding-left:10px; padding-right:10px; }
+        .app-main { padding:10px 2px 18px !important; }
+        .app-main > .tab-enter { gap:0; }
+        .tab-enter { animation:modernPageIn .24s ease-out both; }
+        @keyframes modernPageIn { from{opacity:0;transform:translateY(7px)} to{opacity:1;transform:none} }
+
+        .glass {
+            background:linear-gradient(145deg, rgba(16,22,31,.92), rgba(10,15,22,.87)) !important;
+            border:1px solid var(--ui-line) !important;
+            box-shadow:0 14px 36px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.025) !important;
+            backdrop-filter:blur(18px) saturate(125%) !important;
+            -webkit-backdrop-filter:blur(18px) saturate(125%) !important;
+        }
+        .card-padding { padding:14px !important; }
+        .task-card {
+            background:rgba(18,26,37,.72) !important;
+            border:1px solid rgba(255,255,255,.065) !important;
+            border-radius:17px !important;
+            box-shadow:inset 0 1px 0 rgba(255,255,255,.02);
+        }
+        .task-card:active { transform:scale(.992); }
+        .task-icon-wrap { background:rgba(255,255,255,.055) !important; border:1px solid rgba(255,255,255,.06); }
+        .job-mail-rule { background:rgba(15,22,31,.76) !important; border-color:var(--ui-line) !important; border-radius:18px !important; }
+        .job-mail-hero { background:radial-gradient(circle at 100% 0%,rgba(246,189,59,.12),transparent 38%),linear-gradient(145deg,rgba(18,27,39,.96),rgba(8,13,20,.94)) !important; border-color:rgba(246,189,59,.18)!important; }
+        .job-mail-danger { background:linear-gradient(145deg,rgba(81,22,29,.28),rgba(12,18,26,.88)) !important; }
+
+        .app-header {
+            top:8px !important; margin:8px 0 12px; padding:10px 11px !important;
+            border-radius:22px !important; z-index:120 !important;
+            background:rgba(8,12,18,.82) !important; border:1px solid rgba(255,255,255,.085)!important;
+            box-shadow:0 15px 34px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.035)!important;
+        }
+        .app-header > div:first-child > div:first-child {
+            width:38px !important; height:38px !important; border-radius:14px !important;
+            background:linear-gradient(145deg,rgba(59,130,246,.30),rgba(18,29,43,.92)) !important;
+            border:1px solid rgba(106,167,255,.22); box-shadow:0 8px 20px rgba(35,102,220,.12)!important;
+        }
+        .app-header .header-text { font-size:12px!important; font-weight:800!important; }
+        .app-header > div:last-child > div {
+            min-width:78px; justify-content:flex-end; border-radius:11px!important; padding:4px 8px!important;
+            background:rgba(255,255,255,.045)!important; border-color:rgba(255,255,255,.06)!important;
+        }
+
+        .warehouse-hero {
+            min-height:154px; display:flex; flex-direction:column; justify-content:center;
+            background:
+                radial-gradient(circle at 88% 20%,rgba(57,211,255,.16),transparent 26%),
+                radial-gradient(circle at 10% 120%,rgba(246,189,59,.12),transparent 40%),
+                linear-gradient(145deg,#111923 0%,#0b1119 58%,#0b1620 100%) !important;
+            border:1px solid rgba(255,255,255,.085)!important; border-radius:28px!important;
+            box-shadow:var(--ui-shadow)!important;
+        }
+        .warehouse-hero::before { content:'●  LIVE WAREHOUSE'; color:rgba(246,189,59,.9); font-size:8px; font-weight:800; letter-spacing:.15em; margin-bottom:10px; }
+        .warehouse-hero h3 { color:#8f99a8; opacity:1!important; letter-spacing:.18em!important; }
+        .warehouse-hero h2 { font-style:normal!important; letter-spacing:-.035em!important; font-size:25px!important; }
+        .warehouse-hero .text-neon { color:#fff!important; text-shadow:none!important; font-style:normal!important; font-size:34px!important; }
+        .warehouse-meta { padding:12px 14px!important; border-radius:20px!important; }
+
+        .text-neon { color:#f4f6f8 !important; text-shadow:none !important; }
+        .tab-enter > h2.text-neon, .tab-enter > h2 {
+            text-align:left !important; color:#f7f9fb!important; font-style:normal!important; text-transform:none!important;
+            letter-spacing:-.035em!important; font-size:23px!important; line-height:1.12; padding:7px 4px 2px; margin-bottom:8px!important;
+        }
+        .tab-enter > h2.text-neon::after { content:' '; display:block; width:26px; height:3px; margin-top:9px; border-radius:99px; background:linear-gradient(90deg,var(--ui-amber),rgba(246,189,59,.1)); }
+        .main-container h3 { letter-spacing:-.015em; }
+        .btn-text { font-style:normal!important; letter-spacing:.02em!important; }
+
+        .neon-blue { background:linear-gradient(145deg,#172538,#0d1621)!important; box-shadow:none!important; }
+        .gold-glow {
+            border:1px solid rgba(255,217,128,.22)!important;
+            box-shadow:0 10px 26px rgba(246,189,59,.11), inset 0 1px 0 rgba(255,255,255,.20)!important;
+        }
+        button.bg-\[\#fbbf24\], .bg-\[\#fbbf24\] {
+            background:linear-gradient(135deg,#f7c94a,#e9a82d)!important; color:#15100a!important;
+        }
+        .main-container button { -webkit-tap-highlight-color:transparent; }
+        .main-container button[class*="rounded-[25px]"], .main-container .btn-text { border-radius:16px!important; }
+        .main-container button:disabled { filter:saturate(.45); }
+        .main-container a, .main-container button { text-decoration:none; }
+
+        input, select, textarea {
+            color:#f4f7fb!important; background:#0a1018!important; border:1px solid rgba(255,255,255,.085)!important;
+            border-radius:15px!important; outline:none!important; box-shadow:inset 0 1px 0 rgba(255,255,255,.02);
+        }
+        input:focus, select:focus, textarea:focus { border-color:rgba(106,167,255,.55)!important; box-shadow:0 0 0 3px rgba(59,130,246,.09)!important; }
+        input::placeholder, textarea::placeholder { color:#596575!important; }
+
+        .golden-hour-card {
+            background:linear-gradient(145deg,rgba(61,42,15,.47),rgba(14,18,25,.92))!important;
+            border:1px solid rgba(246,189,59,.20)!important; box-shadow:none!important; border-radius:19px!important;
+        }
+        .golden-hour-card::after { opacity:.07!important; }
+        .golden-hour-countdown { background:rgba(255,255,255,.05)!important; }
+        .conveyor-belt-anim {
+            width:100%!important; height:72px!important; margin:0!important; border-radius:20px!important;
+            background:linear-gradient(145deg,rgba(13,20,29,.9),rgba(8,13,19,.9))!important;
+            border:1px solid var(--ui-line)!important; box-shadow:none!important;
+        }
+        .conveyor-belt-anim::before { content:'AUTOMATED LOGISTICS'; position:absolute; left:12px; top:10px; font-size:7px; font-weight:800; letter-spacing:.14em; color:#647185; }
+        .conveyor-belt-anim .conveyor-line { left:12px!important; right:12px!important; bottom:15px!important; height:4px!important; background:repeating-linear-gradient(90deg,rgba(106,167,255,.18) 0 14px,rgba(255,255,255,.08) 14px 28px)!important; }
+
+        .modal-overlay { background:rgba(2,5,9,.78)!important; backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); padding:18px!important; }
+        .modal-content {
+            max-width:350px!important; padding:22px!important; border-radius:28px!important;
+            background:linear-gradient(145deg,#101720,#090e15)!important;
+            border:1px solid rgba(255,255,255,.10)!important;
+            box-shadow:0 28px 80px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.035)!important;
+        }
+        .modal-content > .text-5xl, .modal-content > .text-6xl { font-size:42px!important; filter:drop-shadow(0 10px 18px rgba(0,0,0,.24)); }
+        .captcha-box { border-radius:18px!important; background:#080d13!important; border:1px solid rgba(106,167,255,.16)!important; }
+        .quiz-option { background:rgba(255,255,255,.045)!important; border-color:rgba(255,255,255,.07)!important; border-radius:15px!important; }
+
+        .banner-notification {
+            top:14px!important; width:min(390px,calc(100% - 28px)); padding:11px 14px!important; border-radius:16px!important;
+            background:rgba(12,18,26,.94)!important; color:#f4f7fb!important; border:1px solid rgba(246,189,59,.20);
+            box-shadow:0 18px 45px rgba(0,0,0,.32)!important; backdrop-filter:blur(15px);
+            font-size:11px!important;
+        }
+        .promo-dock {
+            top:10px!important; left:50%!important; right:auto!important; transform:translateX(-50%); width:min(410px,calc(100% - 24px));
+            border-radius:18px!important; padding:10px 38px 10px 13px!important;
+            background:linear-gradient(145deg,rgba(16,45,34,.95),rgba(9,19,19,.96))!important;
+            border:1px solid rgba(85,213,154,.18); box-shadow:0 14px 40px rgba(0,0,0,.27)!important;
+        }
+        .promo-dock .join-banner-close { top:9px; right:9px; background:rgba(255,255,255,.07); }
+        .modern-app.pt-20 { padding-top:72px!important; }
+
+        .app-nav {
+            left:50%!important; right:auto!important; bottom:max(10px,env(safe-area-inset-bottom,0px))!important;
+            transform:translateX(-50%); width:min(414px,calc(100% - 20px)); height:66px!important; padding:5px!important;
+            border:1px solid rgba(255,255,255,.085)!important; border-radius:24px!important;
+            background:rgba(7,11,17,.91)!important; box-shadow:0 20px 50px rgba(0,0,0,.44), inset 0 1px 0 rgba(255,255,255,.035)!important;
+            backdrop-filter:blur(24px) saturate(130%)!important; -webkit-backdrop-filter:blur(24px) saturate(130%)!important;
+        }
+        .app-nav > div { gap:2px; padding:0 2px!important; }
+        .app-nav button { position:relative; min-width:46px; height:54px; padding:5px 6px!important; border-radius:17px; transform:none!important; opacity:.58!important; filter:none!important; color:#7f8a99!important; }
+        .app-nav button.text-blue-500 { opacity:1!important; color:#fff!important; background:linear-gradient(145deg,rgba(47,91,155,.28),rgba(255,255,255,.045)); border:1px solid rgba(106,167,255,.13); }
+        .app-nav button > span.text-base { font-size:17px!important; line-height:1; position:relative; z-index:2; }
+        .app-nav button > span.text-\[6px\] { font-size:6.5px!important; letter-spacing:.04em!important; font-style:normal!important; margin-top:5px!important; position:relative; z-index:2; }
+        .nav-pill { inset:auto!important; width:5px; height:5px; border-radius:50%; top:5px; right:6px; background:var(--ui-amber)!important; box-shadow:0 0 12px rgba(246,189,59,.65); animation:none!important; z-index:3!important; }
+        .music-fab { bottom:88px!important; right:14px!important; width:42px!important; height:42px!important; border-radius:15px!important; background:rgba(11,17,25,.91)!important; border:1px solid rgba(255,255,255,.09)!important; box-shadow:0 14px 30px rgba(0,0,0,.28)!important; }
+
+        .rank-1 { background:linear-gradient(145deg,rgba(107,79,22,.72),rgba(43,34,17,.82))!important; animation:none!important; border-color:rgba(246,189,59,.27)!important; }
+        .rank-2 { background:linear-gradient(145deg,rgba(66,75,88,.72),rgba(25,31,39,.85))!important; }
+        .rank-3 { background:linear-gradient(145deg,rgba(92,52,28,.72),rgba(38,25,18,.85))!important; }
+        .chest-container { width:180px!important; height:180px!important; }
+        .chest { filter:drop-shadow(0 20px 35px rgba(0,0,0,.32)); }
+        .adsterra-native-wrap { background:rgba(11,16,23,.6)!important; border-color:var(--ui-line)!important; border-radius:19px!important; }
+
+        /* Full-screen system states: same premium visual language as the supplied reference. */
+        .modern-system-screen {
+            background:
+                radial-gradient(circle at 15% 0%,rgba(64,91,203,.16),transparent 34%),
+                radial-gradient(circle at 100% 100%,rgba(41,167,215,.09),transparent 32%),
+                #05080e!important;
+        }
+        .system-ambient { position:absolute; width:420px; height:420px; border-radius:50%; filter:blur(80px); opacity:.15; pointer-events:none; }
+        .system-ambient-blue { background:#3467ff; left:-180px; top:-170px; }
+        .system-ambient-amber { background:#d99d2c; right:-230px; bottom:-190px; }
+        .system-ambient-red { background:#d34a5c; left:-200px; top:10%; }
+        .modern-system-card {
+            position:relative; width:min(100%,390px); min-height:560px; padding:34px 24px 24px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            border-radius:32px; overflow:hidden; background:linear-gradient(155deg,rgba(17,20,31,.93),rgba(8,17,24,.94));
+            border:1px solid rgba(255,255,255,.095); box-shadow:0 30px 90px rgba(0,0,0,.43), inset 0 1px 0 rgba(255,255,255,.035);
+        }
+        .modern-system-card::before { content:''; position:absolute; inset:0; pointer-events:none; background:linear-gradient(120deg,rgba(83,103,255,.04),transparent 44%,rgba(57,211,255,.035)); }
+        .compact-system-card { min-height:430px; }
+        .orbit-stage { width:190px; height:190px; position:relative; display:grid; place-items:center; margin-bottom:22px; }
+        .orbit-ring { position:absolute; border:1px dashed rgba(255,255,255,.13); border-radius:50%; }
+        .orbit-ring-a { width:78px; height:78px; animation:orbitSpin 7s linear infinite; border-color:rgba(131,96,255,.42); }
+        .orbit-ring-b { width:124px; height:124px; animation:orbitSpinReverse 11s linear infinite; border-color:rgba(57,211,255,.32); }
+        .orbit-ring-c { width:174px; height:174px; opacity:.64; animation:orbitPulse 2.7s ease-in-out infinite; }
+        .orbit-core { width:54px; height:54px; display:grid; place-items:center; border-radius:50%; font-size:25px; background:radial-gradient(circle,rgba(255,255,255,.18),rgba(42,58,96,.16)); box-shadow:0 0 30px rgba(94,115,255,.22); }
+        @keyframes orbitSpin { to{transform:rotate(360deg)} }
+        @keyframes orbitSpinReverse { to{transform:rotate(-360deg)} }
+        @keyframes orbitPulse { 50%{transform:scale(1.04);opacity:.9} }
+        .system-pill, .delivery-live-pill { display:inline-flex; align-items:center; gap:9px; padding:9px 14px; border-radius:999px; color:#f5c84c; font-size:10px; font-weight:700; letter-spacing:.02em; background:rgba(95,65,14,.20); border:1px solid rgba(246,189,59,.23); }
+        .system-live-dot { width:7px; height:7px; border-radius:50%; background:#f8c744; box-shadow:0 0 12px rgba(248,199,68,.7); animation:liveDot 1.6s ease-in-out infinite; }
+        @keyframes liveDot { 50%{opacity:.45;transform:scale(.78)} }
+        .danger-pill { color:#ff9aa4; border-color:rgba(255,107,120,.23); background:rgba(100,27,38,.19); }
+        .danger-pill .system-live-dot { background:#ff6b78; box-shadow:0 0 12px rgba(255,107,120,.6); }
+        .amber-pill { color:#f5c84c; }
+        .system-title { margin:18px 0 9px; color:#f8fafc; font-size:31px; line-height:1.08; font-weight:800; letter-spacing:-.045em; text-transform:none!important; }
+        .system-copy { max-width:310px; color:#919baa; font-size:14px; line-height:1.65; }
+        .system-progress { width:100%; height:4px; margin-top:27px; overflow:hidden; border-radius:999px; background:rgba(255,255,255,.055); }
+        .system-progress span { display:block; width:42%; height:100%; border-radius:inherit; background:linear-gradient(90deg,transparent,#68a7ff,#f6bd3b,transparent); animation:systemProgress 1.9s ease-in-out infinite; }
+        @keyframes systemProgress { from{transform:translateX(-120%)} to{transform:translateX(340%)} }
+        .system-mini-grid { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:18px; }
+        .system-mini-grid > div { text-align:left; padding:12px 13px; border-radius:15px; background:rgba(0,0,0,.16); border:1px solid rgba(255,255,255,.06); }
+        .system-mini-grid small, .maintenance-state small { display:block; color:#697587; font-size:8px; letter-spacing:.13em; margin-bottom:5px; }
+        .system-mini-grid b, .maintenance-state b { color:#eaf0f7; font-size:11px; }
+        .status-emblem { width:74px; height:74px; display:grid; place-items:center; border-radius:24px; font-size:34px; margin-bottom:20px; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); }
+        .status-emblem-danger { background:rgba(107,28,39,.18); }
+        .status-emblem-warning { margin:0 auto 16px; }
+        .modern-primary-btn { display:flex; width:100%; min-height:49px; align-items:center; justify-content:center; border-radius:15px; background:linear-gradient(135deg,#3b82f6,#285fc9); color:#fff!important; font-size:12px; font-weight:800; }
+        .maintenance-action-panel { width:100%; margin-top:28px; padding:13px; display:flex; gap:10px; align-items:stretch; border-radius:19px; background:rgba(1,5,9,.24); border:1px solid rgba(255,255,255,.065); }
+        .maintenance-state { flex:1; text-align:left; padding:5px 8px; }
+        .maintenance-reload { min-width:126px; border-radius:15px!important; border:1px solid rgba(255,255,255,.08)!important; background:rgba(255,255,255,.035)!important; color:#f3f6fa; font-weight:700; font-size:12px; }
+        .boot-error-card { position:relative; width:min(360px,calc(100% - 34px)); margin:auto; padding:26px; border-radius:28px; text-align:center; background:linear-gradient(145deg,#111820,#090e15); border:1px solid rgba(255,255,255,.09); box-shadow:0 28px 80px rgba(0,0,0,.42); }
+        .boot-error-card h2 { color:#f7f9fb; font-size:20px; font-weight:800; margin:0 0 8px; }
+        .boot-error-card p { color:#8e99a8; font-size:13px; line-height:1.6; margin:0 0 18px; }
+        .boot-error-card button { width:100%; padding:12px; border:0; border-radius:15px; background:#2f6fdb; color:#fff; font-weight:800; }
+
+        /* Modern delivery state: logistics identity retained, visual noise reduced. */
+        .delivery-animation { padding:18px!important; background:rgba(3,6,10,.94)!important; backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
+        .delivery-animation::before { inset:-15%!important; opacity:.38; background:radial-gradient(circle at 50% 20%,rgba(64,103,255,.22),transparent 30%),radial-gradient(circle at 70% 80%,rgba(246,189,59,.08),transparent 30%)!important; animation:none!important; }
+        .delivery-animation::after { display:none!important; }
+        .delivery-modern-card { position:relative; z-index:2; width:min(390px,100%); min-height:560px; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px 23px 24px; border-radius:32px; background:linear-gradient(155deg,rgba(17,20,31,.95),rgba(8,17,24,.96)); border:1px solid rgba(255,255,255,.09); box-shadow:0 32px 90px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.035); }
+        .delivery-orbit-stage { position:relative; width:190px; height:190px; display:grid; place-items:center; margin-bottom:19px; }
+        .delivery-orbit-ring { position:absolute; border:1px dashed rgba(255,255,255,.12); border-radius:50%; }
+        .delivery-orbit-a { width:76px; height:76px; border-color:rgba(125,93,255,.42); animation:orbitSpin 6s linear infinite; }
+        .delivery-orbit-b { width:124px; height:124px; border-color:rgba(57,211,255,.30); animation:orbitSpinReverse 10s linear infinite; }
+        .delivery-orbit-c { width:174px; height:174px; animation:orbitPulse 2.5s ease-in-out infinite; }
+        .delivery-modern-core { width:60px; height:60px; border-radius:50%; display:grid; place-items:center; font-size:29px; background:radial-gradient(circle,rgba(255,255,255,.15),rgba(49,65,107,.11)); box-shadow:0 0 34px rgba(94,115,255,.20); transition:transform .35s ease; }
+        .delivery-modern-card.is-moving .delivery-modern-core { animation:modernTruckFloat .55s ease-in-out infinite alternate; }
+        @keyframes modernTruckFloat { to{transform:translateY(-5px) rotate(2deg)} }
+        .delivery-modern-title { margin:18px 0 7px; font-size:28px; line-height:1.1; font-weight:800; letter-spacing:-.04em; text-align:center; }
+        .delivery-modern-copy { max-width:305px; color:#8f9aa9; font-size:12px; line-height:1.6; text-align:center; }
+        .delivery-modern-info { width:100%; display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:23px; }
+        .delivery-modern-info > div { padding:12px 13px; border-radius:16px; background:rgba(0,0,0,.16); border:1px solid rgba(255,255,255,.06); text-align:left; }
+        .delivery-modern-info small { display:block; color:#6f7b8d; font-size:8px; letter-spacing:.12em; margin-bottom:5px; }
+        .delivery-modern-info b { font-size:12px; color:#eef3f8; }
+        .delivery-modern-info .delivery-reward { color:#f6c84d; }
+        .modern-delivery-progress { width:100%; margin-top:18px!important; height:5px!important; background:rgba(255,255,255,.055)!important; }
+        .modern-delivery-progress .delivery-progress-fill { background:linear-gradient(90deg,#5c8dff,#42c8f5,#f3bd3e)!important; box-shadow:none!important; }
+        .delivery-steps { width:100%; display:flex; align-items:center; gap:8px; margin-top:13px; }
+        .delivery-steps span { width:24px; height:24px; display:grid; place-items:center; border-radius:50%; border:1px solid rgba(255,255,255,.07); background:rgba(255,255,255,.035); color:#637082; font-size:7px; font-weight:800; }
+        .delivery-steps span.active { color:#fff; border-color:rgba(106,167,255,.28); background:rgba(59,130,246,.16); }
+        .delivery-steps i { flex:1; height:1px; background:linear-gradient(90deg,rgba(106,167,255,.20),rgba(255,255,255,.055)); }
+
+        @media (max-width:380px) {
+            .modern-app { padding-left:7px; padding-right:7px; }
+            .warehouse-hero { min-height:142px; }
+            .modern-system-card, .delivery-modern-card { min-height:520px; padding-left:19px; padding-right:19px; }
+            .system-title { font-size:27px; }
+            .orbit-stage, .delivery-orbit-stage { width:164px; height:164px; }
+            .orbit-ring-c, .delivery-orbit-c { width:150px; height:150px; }
+            .orbit-ring-b, .delivery-orbit-b { width:110px; height:110px; }
+            .app-nav { width:calc(100% - 14px); }
+            .app-nav button { min-width:42px; padding-left:4px!important; padding-right:4px!important; }
+        }
+        @media (prefers-reduced-motion:reduce) {
+            .orbit-ring,.delivery-orbit-ring,.system-live-dot,.system-progress span,.delivery-modern-core { animation:none!important; }
+        }
+        .low-graphics .modern-system-card, .low-graphics .delivery-modern-card, .low-graphics .app-nav, .low-graphics .app-header { backdrop-filter:none!important; -webkit-backdrop-filter:none!important; }
+        .low-graphics .orbit-ring, .low-graphics .delivery-orbit-ring, .low-graphics .system-progress span, .low-graphics .system-live-dot { animation:none!important; }
+        /* ==================== /MODERN LOGISTICS UI 2026 ==================== */
 </style>
 </head>
 <body x-data="app()" x-init="initApp()">
@@ -610,11 +899,11 @@
                 ? { title: 'Could not load the app', desc: 'Your network may be blocking some required resources. Please check your connection and try reloading.', btn: 'Reload page' }
                 : { title: 'Không thể tải ứng dụng', desc: 'Mạng của bạn có thể đang chặn một số tài nguyên cần thiết. Vui lòng kiểm tra kết nối mạng rồi thử tải lại.', btn: 'Tải lại trang' };
             el.innerHTML =
-                '<div style="position:relative;text-align:center;padding:24px;">' +
-                '<div style="font-size:44px;margin-bottom:12px;">⚠️</div>' +
-                '<h2 style="color:#fbbf24;font-weight:900;font-size:16px;margin-bottom:8px;text-transform:uppercase;">' + __bootText.title + '</h2>' +
-                '<p style="color:#cbd5e1;font-size:13px;max-width:280px;margin:0 auto 16px;">' + __bootText.desc + '</p>' +
-                '<button onclick="window.location.reload()" style="background:#2563eb;color:#fff;font-weight:800;font-size:13px;padding:10px 20px;border-radius:12px;border:none;text-transform:uppercase;">' + __bootText.btn + '</button>' +
+                '<div class="boot-error-card">' +
+                '<div class="status-emblem status-emblem-warning">⚠️</div>' +
+                '<h2>' + __bootText.title + '</h2>' +
+                '<p>' + __bootText.desc + '</p>' +
+                '<button onclick="window.location.reload()">' + __bootText.btn + '</button>' +
                 '</div>';
         }, 15000);
     </script>
@@ -622,42 +911,57 @@
     <!-- MÀN HÌNH LOADING KHI MỚI VÀO MINI APP (che toàn bộ app cho đến khi tải xong dữ liệu user)
     FIX: đã bỏ khối hàng xoay 3D, chỉ dùng spinner 2D đơn giản + icon nảy nhẹ + thanh tiến độ, nhẹ và
     không có nguy cơ làm treo/crash WebView trên thiết bị yếu. -->
-    <div id="appLoadingScreen" x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="loading-screen-center bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
-        <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
-        <div class="national-day-loading-bg"></div>
-        <div class="national-day-flag-card" aria-hidden="true">
-            <svg viewBox="0 0 300 200" role="img" aria-label="Cờ Việt Nam">
-                <rect width="300" height="200" fill="#da251d"></rect>
-                <polygon fill="#ffdf00" points="150,42 164,83 207,83 172,108 185,150 150,125 115,150 128,108 93,83 136,83"></polygon>
-            </svg>
+    <div id="appLoadingScreen" x-show="isAppLoading" x-transition:leave="transition ease-in duration-300" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="loading-screen-center modern-system-screen flex flex-col items-center justify-center text-center p-5 overflow-hidden">
+        <div class="system-ambient system-ambient-blue"></div>
+        <div class="modern-system-card loading-modern-card">
+            <div class="orbit-stage" aria-hidden="true">
+                <div class="orbit-ring orbit-ring-a"></div>
+                <div class="orbit-ring orbit-ring-b"></div>
+                <div class="orbit-ring orbit-ring-c"></div>
+                <div class="orbit-core">📦</div>
+            </div>
+            <div class="system-pill"><span class="system-live-dot"></span><span x-text="language === 'en' ? 'CONNECTING LOGISTICS' : 'ĐANG KẾT NỐI KHO HÀNG'"></span></div>
+            <h2 class="system-title">Kho Hàng Logistics</h2>
+            <p class="system-copy" x-text="texts.loadingText || 'Loading warehouse data...'"></p>
+            <div class="system-progress"><span></span></div>
+            <div class="system-mini-grid">
+                <div><small x-text="language === 'en' ? 'SYSTEM' : 'HỆ THỐNG'"></small><b>ONLINE</b></div>
+                <div><small x-text="language === 'en' ? 'SECURITY' : 'BẢO MẬT'"></small><b>API SECURE</b></div>
+            </div>
         </div>
-        <div class="national-day-title">🇻🇳 MỪNG QUỐC KHÁNH 02/09 🇻🇳</div>
-        <div class="relative simple-spinner mb-4"></div>
-        <div class="relative flex gap-2 text-xl mb-3 loading-dots">
-            <span>🚚</span><span>📦</span><span>🏭</span>
-        </div>
-        <h2 class="relative text-base font-black text-blue-400 uppercase tracking-wide mb-1 loading-warehouse-title">Kho Hàng Kiếm Tiền</h2>
-        <p class="relative text-xs text-slate-400 loading-status-text" x-text="texts.loadingText || 'Loading warehouse data...'"></p>
     </div>
 
     <div x-show="notification.show" x-transition class="banner-notification" x-text="notification.text" @click="notification.show = false"></div>
 
     <!-- MÀN HÌNH CHẶN KHI TÀI KHOẢN BỊ KHÓA (thay thế toàn bộ mini app, không hiện tên miền/nội dung app) -->
-    <div x-show="bannedScreen" x-cloak class="fixed inset-0 z-[9999] bg-slate-950 flex flex-col items-center justify-center text-center p-6">
-        <div class="text-6xl mb-4">❌</div>
-        <h2 class="text-lg font-black text-red-400 uppercase mb-2" x-text="texts.bannedTitle"></h2>
-        <p class="text-sm text-slate-300" x-text="texts.bannedDesc"></p>
-        <a href="https://t.me/noameazonus" target="_blank" class="mt-4 px-4 py-2 bg-blue-600 rounded-xl font-black text-xs uppercase" x-text="texts.bannedContact"></a>
+    <div x-show="bannedScreen" x-cloak class="fixed inset-0 z-[9999] modern-system-screen flex items-center justify-center text-center p-5 overflow-hidden">
+        <div class="system-ambient system-ambient-red"></div>
+        <div class="modern-system-card compact-system-card">
+            <div class="status-emblem status-emblem-danger">⛔</div>
+            <div class="system-pill danger-pill"><span class="system-live-dot"></span><span x-text="language === 'en' ? 'ACCOUNT RESTRICTED' : 'TÀI KHOẢN BỊ HẠN CHẾ'"></span></div>
+            <h2 class="system-title" x-text="texts.bannedTitle"></h2>
+            <p class="system-copy" x-text="texts.bannedDesc"></p>
+            <a href="https://t.me/noameazonus" target="_blank" class="modern-primary-btn mt-5" x-text="texts.bannedContact"></a>
+        </div>
     </div>
 
     <!-- MÀN HÌNH BẢO TRÌ (khi Admin dùng /khoabot) - ưu tiên cao nhất, che toàn bộ Mini App -->
-    <div x-show="maintenanceLocked" x-cloak class="fixed inset-0 z-[10000] bg-slate-950 flex flex-col items-center justify-center text-center p-6 overflow-hidden">
-        <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #f59e0b, transparent 60%);"></div>
-        <div class="relative text-7xl mb-5 maintenance-truck-icon">🚧</div>
-        <h2 class="relative text-xl font-black text-amber-400 uppercase mb-2 tracking-wide" x-text="texts.maintenanceTitle">Bot Đang Bị Khoá Để Bảo Trì</h2>
-        <p class="relative text-sm text-slate-300 max-w-xs" x-text="texts.maintenanceMessage">Vui Lòng Thử Lại Sau!! Hệ thống đang được nâng cấp, mọi dữ liệu của bạn vẫn được giữ nguyên an toàn.</p>
-        <div class="relative mt-6 flex gap-2 text-2xl maintenance-dots">
-            <span>🚚</span><span>📦</span><span>🏠</span>
+    <div x-show="maintenanceLocked" x-cloak class="fixed inset-0 z-[10000] modern-system-screen flex items-center justify-center text-center p-5 overflow-hidden">
+        <div class="system-ambient system-ambient-amber"></div>
+        <div class="modern-system-card maintenance-modern-card">
+            <div class="orbit-stage maintenance-orbit" aria-hidden="true">
+                <div class="orbit-ring orbit-ring-a"></div>
+                <div class="orbit-ring orbit-ring-b"></div>
+                <div class="orbit-ring orbit-ring-c"></div>
+                <div class="orbit-core">🚧</div>
+            </div>
+            <div class="system-pill amber-pill"><span class="system-live-dot"></span><span x-text="language === 'en' ? 'SYNCING INFRASTRUCTURE' : 'ĐANG ĐỒNG BỘ HẠ TẦNG'"></span></div>
+            <h2 class="system-title" x-text="texts.maintenanceTitle">Bot Đang Bị Khoá Để Bảo Trì</h2>
+            <p class="system-copy" x-text="texts.maintenanceMessage">Vui Lòng Thử Lại Sau!! Hệ thống đang được nâng cấp, mọi dữ liệu của bạn vẫn được giữ nguyên an toàn.</p>
+            <div class="maintenance-action-panel">
+                <div class="maintenance-state"><small x-text="language === 'en' ? 'STATUS' : 'TRẠNG THÁI'"></small><b x-text="language === 'en' ? 'MAINTENANCE' : 'ĐANG BẢO TRÌ'"></b></div>
+                <button onclick="window.location.reload()" class="maintenance-reload" x-text="language === 'en' ? 'Reload' : 'Tải lại trang'"></button>
+            </div>
         </div>
     </div>
         <!-- COIN BOX CONFIRMATION MODAL -->
@@ -725,30 +1029,28 @@
 
         <!-- ANIMATION GIAO HÀNG (chỉ hiện khi ấn nút Giao Hàng) -->
     <div x-show="showDeliveryAnimation" class="delivery-animation" x-transition>
-        <div class="delivery-scene" :class="{ 'is-moving': isTruckMoving }">
-            <div class="delivery-sky-glow"></div>
-            <div class="delivery-cloud c1">☁️</div>
-            <div class="delivery-cloud c2">☁️</div>
-            <div class="delivery-speed-lines"></div>
-            <div class="factory">🏭</div>
-            <div class="conveyor">
-                <div class="box-on-conveyor">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: .38s">📦</div>
-                <div class="box-on-conveyor" style="animation-delay: .76s">📦</div>
+        <div class="delivery-modern-card" :class="{ 'is-moving': isTruckMoving }">
+            <div class="delivery-orbit-stage" aria-hidden="true">
+                <div class="delivery-orbit-ring delivery-orbit-a"></div>
+                <div class="delivery-orbit-ring delivery-orbit-b"></div>
+                <div class="delivery-orbit-ring delivery-orbit-c"></div>
+                <div class="delivery-modern-core" x-text="isTruckMoving ? truckIcon : '📦'"></div>
             </div>
-            <div class="delivery-road"></div>
-            <div class="delivery-truck" :class="{ 'moving': isTruckMoving }" x-text="truckIcon"></div>
-            <div class="delivery-success-spark">✨📦✨</div>
-            <div class="delivery-success-badge">✅ DELIVERED</div>
-            <div class="delivery-particles"><span>✨</span><span>✦</span><span>✨</span><span>✦</span><span>✨</span><span>✦</span></div>
-            <div class="house">🏠</div>
-        </div>
-        <div class="delivery-status-card">
-            <div class="delivery-status-title" x-text="isTruckMoving ? texts.deliveryDriving : texts.deliveryLoading"></div>
-            <div class="delivery-status-orders" x-show="_deliveryRewardedOrders > 0">
-                +<span x-text="formatNumber(_deliveryRewardedOrders)"></span> <span x-text="texts.ordersTarget"></span>
+            <div class="delivery-live-pill"><span class="system-live-dot"></span><span x-text="isTruckMoving ? (language === 'en' ? 'DELIVERY IN TRANSIT' : 'ĐANG VẬN CHUYỂN') : (language === 'en' ? 'PREPARING SHIPMENT' : 'ĐANG CHUẨN BỊ ĐƠN')"></span></div>
+            <h2 class="delivery-modern-title" x-text="isTruckMoving ? texts.deliveryDriving : texts.deliveryLoading"></h2>
+            <p class="delivery-modern-copy" x-text="language === 'en' ? 'Your shipment is being verified and synchronized securely.' : 'Chuyến giao đang được xác minh và đồng bộ an toàn với hệ thống.'"></p>
+            <div class="delivery-modern-info">
+                <div>
+                    <small x-text="language === 'en' ? 'VEHICLE' : 'PHƯƠNG TIỆN'"></small>
+                    <b><span x-text="truckIcon"></span> LV.<span x-text="truckLevel"></span></b>
+                </div>
+                <div>
+                    <small x-text="language === 'en' ? 'REWARD' : 'PHẦN THƯỞNG'"></small>
+                    <b class="delivery-reward"><span x-text="_deliveryRewardedOrders > 0 ? ('+' + formatNumber(_deliveryRewardedOrders)) : '—'"></span> 📦</b>
+                </div>
             </div>
-            <div class="delivery-progress-track"><div class="delivery-progress-fill"></div></div>
+            <div class="delivery-progress-track modern-delivery-progress"><div class="delivery-progress-fill"></div></div>
+            <div class="delivery-steps"><span class="active">01</span><i></i><span :class="isTruckMoving ? 'active' : ''">02</span><i></i><span :class="isTruckMoving ? 'active' : ''">03</span></div>
         </div>
     </div>
 
@@ -764,14 +1066,14 @@
     </div>
 
     <!-- BANNER QUẢNG BÁ XEM QC X2 (chỉ hiện khi đã vào được app, có nút X để tắt) -->
-    <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner" style="background: linear-gradient(135deg, #16a34a, #15803d);">
+    <div x-show="joinedGroups && !dismissedPromoBanner" class="join-banner promo-dock" style="background: linear-gradient(135deg, #16a34a, #15803d);">
         <div class="join-banner-close" @click="dismissedPromoBanner = true">✕</div>
         <div class="font-black text-sm mb-1" x-text="texts.promoBannerTitle"></div>
         <div class="text-[10px] opacity-90" x-text="texts.promoBannerDesc"></div>
     </div>
 
-    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container max-w-sm mx-auto min-h-screen pb-36 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
-        <header class="p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
+    <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container modern-app max-w-sm mx-auto min-h-screen pb-36 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
+        <header class="app-header p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
             <div class="flex items-center space-x-2">
                 <div class="relative w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
                 <div>
@@ -788,17 +1090,17 @@
             <span class="national-star">★</span><span>🇻🇳 MỪNG QUỐC KHÁNH 02/09</span><span class="national-star">★</span>
         </div>
 
-        <main class="p-2 space-y-3">
+        <main class="app-main p-2 space-y-3">
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter space-y-3 relative">
                 <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
-                <div class="p-4 rounded-[25px] neon-blue shadow-2xl relative overflow-hidden group card-padding">
+                <div class="warehouse-hero p-4 rounded-[25px] neon-blue shadow-2xl relative overflow-hidden group card-padding">
                     <h3 class="text-[9px] font-black uppercase opacity-60 tracking-[4px]" x-text="texts.warehouse"></h3>
                     <h2 class="text-2xl font-black mt-1" x-text="texts.wallet"></h2>
                     <div class="mt-4"><span class="text-3xl font-extrabold tracking-tighter italic text-neon" x-text="formatNumber(orders)"></span><span class="text-[9px] opacity-40 ml-2 font-black italic" x-text="texts.orders"></span></div>
                     <div class="absolute -right-4 -bottom-4 text-[80px] opacity-10 group-hover:rotate-12 transition-all duration-700"></div>
                 </div>
-                <div class="glass p-3 rounded-[20px] flex justify-between items-center card-padding">
+                <div class="warehouse-meta glass p-3 rounded-[20px] flex justify-between items-center card-padding">
                     <div><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.truckLevel"></p><p class="text-sm font-black italic text-blue-400" x-text="'🚛 ' + truckLevel + '/' + maxTruckLevel + ' - ' + truckName"></p></div>
                     <div class="text-right"><p class="text-[7px] font-black uppercase opacity-50" x-text="texts.products"></p><p class="text-sm font-black text-yellow-400" x-text="formatNumber(currentProducts) + ' / ' + formatNumber(maxProducts)"></p></div>
                 </div>
@@ -1554,7 +1856,7 @@
             </div>
         </main>
 
-        <nav class="fixed bottom-0 left-0 right-0 h-16 bg-slate-950/90 backdrop-blur-3xl border-t border-white/5 z-[200] px-1" style="box-shadow: 0 -8px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(251,191,36,0.15);">
+        <nav class="app-nav fixed bottom-0 left-0 right-0 h-16 bg-slate-950/90 backdrop-blur-3xl border-t border-white/5 z-[200] px-1" style="box-shadow: 0 -8px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(251,191,36,0.15);">
             <div class="flex h-full items-center justify-around nav-scroll overflow-x-auto space-x-1 px-1 scroll-smooth">
                 <template x-for="m in menuItems" :key="m.id">
                     <button @click="tab = m.id" :class="tab === m.id ? 'text-blue-500 scale-110 -translate-y-1 font-black opacity-100 duration-300' : 'text-slate-500 opacity-50 grayscale'" class="flex flex-col items-center flex-shrink-0 transition-all px-1 cursor-pointer">
