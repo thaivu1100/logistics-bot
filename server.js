@@ -6339,7 +6339,93 @@ app.post('/api/production/speedup', async (req, res) => {
 // ==================== GIAO HÀNG: 10 CƠ BẢN + TỐI ĐA 3 BONUS/NGÀY ====================
 const DELIVERY_DAILY_LIMIT = 10;
 const DELIVERY_MAX_BONUS = 3;
+const DELIVERY_CAPTCHA_MIN_AFTER = 3;
+const DELIVERY_CAPTCHA_MAX_AFTER = 5;
+const DELIVERY_CAPTCHA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const DELIVERY_CAPTCHA_PERMIT_TTL_MS = 35 * 60 * 1000;
 const deliveryProcessing = new Set();
+
+function randomDeliveryCaptchaAfter() {
+    return crypto.randomInt(DELIVERY_CAPTCHA_MIN_AFTER, DELIVERY_CAPTCHA_MAX_AFTER + 1);
+}
+function deliveryCaptchaAnswerHash(userId, challengeId, answer) {
+    const secret = String(BOT_TOKEN || ADMIN_PASS || 'delivery-captcha');
+    return crypto.createHmac('sha256', secret)
+        .update(`${String(userId)}:${String(challengeId)}:${String(answer || '').trim().toUpperCase()}`)
+        .digest('hex');
+}
+function deliveryCaptchaStateFromUser(user = {}) {
+    const since = Math.max(0, Math.floor(Number(user.deliverySinceCaptcha || 0)));
+    const rawNext = Math.floor(Number(user.nextCaptchaAfter || 0));
+    const next = rawNext >= DELIVERY_CAPTCHA_MIN_AFTER && rawNext <= DELIVERY_CAPTCHA_MAX_AFTER
+        ? rawNext
+        : randomDeliveryCaptchaAfter();
+    return {
+        deliverySinceCaptcha: since,
+        nextCaptchaAfter: next,
+        deliveryCaptchaChallengeId: String(user.deliveryCaptchaChallengeId || ''),
+        deliveryCaptchaChallengeExpiresAt: Math.max(0, Number(user.deliveryCaptchaChallengeExpiresAt || 0)),
+        deliveryCaptchaPermitToken: String(user.deliveryCaptchaPermitToken || ''),
+        deliveryCaptchaPermitExpiresAt: Math.max(0, Number(user.deliveryCaptchaPermitExpiresAt || 0)),
+        deliveryCaptchaPermitPreviousSince: Math.max(0, Math.floor(Number(user.deliveryCaptchaPermitPreviousSince ?? since))),
+        deliveryCaptchaPermitPreviousNext: (() => {
+            const n = Math.floor(Number(user.deliveryCaptchaPermitPreviousNext || 0));
+            return n >= DELIVERY_CAPTCHA_MIN_AFTER && n <= DELIVERY_CAPTCHA_MAX_AFTER ? n : next;
+        })(),
+        deliveryCaptchaPermitVerifiedAt: Math.max(0, Number(user.deliveryCaptchaPermitVerifiedAt || 0)),
+        deliveryCaptchaPermitBoundActionId: String(user.deliveryCaptchaPermitBoundActionId || ''),
+        deliveryCaptchaPermitSessionToken: String(user.deliveryCaptchaPermitSessionToken || '')
+    };
+}
+async function normalizeDeliveryCaptchaState(userId, user) {
+    let state = deliveryCaptchaStateFromUser(user || {});
+    const updates = {};
+    const originalNext = Math.floor(Number(user?.nextCaptchaAfter || 0));
+    if (originalNext < DELIVERY_CAPTCHA_MIN_AFTER || originalNext > DELIVERY_CAPTCHA_MAX_AFTER) {
+        updates.nextCaptchaAfter = state.nextCaptchaAfter;
+    }
+
+    const now = Date.now();
+    if (state.deliveryCaptchaPermitToken && state.deliveryCaptchaPermitExpiresAt <= now) {
+        // CAPTCHA đã giải nhưng flow bị bỏ dở: hoàn nguyên đúng chu kỳ cũ để không thể chờ token hết hạn rồi bypass.
+        state.deliverySinceCaptcha = state.deliveryCaptchaPermitPreviousSince;
+        state.nextCaptchaAfter = state.deliveryCaptchaPermitPreviousNext;
+        state.deliveryCaptchaPermitToken = '';
+        state.deliveryCaptchaPermitExpiresAt = 0;
+        state.deliveryCaptchaPermitVerifiedAt = 0;
+        updates.deliverySinceCaptcha = state.deliverySinceCaptcha;
+        updates.nextCaptchaAfter = state.nextCaptchaAfter;
+        updates.deliveryCaptchaPermitToken = '';
+        updates.deliveryCaptchaPermitExpiresAt = 0;
+        updates.deliveryCaptchaPermitPreviousSince = 0;
+        updates.deliveryCaptchaPermitPreviousNext = 0;
+        updates.deliveryCaptchaPermitVerifiedAt = 0;
+        updates.deliveryCaptchaPermitBoundActionId = '';
+        updates.deliveryCaptchaPermitSessionToken = '';
+        state.deliveryCaptchaPermitBoundActionId = '';
+        state.deliveryCaptchaPermitSessionToken = '';
+    }
+    if (state.deliveryCaptchaChallengeId && state.deliveryCaptchaChallengeExpiresAt <= now) {
+        state.deliveryCaptchaChallengeId = '';
+        state.deliveryCaptchaChallengeExpiresAt = 0;
+        updates.deliveryCaptchaChallengeId = '';
+        updates.deliveryCaptchaChallengeExpiresAt = 0;
+    }
+    if (Object.keys(updates).length) {
+        const saved = await saveUserFields(userId, updates);
+        if (saved.error) throw saved.error;
+        if (!(await flushUserExtra())) throw new Error('Không persist được CAPTCHA giao hàng.');
+    }
+    return state;
+}
+function deliveryCaptchaIsDue(state) {
+    return Number(state.deliverySinceCaptcha || 0) + 1 >= Number(state.nextCaptchaAfter || DELIVERY_CAPTCHA_MIN_AFTER);
+}
+async function saveDeliveryCaptchaState(userId, fields) {
+    const saved = await saveUserFields(userId, fields);
+    if (saved.error) throw saved.error;
+    if (!(await flushUserExtra())) throw new Error('Không persist được CAPTCHA giao hàng.');
+}
 app.post('/api/delivery/claim', async (req,res)=>{
     const userId=String(req.body?.userId||'');
     if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -6370,12 +6456,16 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 used:!!persisted.used,
                 deliveryClaimResult:persisted.deliveryClaimResult || null,
                 completionResult:persisted.completionResult || null,
-                deliveryClaimAttempt:persisted.deliveryClaimAttempt || null
+                deliveryClaimAttempt:persisted.deliveryClaimAttempt || null,
+                deliveryCaptchaProtected:!!persisted.deliveryCaptchaProtected,
+                deliveryCaptchaToken:String(persisted.deliveryCaptchaToken || '')
             };
             completedAdEvents.set(adToken, event);
         } else if (event && persisted) {
             if (persisted.deliveryClaimResult) event.deliveryClaimResult = persisted.deliveryClaimResult;
             if (persisted.deliveryClaimAttempt) event.deliveryClaimAttempt = persisted.deliveryClaimAttempt;
+            if (persisted.deliveryCaptchaProtected) event.deliveryCaptchaProtected = true;
+            if (persisted.deliveryCaptchaToken) event.deliveryCaptchaToken = String(persisted.deliveryCaptchaToken);
             if (persisted.used) event.used = true;
         }
 
@@ -6396,7 +6486,9 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claimed',
                 completedAt:Number(event.completedAt||Date.now()),used:true,
                 deliveryClaimResult:result,completionResult:event.completionResult||null,
-                deliveryClaimAttempt:claimedAttempt,expiresAt:Date.now()+30*60*1000
+                deliveryClaimAttempt:claimedAttempt,
+                deliveryCaptchaProtected:!!event.deliveryCaptchaProtected,deliveryCaptchaToken:String(event.deliveryCaptchaToken||''),
+                expiresAt:Date.now()+30*60*1000
             },4);
             const savedCompleted = await persistCompletedAdEvent(adToken,claimedEvent);
             if (!savedClaim && !savedCompleted) return false;
@@ -6416,18 +6508,34 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 const newBatchStartedAt = Number(pendingClaim.newBatchStartedAt || 0);
                 const ordersCommitted = Number(recoveredUser.orders || 0) >= targetOrders;
                 const productionAdvanced = Number(recoveredUser.lastProducedAt || 0) > newBatchStartedAt;
+                const targetCaptchaSince = Math.max(0, Number(pendingClaim.targetDeliverySinceCaptcha ?? recoveredUser.deliverySinceCaptcha ?? 0));
+                const targetCaptchaNext = Math.max(DELIVERY_CAPTCHA_MIN_AFTER, Math.min(DELIVERY_CAPTCHA_MAX_AFTER, Number(pendingClaim.targetNextCaptchaAfter || recoveredUser.nextCaptchaAfter || DELIVERY_CAPTCHA_MIN_AFTER)));
+                const captchaStateCommitted = Number(recoveredUser.deliverySinceCaptcha || 0) === targetCaptchaSince
+                    && Number(recoveredUser.nextCaptchaAfter || 0) === targetCaptchaNext
+                    && (!pendingClaim.captchaProtected || (!String(recoveredUser.deliveryCaptchaPermitToken || '') && !String(recoveredUser.deliveryCaptchaPermitSessionToken || '')));
                 let stateCommitted =
                     Number(recoveredUser.deliveryCount || 0) >= targetDeliveryCount &&
                     Number(recoveredUser.deliveryCountLifetime || 0) >= targetLifetime &&
                     Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt &&
-                    (productionAdvanced || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true));
+                    (productionAdvanced || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true)) &&
+                    captchaStateCommitted;
 
                 if (ordersCommitted && !stateCommitted) {
                     const repairFields = {
                         deliveryCount:Math.max(Number(recoveredUser.deliveryCount || 0),targetDeliveryCount),
                         deliveryCountLifetime:Math.max(Number(recoveredUser.deliveryCountLifetime || 0),targetLifetime),
+                        deliverySinceCaptcha:targetCaptchaSince,
+                        nextCaptchaAfter:targetCaptchaNext,
                         lastResetDate:vietnamDayKey()
                     };
+                    if (pendingClaim.captchaProtected) {
+                        Object.assign(repairFields, {
+                            deliveryCaptchaPermitToken:'',deliveryCaptchaPermitExpiresAt:0,
+                            deliveryCaptchaPermitPreviousSince:0,deliveryCaptchaPermitPreviousNext:0,deliveryCaptchaPermitVerifiedAt:0,
+                            deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:'',
+                            deliveryCaptchaChallengeId:'',deliveryCaptchaChallengeExpiresAt:0
+                        });
+                    }
                     // Only restore the original batch-reset fields when no newer production batch has advanced.
                     if (!productionAdvanced) {
                         repairFields.currentProducts = 0;
@@ -6443,7 +6551,10 @@ app.post('/api/delivery/claim', async (req,res)=>{
                         Number(recoveredUser.deliveryCount || 0) >= targetDeliveryCount &&
                         Number(recoveredUser.deliveryCountLifetime || 0) >= targetLifetime &&
                         Number(recoveredUser.lastProducedAt || 0) >= newBatchStartedAt &&
-                        (advancedAfterRepair || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true));
+                        (advancedAfterRepair || (Number(recoveredUser.currentProducts || 0) === 0 && recoveredUser.speedUpUsed !== true)) &&
+                        Number(recoveredUser.deliverySinceCaptcha || 0) === targetCaptchaSince &&
+                        Number(recoveredUser.nextCaptchaAfter || 0) === targetCaptchaNext &&
+                        (!pendingClaim.captchaProtected || (!String(recoveredUser.deliveryCaptchaPermitToken || '') && !String(recoveredUser.deliveryCaptchaPermitSessionToken || '')));
                 }
 
                 if (ordersCommitted && stateCommitted) {
@@ -6464,6 +6575,8 @@ app.post('/api/delivery/claim', async (req,res)=>{
                         orders:Number(recoveredUser.orders || 0),
                         lastProducedAt:Number(recoveredUser.lastProducedAt || newBatchStartedAt || Date.now()),
                         speedUpUsed:!!recoveredUser.speedUpUsed,
+                        deliverySinceCaptcha:Number(recoveredUser.deliverySinceCaptcha || targetCaptchaSince),
+                        nextCaptchaAfter:Number(recoveredUser.nextCaptchaAfter || targetCaptchaNext),
                         walletUpdatedAt:recoveredUser.walletUpdatedAt || null
                     };
                     if (!(await persistClaimedDelivery(recoveredResult,pendingClaim,true))) {
@@ -6479,6 +6592,25 @@ app.post('/api/delivery/claim', async (req,res)=>{
         const user=await loadCurrentDailyUser(userId);
         if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if(user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+
+        const captchaState=await normalizeDeliveryCaptchaState(userId,user);
+        const captchaPermitActive=!!captchaState.deliveryCaptchaPermitToken && captchaState.deliveryCaptchaPermitExpiresAt > Date.now();
+        const eventCaptchaToken=String(event.deliveryCaptchaToken || persisted?.deliveryCaptchaToken || '');
+        const eventCaptchaProtected=!!(event.deliveryCaptchaProtected || persisted?.deliveryCaptchaProtected);
+        if (eventCaptchaProtected) {
+            const boundSessionToken=String(captchaState.deliveryCaptchaPermitSessionToken || '');
+            if (!captchaPermitActive || !eventCaptchaToken || eventCaptchaToken !== captchaState.deliveryCaptchaPermitToken
+                || !boundSessionToken || boundSessionToken !== adToken) {
+                return res.status(409).json({success:false,retry:false,captchaUsed:true,verified:true,adToken,error:'CAPTCHA của lượt giao này đã hết hạn, đã được dùng hoặc không khớp đúng phiên Rewarded.'});
+            }
+        } else {
+            if (captchaPermitActive) {
+                return res.status(428).json({success:false,retry:false,captchaRequired:true,verified:true,adToken,error:'CAPTCHA đã xác minh đang được dành cho một lượt giao khác.'});
+            }
+            if (deliveryCaptchaIsDue(captchaState)) {
+                return res.status(428).json({success:false,retry:false,captchaRequired:true,verified:true,adToken,error:'Đến chu kỳ CAPTCHA giao hàng. Vui lòng xác minh CAPTCHA trước khi mở Rewarded mới.'});
+            }
+        }
 
         const current=Math.max(0,Number(user.deliveryCount||0));
         const extra=Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0)));
@@ -6497,6 +6629,11 @@ app.post('/api/delivery/claim', async (req,res)=>{
 
         const deliveryCount=current+1;
         const lifetime=Math.max(0,Number(user.deliveryCountLifetime||0))+1;
+        const captchaProtected=captchaPermitActive && eventCaptchaProtected
+            && eventCaptchaToken===captchaState.deliveryCaptchaPermitToken
+            && String(captchaState.deliveryCaptchaPermitSessionToken || '')===adToken;
+        const targetDeliverySinceCaptcha=captchaProtected ? 0 : Number(captchaState.deliverySinceCaptcha||0)+1;
+        const targetNextCaptchaAfter=Number(captchaState.nextCaptchaAfter||randomDeliveryCaptchaAfter());
         const newBatchStartedAt=Date.now();
         const claimAttempt={
             status:'claiming',startedAt:Date.now(),deliveredProducts,baseOrders,rewardedOrders,
@@ -6506,6 +6643,9 @@ app.post('/api/delivery/claim', async (req,res)=>{
             preCurrentProducts:Number(user.currentProducts||0),preLastProducedAt:Number(user.lastProducedAt||0),
             preDeliveryCount:current,preLifetime:Math.max(0,Number(user.deliveryCountLifetime||0)),
             preSpeedUpUsed:!!user.speedUpUsed,
+            captchaProtected,captchaPermitToken:captchaProtected?eventCaptchaToken:'',
+            preDeliverySinceCaptcha:Number(captchaState.deliverySinceCaptcha||0),preNextCaptchaAfter:Number(captchaState.nextCaptchaAfter||0),
+            targetDeliverySinceCaptcha,targetNextCaptchaAfter,
             targetDeliveryCount:deliveryCount,targetLifetime:lifetime,newBatchStartedAt
         };
 
@@ -6513,7 +6653,8 @@ app.post('/api/delivery/claim', async (req,res)=>{
             userId,adType:event.adType||'rewarded',purpose:'delivery',status:'claiming',
             completedAt:Number(event.completedAt||Date.now()),used:false,
             completionResult:event.completionResult||null,deliveryClaimResult:null,
-            deliveryClaimAttempt:claimAttempt,expiresAt:Date.now()+30*60*1000
+            deliveryClaimAttempt:claimAttempt,deliveryCaptchaProtected:captchaProtected,deliveryCaptchaToken:captchaProtected?eventCaptchaToken:'',
+            expiresAt:Date.now()+30*60*1000
         },4);
         if(!claimReserved) {
             return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Rewarded đã được xác minh nhưng máy chủ chưa lưu được trạng thái giao hàng. Vui lòng thử lại, không cần xem QC.'});
@@ -6524,7 +6665,14 @@ app.post('/api/delivery/claim', async (req,res)=>{
             deltaOrders:rewardedOrders,
             setFields:{
                 deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,
-                lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey()
+                lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey(),
+                deliverySinceCaptcha:targetDeliverySinceCaptcha,nextCaptchaAfter:targetNextCaptchaAfter,
+                ...(captchaProtected ? {
+                    deliveryCaptchaPermitToken:'',deliveryCaptchaPermitExpiresAt:0,
+                    deliveryCaptchaPermitPreviousSince:0,deliveryCaptchaPermitPreviousNext:0,deliveryCaptchaPermitVerifiedAt:0,
+                    deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:'',
+                    deliveryCaptchaChallengeId:'',deliveryCaptchaChallengeExpiresAt:0
+                } : {})
             }
         });
         if(mutation.error) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:mutation.error.message});
@@ -6544,11 +6692,23 @@ app.post('/api/delivery/claim', async (req,res)=>{
             && Number(fresh.data.deliveryCountLifetime || 0) >= lifetime
             && Number(fresh.data.currentProducts || 0) === 0
             && Number(fresh.data.lastProducedAt || 0) === newBatchStartedAt
-            && fresh.data.speedUpUsed !== true;
+            && fresh.data.speedUpUsed !== true
+            && Number(fresh.data.deliverySinceCaptcha || 0) === targetDeliverySinceCaptcha
+            && Number(fresh.data.nextCaptchaAfter || 0) === targetNextCaptchaAfter
+            && (!captchaProtected || (!String(fresh.data.deliveryCaptchaPermitToken || '') && !String(fresh.data.deliveryCaptchaPermitSessionToken || '')));
         if (!stateCommitted) {
             // Orders are already committed; repair only state, NEVER add Orders again.
             const repair = await atomicWalletMutationUnlocked(userId,{
-                setFields:{deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey()}
+                setFields:{
+                    deliveryCount,deliveryCountLifetime:lifetime,currentProducts:0,lastProducedAt:newBatchStartedAt,speedUpUsed:false,lastResetDate:vietnamDayKey(),
+                    deliverySinceCaptcha:targetDeliverySinceCaptcha,nextCaptchaAfter:targetNextCaptchaAfter,
+                    ...(captchaProtected ? {
+                        deliveryCaptchaPermitToken:'',deliveryCaptchaPermitExpiresAt:0,
+                        deliveryCaptchaPermitPreviousSince:0,deliveryCaptchaPermitPreviousNext:0,deliveryCaptchaPermitVerifiedAt:0,
+                        deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:'',
+                        deliveryCaptchaChallengeId:'',deliveryCaptchaChallengeExpiresAt:0
+                    } : {})
+                }
             });
             if (repair.error) return res.status(409).json({success:false,retry:true,verified:true,adToken,error:repair.error.message});
             if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Orders đã commit nhưng trạng thái kho đang đồng bộ.'});
@@ -6558,7 +6718,10 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 && Number(fresh.data.deliveryCountLifetime || 0) >= lifetime
                 && Number(fresh.data.currentProducts || 0) === 0
                 && Number(fresh.data.lastProducedAt || 0) === newBatchStartedAt
-                && fresh.data.speedUpUsed !== true;
+                && fresh.data.speedUpUsed !== true
+                && Number(fresh.data.deliverySinceCaptcha || 0) === targetDeliverySinceCaptcha
+                && Number(fresh.data.nextCaptchaAfter || 0) === targetNextCaptchaAfter
+                && (!captchaProtected || (!String(fresh.data.deliveryCaptchaPermitToken || '') && !String(fresh.data.deliveryCaptchaPermitSessionToken || '')));
         }
         if (!stateCommitted) {
             return res.status(503).json({success:false,retry:true,verified:true,adToken,error:'Delivery chưa commit đầy đủ. Không reset flow và không cần xem lại QC.'});
@@ -6573,6 +6736,8 @@ app.post('/api/delivery/claim', async (req,res)=>{
             currentProducts:Number(fresh.data.currentProducts),
             orders:Number(fresh.data.orders),lastProducedAt:Number(fresh.data.lastProducedAt),
             speedUpUsed:!!fresh.data.speedUpUsed,
+            deliverySinceCaptcha:Number(fresh.data.deliverySinceCaptcha||0),
+            nextCaptchaAfter:Number(fresh.data.nextCaptchaAfter||targetNextCaptchaAfter),
             walletUpdatedAt:fresh.data.walletUpdatedAt||mutation.data?.walletUpdatedAt||null
         };
 
@@ -6596,27 +6761,162 @@ app.post('/api/delivery/claim', async (req,res)=>{
 
 // ==================== CAPTCHA & AD TRACKING ENDPOINTS ====================
 
-// API kiểm tra xem delivery này có cần CAPTCHA không (random 1-3 lần đầu tiên)
+// CAPTCHA giao hàng server-authoritative: chu kỳ ngẫu nhiên 3-5 lượt, state persist qua users/user_extra_state.
 app.post('/api/delivery/check-captcha', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const forceNew = req.body?.forceNew === true;
+    const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
+    let releasePersistentDeliveryLock = null;
     try {
-        const { userId } = req.body;
-        const user = await loadCurrentDailyUser(String(userId || ''));
-        if (!user) return res.status(404).json({ error:'User không tồn tại' });
+        releasePersistentDeliveryLock = await acquirePersistentLeaseLock(persistentEventKey('delivery-user-lock', userId), 2 * 60 * 1000);
+        if (!releasePersistentDeliveryLock) return res.status(409).json({success:false,retry:true,error:'Đang xử lý trạng thái giao hàng trên máy chủ khác.'});
+
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({success:false,error:'User không tồn tại'});
+        if (user.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.'});
         const current = Math.max(0, Number(user.deliveryCount || 0));
         const bonus = Math.min(DELIVERY_MAX_BONUS, Math.max(0, Number(user.extraDeliveryCount || 0)));
         const limit = DELIVERY_DAILY_LIMIT + bonus;
         if (current >= limit) {
-            return res.status(429).json({ error:'Hôm nay bạn đã dùng hết lượt giao hàng.', deliveryCount:current, limit });
+            return res.status(429).json({success:false,error:'Hôm nay bạn đã dùng hết lượt giao hàng.',deliveryCount:current,limit});
         }
-        const nextDelivery = current + 1;
-        const requiresCaptcha = nextDelivery <= 3 && Math.random() < 0.4;
-        res.json({
-            requiresCaptcha, deliveryCount:current, remaining:limit-current, limit,
-            captchaCode: requiresCaptcha ? Math.random().toString(36).substring(2,8).toUpperCase() : null
+
+        const state = await normalizeDeliveryCaptchaState(userId, user);
+        const permitActive = !!state.deliveryCaptchaPermitToken && state.deliveryCaptchaPermitExpiresAt > Date.now();
+        if (permitActive) {
+            return res.json({
+                success:true,requiresCaptcha:false,captchaVerified:true,deliveryCaptchaToken:state.deliveryCaptchaPermitToken,
+                deliverySinceCaptcha:state.deliverySinceCaptcha,nextCaptchaAfter:state.nextCaptchaAfter,
+                deliveryCount:current,remaining:limit-current,limit
+            });
+        }
+
+        if (!deliveryCaptchaIsDue(state)) {
+            return res.json({
+                success:true,requiresCaptcha:false,captchaVerified:false,deliveryCaptchaToken:'',
+                deliverySinceCaptcha:state.deliverySinceCaptcha,nextCaptchaAfter:state.nextCaptchaAfter,
+                deliveryCount:current,remaining:limit-current,limit
+            });
+        }
+
+        let challenge = null;
+        if (!forceNew && state.deliveryCaptchaChallengeId && state.deliveryCaptchaChallengeExpiresAt > Date.now()) {
+            challenge = await readPersistentEvent(persistentEventKey('delivery-captcha-challenge', state.deliveryCaptchaChallengeId));
+            if (!challenge || challenge.status !== 'open' || String(challenge.userId || '') !== userId || Number(challenge.expiresAt || 0) <= Date.now()) {
+                challenge = null;
+            }
+        }
+        if (!challenge) {
+            const challengeId = crypto.randomBytes(18).toString('hex');
+            const code = makeCaptchaCode(5);
+            const createdAt = Date.now();
+            challenge = {
+                userId,status:'open',used:false,createdAt,expiresAt:createdAt+DELIVERY_CAPTCHA_CHALLENGE_TTL_MS,
+                displayCode:code,answerHash:deliveryCaptchaAnswerHash(userId,challengeId,code)
+            };
+            const saved = await writePersistentEvent(persistentEventKey('delivery-captcha-challenge', challengeId), challenge, 3);
+            if (!saved) return res.status(503).json({success:false,retry:true,error:'Không tạo được CAPTCHA giao hàng. Vui lòng thử lại.'});
+            await saveDeliveryCaptchaState(userId, {
+                deliveryCaptchaChallengeId:challengeId,
+                deliveryCaptchaChallengeExpiresAt:challenge.expiresAt
+            });
+            state.deliveryCaptchaChallengeId = challengeId;
+            state.deliveryCaptchaChallengeExpiresAt = challenge.expiresAt;
+        }
+
+        return res.json({
+            success:true,requiresCaptcha:true,challengeId:state.deliveryCaptchaChallengeId,captchaCode:String(challenge.displayCode || ''),
+            expiresAt:Number(challenge.expiresAt || state.deliveryCaptchaChallengeExpiresAt),
+            deliverySinceCaptcha:state.deliverySinceCaptcha,nextCaptchaAfter:state.nextCaptchaAfter,
+            deliveryCount:current,remaining:limit-current,limit
         });
     } catch (e) {
-        console.error('Lỗi check CAPTCHA delivery:', e.message);
-        res.status(500).json({ error:e.message });
+        console.error('Lỗi check CAPTCHA delivery:', e);
+        return res.status(500).json({success:false,retry:true,error:e.message});
+    } finally {
+        if (releasePersistentDeliveryLock) { try { await releasePersistentDeliveryLock(); } catch (_) {} }
+        releaseUserStateWrite();
+    }
+});
+
+app.post('/api/delivery/captcha-verify', async (req, res) => {
+    const userId = String(req.body?.userId || '');
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    const challengeId = String(req.body?.challengeId || '');
+    const captchaInput = String(req.body?.captchaInput || '').trim().toUpperCase();
+    if (!challengeId || !captchaInput) return res.status(400).json({success:false,verified:false,error:'Thiếu CAPTCHA.'});
+    const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
+    let releasePersistentDeliveryLock = null;
+    try {
+        releasePersistentDeliveryLock = await acquirePersistentLeaseLock(persistentEventKey('delivery-user-lock', userId), 2 * 60 * 1000);
+        if (!releasePersistentDeliveryLock) return res.status(409).json({success:false,verified:false,retry:true,error:'Đang xử lý trạng thái giao hàng trên máy chủ khác.'});
+
+        const user = await loadCurrentDailyUser(userId);
+        if (!user) return res.status(404).json({success:false,verified:false,error:'Không tìm thấy user.'});
+        const state = await normalizeDeliveryCaptchaState(userId, user);
+        if (state.deliveryCaptchaPermitToken && state.deliveryCaptchaPermitExpiresAt > Date.now()) {
+            return res.json({
+                success:true,verified:true,idempotent:true,deliveryCaptchaToken:state.deliveryCaptchaPermitToken,
+                deliverySinceCaptcha:state.deliverySinceCaptcha,nextCaptchaAfter:state.nextCaptchaAfter,expiresAt:state.deliveryCaptchaPermitExpiresAt
+            });
+        }
+        if (state.deliveryCaptchaChallengeId !== challengeId) {
+            return res.status(400).json({success:false,verified:false,error:'CAPTCHA không còn là challenge hiện tại.'});
+        }
+        const challengeKey = persistentEventKey('delivery-captcha-challenge', challengeId);
+        let challenge = await readPersistentEvent(challengeKey);
+        if (!challenge || String(challenge.userId || '') !== userId) {
+            return res.status(400).json({success:false,verified:false,error:'CAPTCHA không hợp lệ.'});
+        }
+        if (challenge.expiresAt && Date.now() >= Number(challenge.expiresAt)) {
+            return res.status(410).json({success:false,verified:false,expired:true,error:'CAPTCHA đã hết hạn. Vui lòng tạo mã mới.'});
+        }
+        if (challenge.status === 'verified' && challenge.deliveryCaptchaToken) {
+            const token = String(challenge.deliveryCaptchaToken);
+            const expiresAt = Number(challenge.permitExpiresAt || (Date.now()+DELIVERY_CAPTCHA_PERMIT_TTL_MS));
+            await saveDeliveryCaptchaState(userId, {
+                deliverySinceCaptcha:0,nextCaptchaAfter:Number(challenge.nextCaptchaAfter || randomDeliveryCaptchaAfter()),
+                deliveryCaptchaPermitToken:token,deliveryCaptchaPermitExpiresAt:expiresAt,
+                deliveryCaptchaPermitPreviousSince:Number(challenge.previousSince || state.deliverySinceCaptcha || 0),
+                deliveryCaptchaPermitPreviousNext:Number(challenge.previousNext || state.nextCaptchaAfter || DELIVERY_CAPTCHA_MIN_AFTER),
+                deliveryCaptchaPermitVerifiedAt:Number(challenge.verifiedAt || Date.now()),
+                deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:'',
+                deliveryCaptchaChallengeId:'',deliveryCaptchaChallengeExpiresAt:0
+            });
+            return res.json({success:true,verified:true,idempotent:true,deliveryCaptchaToken:token,deliverySinceCaptcha:0,nextCaptchaAfter:Number(challenge.nextCaptchaAfter),expiresAt});
+        }
+        const expected = deliveryCaptchaAnswerHash(userId, challengeId, captchaInput);
+        if (!safeHashEqual(challenge.answerHash, expected)) {
+            return res.status(400).json({success:false,verified:false,error:'CAPTCHA không đúng. Vui lòng nhập lại!'});
+        }
+
+        const token = crypto.randomBytes(24).toString('hex');
+        const verifiedAt = Date.now();
+        const permitExpiresAt = verifiedAt + DELIVERY_CAPTCHA_PERMIT_TTL_MS;
+        const nextCaptchaAfter = randomDeliveryCaptchaAfter();
+        const verifiedChallenge = {
+            ...challenge,status:'verified',used:false,verifiedAt,deliveryCaptchaToken:token,permitExpiresAt,nextCaptchaAfter,
+            previousSince:state.deliverySinceCaptcha,previousNext:state.nextCaptchaAfter
+        };
+        const challengeSaved = await writePersistentEvent(challengeKey, verifiedChallenge, 3);
+        if (!challengeSaved) return res.status(503).json({success:false,verified:false,retry:true,error:'CAPTCHA đúng nhưng chưa lưu được xác minh. Vui lòng thử lại.'});
+
+        await saveDeliveryCaptchaState(userId, {
+            deliverySinceCaptcha:0,nextCaptchaAfter,
+            deliveryCaptchaPermitToken:token,deliveryCaptchaPermitExpiresAt:permitExpiresAt,
+            deliveryCaptchaPermitPreviousSince:state.deliverySinceCaptcha,deliveryCaptchaPermitPreviousNext:state.nextCaptchaAfter,
+            deliveryCaptchaPermitVerifiedAt:verifiedAt,
+            deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:'',
+            deliveryCaptchaChallengeId:'',deliveryCaptchaChallengeExpiresAt:0
+        });
+        return res.json({success:true,verified:true,deliveryCaptchaToken:token,deliverySinceCaptcha:0,nextCaptchaAfter,expiresAt:permitExpiresAt});
+    } catch (e) {
+        console.error('Lỗi verify CAPTCHA delivery:', e);
+        return res.status(500).json({success:false,verified:false,retry:true,error:e.message});
+    } finally {
+        if (releasePersistentDeliveryLock) { try { await releasePersistentDeliveryLock(); } catch (_) {} }
+        releaseUserStateWrite();
     }
 });
 
@@ -7333,8 +7633,9 @@ app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     let releasePersistentAdStartLock = null;
+    let releasePersistentDeliveryGateLock = null;
     try {
-        const { userId, adType, purpose, sessionId, actionId } = req.body || {};
+        const { userId, adType, purpose, sessionId, actionId, deliveryCaptchaToken } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
         const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
@@ -7348,6 +7649,71 @@ app.post('/api/ad/session/start', async (req, res) => {
         );
         if (!releasePersistentAdStartLock) {
             return res.status(409).json({success:false,retry:true,error:'Đang tạo phiên Rewarded cho tài khoản này.'});
+        }
+
+        let deliveryCaptchaBinding = { protected:false, token:'', state:null };
+        if (sessionPurpose === 'delivery') {
+            releasePersistentDeliveryGateLock = await acquirePersistentLeaseLock(
+                persistentEventKey('delivery-user-lock', normalizedUserId),
+                2 * 60 * 1000
+            );
+            if (!releasePersistentDeliveryGateLock) {
+                return res.status(409).json({success:false,retry:true,error:'Đang xử lý trạng thái giao hàng trên máy chủ khác.'});
+            }
+            const deliveryUser = await loadCurrentDailyUser(normalizedUserId);
+            if (!deliveryUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+            if (deliveryUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+            const captchaState = await normalizeDeliveryCaptchaState(normalizedUserId, deliveryUser);
+            const permitActive = !!captchaState.deliveryCaptchaPermitToken && captchaState.deliveryCaptchaPermitExpiresAt > Date.now();
+            const suppliedCaptchaToken = String(deliveryCaptchaToken || '');
+            if (permitActive) {
+                if (!suppliedCaptchaToken || suppliedCaptchaToken !== captchaState.deliveryCaptchaPermitToken) {
+                    return res.status(428).json({success:false,captchaRequired:true,error:'Vui lòng hoàn thành CAPTCHA giao hàng trước khi mở Rewarded.'});
+                }
+                const boundSessionToken = String(captchaState.deliveryCaptchaPermitSessionToken || '');
+                if (boundSessionToken) {
+                    const completedBound = await loadCompletedAdEvent(boundSessionToken);
+                    const persistedDeliveryBound = await readPersistentEvent(persistentEventKey('delivery-verified', boundSessionToken));
+                    if (completedBound || (persistedDeliveryBound && ['processing','verified','claiming','claimed'].includes(String(persistedDeliveryBound.status || '')))) {
+                        return res.status(409).json({
+                            success:false,retry:false,deliveryClaimPending:true,verified:true,adToken:boundSessionToken,
+                            error:'Rewarded của lượt giao đã được xác minh. Hãy hoàn tất claim bằng đúng phiên hiện tại.'
+                        });
+                    }
+                    const persistedBoundSession = await readPersistentEvent(persistentEventKey('ad-session', boundSessionToken));
+                    const boundLive = persistedBoundSession && persistedBoundSession.status !== 'cancelled'
+                        && (!persistedBoundSession.expiresAt || Date.now() < Number(persistedBoundSession.expiresAt));
+                    if (boundLive) {
+                        if (normalizedActionId && String(persistedBoundSession.actionId || '') === normalizedActionId
+                            && String(persistedBoundSession.userId || '') === normalizedUserId
+                            && String(persistedBoundSession.purpose || '') === 'delivery'
+                            && String(persistedBoundSession.deliveryCaptchaToken || '') === suppliedCaptchaToken) {
+                            const recoveredToken = boundSessionToken;
+                            adSessions.set(recoveredToken, {
+                                userId:normalizedUserId,adType:persistedBoundSession.adType || adType,purpose:'delivery',
+                                sessionId:String(persistedBoundSession.sessionId || ''),actionId:normalizedActionId,
+                                startedAt:Number(persistedBoundSession.startedAt || Date.now()),
+                                deliveryCaptchaProtected:true,deliveryCaptchaToken:suppliedCaptchaToken
+                            });
+                            activeAdByUser.set(normalizedUserId, recoveredToken);
+                            await writePersistentEvent(persistentEventKey('ad-active-user', normalizedUserId), {
+                                status:'active',token:recoveredToken,userId:normalizedUserId,adType:adType,purpose:'delivery',
+                                actionId:normalizedActionId,startedAt:Number(persistedBoundSession.startedAt || Date.now()),expiresAt:Date.now()+120000
+                            },3);
+                            return res.json({success:true,token:recoveredToken,idempotent:true,recovered:true});
+                        }
+                        return res.status(409).json({success:false,retry:true,active:true,error:'CAPTCHA đang được gắn với một phiên Rewarded giao hàng khác.'});
+                    }
+                    await saveDeliveryCaptchaState(normalizedUserId, {
+                        deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:''
+                    });
+                    captchaState.deliveryCaptchaPermitBoundActionId = '';
+                    captchaState.deliveryCaptchaPermitSessionToken = '';
+                }
+                deliveryCaptchaBinding = { protected:true, token:suppliedCaptchaToken, state:captchaState };
+            } else if (deliveryCaptchaIsDue(captchaState)) {
+                return res.status(428).json({success:false,captchaRequired:true,error:'Đến chu kỳ CAPTCHA giao hàng. Vui lòng xác minh CAPTCHA trước.'});
+            }
         }
 
         // Bonus-task cooldown phải được kiểm tra TRƯỚC khi trả token để frontend chưa thể mở Monetag.
@@ -7433,7 +7799,9 @@ app.post('/api/ad/session/start', async (req, res) => {
                         purpose:persistedExisting.purpose || 'generic',
                         sessionId:String(persistedExisting.sessionId || ''),
                         actionId:String(persistedExisting.actionId || ''),
-                        startedAt:Number(persistedExisting.startedAt || Date.now())
+                        startedAt:Number(persistedExisting.startedAt || Date.now()),
+                        deliveryCaptchaProtected:!!persistedExisting.deliveryCaptchaProtected,
+                        deliveryCaptchaToken:String(persistedExisting.deliveryCaptchaToken || '')
                     };
                     adSessions.set(existingToken, existing);
                 }
@@ -7459,7 +7827,10 @@ app.post('/api/ad/session/start', async (req, res) => {
         }
         const token = makeAdToken();
         const startedAt = Date.now();
-        adSessions.set(token, { userId:normalizedUserId, adType, purpose:sessionPurpose, sessionId:String(sessionId || ''), actionId:normalizedActionId, startedAt });
+        adSessions.set(token, {
+            userId:normalizedUserId,adType,purpose:sessionPurpose,sessionId:String(sessionId || ''),actionId:normalizedActionId,startedAt,
+            deliveryCaptchaProtected:!!deliveryCaptchaBinding.protected,deliveryCaptchaToken:String(deliveryCaptchaBinding.token || '')
+        });
         activeAdByUser.set(normalizedUserId, token);
         // Persist session metadata so a server restart / multiple instance does not turn a valid
         // Rewarded completion into "session not found".
@@ -7470,6 +7841,8 @@ app.post('/api/ad/session/start', async (req, res) => {
             sessionId: String(sessionId || ''),
             actionId: normalizedActionId,
             startedAt,
+            deliveryCaptchaProtected:!!deliveryCaptchaBinding.protected,
+            deliveryCaptchaToken:String(deliveryCaptchaBinding.token || ''),
             expiresAt: startedAt + 10 * 60 * 1000
         });
         const activeIndexPersisted = PERSISTENT_AD_ACTION_PURPOSES.has(sessionPurpose)
@@ -7489,6 +7862,30 @@ app.post('/api/ad/session/start', async (req, res) => {
             },1).catch(()=>{});
             return res.status(503).json({success:false,retry:true,error:'Máy chủ chưa lưu được phiên Rewarded cho thao tác này. Vui lòng thử lại.'});
         }
+        if (sessionPurpose === 'delivery' && deliveryCaptchaBinding.protected) {
+            try {
+                await saveDeliveryCaptchaState(normalizedUserId, {
+                    deliveryCaptchaPermitBoundActionId:normalizedActionId,
+                    deliveryCaptchaPermitSessionToken:token
+                });
+                deliveryCaptchaBinding.state.deliveryCaptchaPermitBoundActionId = normalizedActionId;
+                deliveryCaptchaBinding.state.deliveryCaptchaPermitSessionToken = token;
+            } catch (bindError) {
+                adSessions.delete(token);
+                if (activeAdByUser.get(normalizedUserId) === token) activeAdByUser.delete(normalizedUserId);
+                await writePersistentEvent(persistentEventKey('ad-session', token), {
+                    userId:normalizedUserId,adType,purpose:sessionPurpose,sessionId:String(sessionId||''),actionId:normalizedActionId,
+                    startedAt,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1
+                },1).catch(()=>{});
+                const activeMarker=await readPersistentEvent(persistentEventKey('ad-active-user',normalizedUserId));
+                if (String(activeMarker?.token||'')===token) {
+                    await writePersistentEvent(persistentEventKey('ad-active-user',normalizedUserId),{
+                        ...activeMarker,status:'released',releasedAt:Date.now(),expiresAt:Date.now()-1
+                    },1).catch(()=>{});
+                }
+                return res.status(503).json({success:false,retry:true,error:'Phiên Rewarded đã tạo nhưng chưa bind được CAPTCHA persistent. Vui lòng thử lại.'});
+            }
+        }
         recordAntiFraudEvent(String(userId), 'ad_start', {
             ip: requestIp(req),
             sessionId: String(sessionId || ''),
@@ -7502,6 +7899,9 @@ app.post('/api/ad/session/start', async (req, res) => {
     } catch (e) {
         res.status(500).json({success:false,error:e.message});
     } finally {
+        if (releasePersistentDeliveryGateLock) {
+            try { await releasePersistentDeliveryGateLock(); } catch (_) {}
+        }
         if (releasePersistentAdStartLock) {
             try { await releasePersistentAdStartLock(); } catch (_) {}
         }
@@ -7540,6 +7940,30 @@ app.post('/api/ad/session/cancel', async (req, res) => {
         await writePersistentEvent(persistentEventKey('ad-active-user',userId),{
             ...activeMarker,status:'released',releasedAt:Date.now(),expiresAt:Date.now()-1
         },1).catch(()=>{});
+    }
+    if (session.purpose === 'delivery' && session.deliveryCaptchaProtected && session.deliveryCaptchaToken) {
+        const releaseStateWrite = await acquireUserStateWriteLock(userId);
+        let releaseDeliveryLock = null;
+        try {
+            releaseDeliveryLock = await acquirePersistentLeaseLock(persistentEventKey('delivery-user-lock', userId), 2 * 60 * 1000);
+            if (releaseDeliveryLock) {
+                const deliveryUser = await loadCurrentDailyUser(userId);
+                if (deliveryUser) {
+                    const captchaState = await normalizeDeliveryCaptchaState(userId, deliveryUser);
+                    if (captchaState.deliveryCaptchaPermitToken === String(session.deliveryCaptchaToken)
+                        && captchaState.deliveryCaptchaPermitSessionToken === token) {
+                        await saveDeliveryCaptchaState(userId, {
+                            deliveryCaptchaPermitBoundActionId:'',deliveryCaptchaPermitSessionToken:''
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Không giải phóng được binding CAPTCHA của Rewarded đã cancel:', e.message);
+        } finally {
+            if (releaseDeliveryLock) { try { await releaseDeliveryLock(); } catch (_) {} }
+            releaseStateWrite();
+        }
     }
     return res.json({success:true,cancelled:true});
 });
@@ -7582,7 +8006,9 @@ app.post('/api/ad/session/complete', async (req, res) => {
                     purpose:persistedSession.purpose || 'generic',
                     sessionId:String(persistedSession.sessionId || ''),
                     actionId:String(persistedSession.actionId || ''),
-                    startedAt:Number(persistedSession.startedAt || Date.now())
+                    startedAt:Number(persistedSession.startedAt || Date.now()),
+                    deliveryCaptchaProtected:!!persistedSession.deliveryCaptchaProtected,
+                    deliveryCaptchaToken:String(persistedSession.deliveryCaptchaToken || '')
                 };
                 adSessions.set(token, s);
             }
@@ -7607,8 +8033,9 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 if (persistedDelivery.completionResult) {
                     completedAdEvents.set(String(token), {
                         userId:String(userId), adType, purpose:'delivery', completedAt:Number(persistedDelivery.completedAt || Date.now()),
-                        used:!!persistedDelivery.used, deliveryClaimResult:persistedDelivery.deliveryClaimResult || null,
-                        completionResult:persistedDelivery.completionResult
+                        used:!!persistedDelivery.used,deliveryClaimResult:persistedDelivery.deliveryClaimResult || null,
+                        completionResult:persistedDelivery.completionResult,
+                        deliveryCaptchaProtected:!!persistedDelivery.deliveryCaptchaProtected,deliveryCaptchaToken:String(persistedDelivery.deliveryCaptchaToken || '')
                     });
                     const released = await releasePersistentAdSession(String(userId), String(token), 'completed');
                     if (!released) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Rewarded giao hàng đã xác minh nhưng phiên quảng cáo đang cleanup.'});
@@ -7625,7 +8052,8 @@ app.post('/api/ad/session/complete', async (req, res) => {
                     // chính token này. Không yêu cầu user xem lại quảng cáo.
                     completedAdEvents.set(String(token), {
                         userId:String(userId), adType, purpose:'delivery', completedAt:Number(persistedDelivery.completedAt || Date.now()),
-                        used:false, deliveryClaimResult:null, completionResult:null, verificationReady:true
+                        used:false,deliveryClaimResult:null,completionResult:null,verificationReady:true,
+                        deliveryCaptchaProtected:!!persistedDelivery.deliveryCaptchaProtected,deliveryCaptchaToken:String(persistedDelivery.deliveryCaptchaToken || '')
                     });
                 }
             }
@@ -7689,8 +8117,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if (purpose==='delivery') {
             const reserved = await writePersistentEvent(deliveryPersistentKey, {
                 userId:String(userId), adType, purpose:'delivery', sessionId:String(sessionId || ''), actionId:String(req.body?.actionId || ''),
-                completedAt:Date.now(), processingAt:Date.now(), status:'processing', verificationReady:true, used:false,
-                completionResult:null, deliveryClaimResult:null, expiresAt:Date.now() + 30 * 60 * 1000
+                completedAt:Date.now(),processingAt:Date.now(),status:'processing',verificationReady:true,used:false,
+                completionResult:null,deliveryClaimResult:null,
+                deliveryCaptchaProtected:!!s.deliveryCaptchaProtected,deliveryCaptchaToken:String(s.deliveryCaptchaToken || ''),
+                expiresAt:Date.now() + 30 * 60 * 1000
             });
             if (!reserved) {
                 return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Đã xác minh Rewarded giao hàng nhưng chưa lưu được trạng thái. Vui lòng thử lại, không cần xem lại quảng cáo.'});
@@ -7747,7 +8177,11 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
         if (purpose==='bonus-task' && !(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Phần thưởng đã commit nhưng cooldown đang đồng bộ.'});
         const fresh=await readUserRow(String(userId));
-        const completed={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null};
+        const completed={
+            userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null,
+            deliveryCaptchaProtected:purpose==='delivery'&&!!s.deliveryCaptchaProtected,
+            deliveryCaptchaToken:purpose==='delivery'?String(s.deliveryCaptchaToken || ''):''
+        };
         await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,spins:rewardSpins,sessionId,purpose});
         if(rewardCoins) logTransaction(String(userId),'coin',rewardCoins,'Xem 1 QC hợp lệ'); if(rewardOrders) logTransaction(String(userId),'orders',rewardOrders,'Xem 1 QC hợp lệ');
         try{await tryFinalizeReferral(String(userId));}catch(_){}
@@ -7779,8 +8213,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         if (purpose === 'delivery') {
             const persisted = await writePersistentEvent(persistentEventKey('delivery-verified', token), {
-                userId:String(userId), adType, purpose, completedAt:Date.now(), used:false, status:'verified',
-                completionResult:response, deliveryClaimResult:null, expiresAt:Date.now() + 30 * 60 * 1000
+                userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,status:'verified',
+                completionResult:response,deliveryClaimResult:null,
+                deliveryCaptchaProtected:!!s.deliveryCaptchaProtected,deliveryCaptchaToken:String(s.deliveryCaptchaToken || ''),
+                expiresAt:Date.now() + 30 * 60 * 1000
             });
             if (!persisted) {
                 // Rewarded đã xác minh; giữ completion trong memory nhưng giải phóng active session để token
