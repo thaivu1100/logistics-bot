@@ -1049,6 +1049,29 @@
         </div>
 
         <main class="ui-main-content p-2 space-y-3">
+            <!-- QUẢNG CÁO DÙNG CHUNG CHO MỌI TAB: chỉ có 1 instance/script cho mỗi format trong toàn page session. -->
+            <section class="shared-ad-rail space-y-3 mb-4" aria-label="Quảng cáo">
+                <div class="glass p-2 rounded-[20px] overflow-hidden min-h-[90px]">
+                    <div class="text-[7px] uppercase tracking-widest text-slate-500 text-center mb-1">Quảng cáo</div>
+                    <script async="async" data-cfasync="false" src="https://thatlobster.com/438249657045cce5877fa802ad6ef949/invoke.js"></script>
+                    <div id="container-438249657045cce5877fa802ad6ef949"></div>
+                </div>
+                <div class="glass p-2 rounded-[20px] flex-col justify-center overflow-hidden min-h-[78px] items-center">
+                    <div class="text-[7px] uppercase tracking-widest text-slate-500 text-center mb-1">Quảng cáo</div>
+                    <div style="width:320px;max-width:100%;overflow:hidden;margin:0 auto;">
+                        <script>
+                          atOptions = {
+                            'key' : '06614de8b0449426a8ef60d24e757dc4',
+                            'format' : 'iframe',
+                            'height' : 50,
+                            'width' : 320,
+                            'params' : {}
+                          };
+                        </script>
+                        <script src="https://thatlobster.com/06614de8b0449426a8ef60d24e757dc4/invoke.js"></script>
+                    </div>
+                </div>
+            </section>
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter ui-tab ui-home space-y-3 relative">
                 <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
@@ -1219,21 +1242,6 @@
                     <p x-show="!linkTasks.length && !linkTaskStatusError" class="text-[9px] text-slate-500 text-center">Đang tải nhiệm vụ vượt link...</p>
                 </div>
 
-                <div class="glass p-2 rounded-[20px] flex justify-center overflow-hidden min-h-[66px] items-center" aria-label="Advertisement">
-                    <div style="width:320px;max-width:100%;overflow:hidden;margin:0 auto;">
-                        <script>
-                          atOptions = {
-                            'key' : '06614de8b0449426a8ef60d24e757dc4',
-                            'format' : 'iframe',
-                            'height' : 50,
-                            'width' : 320,
-                            'params' : {}
-                          };
-                        </script>
-                        <script src="https://thatlobster.com/06614de8b0449426a8ef60d24e757dc4/invoke.js"></script>
-                    </div>
-                </div>
-
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
                         <span class="tasks-header-truck">🚚</span> <span x-text="texts.dailyTasks"></span>
@@ -1277,11 +1285,6 @@
                         </p>
                         <button x-show="allTasksDone" @click="claimAllTasksReward()" class="cta-shine mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase" x-text="texts.claim"></button>
                     </div>
-                </div>
-
-                <div class="glass p-2 rounded-[20px] overflow-hidden min-h-[90px]" aria-label="Advertisement">
-                    <script async="async" data-cfasync="false" src="https://thatlobster.com/438249657045cce5877fa802ad6ef949/invoke.js"></script>
-                    <div id="container-438249657045cce5877fa802ad6ef949"></div>
                 </div>
 
                 <div class="glass p-3 rounded-[25px] space-y-3 card-padding streak-panel" :class="streakCelebrating ? 'streak-celebrating' : ''">
@@ -3993,11 +3996,13 @@
                     const names = {
                         vi: {
                             deliver1:'🚚 Giao hàng 1 lần', deliver3:'🚚 Giao hàng 3 lần', deliver5:'🚚 Giao hàng 5 lần',
-                            watch3rewarded:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', smartlink5:'🔗 Hoàn thành 5 SmartLink', spin1:'🎁 Mở rương'
+                            watch3rewarded:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', smartlink5:'🔗 Hoàn thành 5 SmartLink', spin1:'🎁 Mở rương',
+                            invite1:'👥 Mời 1 bạn thành công', invite5:'👥 Mời 5 bạn thành công'
                         },
                         en: {
                             deliver1:'🚚 Deliver 1 time', deliver3:'🚚 Deliver 3 times', deliver5:'🚚 Deliver 5 times',
-                            watch3rewarded:'📺 Watch 3 ads (Rewarded Interstitial only)', smartlink5:'🔗 Complete 5 SmartLinks', spin1:'🎁 Open chest'
+                            watch3rewarded:'📺 Watch 3 ads (Rewarded Interstitial only)', smartlink5:'🔗 Complete 5 SmartLinks', spin1:'🎁 Open chest',
+                            invite1:'👥 Invite 1 valid friend', invite5:'👥 Invite 5 valid friends'
                         }
                     };
                     return { ...task, name: names[this.language]?.[task.id] || task.name };
@@ -4080,8 +4085,10 @@
                         const res=await fetch(`${API_URL}/api/link-task/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,taskId:task.id})}),data=await res.json().catch(()=>({}));
                         if(!res.ok||!data.success||!data.shortUrl){
                             if(data.vpnBlocked){this.accessBlocked=true;this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}
-                            if(data.networkVerificationRequired)this.linkTaskStatusError='Tạm thời chưa thể xác minh IP/VPN. Vui lòng thử lại sau.';
-                            this.showNotification('⚠️ '+(data.networkVerificationRequired?'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.':(data.error||'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.')));await this.syncLinkTasks();return false;
+                            // Lỗi xác minh của MỘT provider chỉ hiển thị trên card/provider đó sau khi sync,
+                            // không biến thành lỗi chung làm cả khu vực Nhiệm vụ vượt link trông như bị khóa.
+                            if(data.networkVerificationRequired)this.linkTaskStatusError='';
+                            this.showNotification('⚠️ '+(data.error||'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'));await this.syncLinkTasks();return false;
                         }
                         this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link rồi mở Bot Telegram để xác nhận.');
                         try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');}catch(_){window.location.href=url;}
@@ -4161,7 +4168,23 @@
                         });
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
-                            this.showNotification('❌ ' + (this.texts.taskClaimFailed || 'The task is not eligible or has already been claimed.'));
+                            const code = String(result.code || '');
+                            const messages = this.language === 'en'
+                                ? {
+                                    processing:'⏳ The reward is being processed. Please wait a moment.',
+                                    not_eligible:'⚠️ The server has not confirmed this task as completed yet.',
+                                    database_temporarily_unavailable:'⚠️ The reward system is temporarily busy. Please try again.',
+                                    fraud_hold:'⚠️ This reward is temporarily held for a security check.',
+                                    account_blocked:'🚫 This account is currently locked.'
+                                }
+                                : {
+                                    processing:'⏳ Phần thưởng đang được xử lý. Vui lòng chờ một chút.',
+                                    not_eligible:'⚠️ Máy chủ chưa xác nhận bạn hoàn thành nhiệm vụ.',
+                                    database_temporarily_unavailable:'⚠️ Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.',
+                                    fraud_hold:'⚠️ Phần thưởng đang tạm được giữ để kiểm tra bảo mật.',
+                                    account_blocked:'🚫 Tài khoản hiện đang bị khóa.'
+                                };
+                            this.showNotification(messages[code] || ('❌ ' + (result.error || this.texts.taskClaimFailed || 'Unable to claim this task reward.')));
                             await this.syncDailyTasksFromServer();
                             return;
                         }
