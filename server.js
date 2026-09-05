@@ -1407,10 +1407,17 @@ function requireTelegramMobile(req, res) {
     return false;
 }
 const ipRiskCache = new Map();
+let ipIntelligenceConfigWarned = false;
 async function checkIpRisk(ip) {
     const normalized = normalizeRequestIp(ip);
-    if (!normalized) return {available:false,error:'Không xác định được IP.'};
-    if (!IP_INTELLIGENCE_API_KEY) return {available:false,error:'Thiếu IP_INTELLIGENCE_API_KEY.'};
+    if (!normalized) return {available:false,reason:'IP_UNAVAILABLE',error:'Không xác định được IP.'};
+    if (!IP_INTELLIGENCE_API_KEY) {
+        if (!ipIntelligenceConfigWarned) {
+            console.warn('⚠️ IP Intelligence chưa được cấu hình. Global Mini App access vẫn được phép; các reward task cần IP verification sẽ bị khóa.');
+            ipIntelligenceConfigWarned = true;
+        }
+        return {available:false,reason:'IP_INTELLIGENCE_NOT_CONFIGURED',error:'Dịch vụ xác minh mạng chưa được cấu hình.'};
+    }
     const cached = ipRiskCache.get(normalized);
     if (cached && Date.now() - cached.cachedAt < 10 * 60 * 1000) return cached.value;
     const controller = new AbortController();
@@ -1420,11 +1427,18 @@ async function checkIpRisk(ip) {
         url.searchParams.set('q', normalized);
         url.searchParams.set('key', IP_INTELLIGENCE_API_KEY);
         const response = await fetch(url, {headers:{accept:'application/json','user-agent':'logistics-app/1.0'},signal:controller.signal});
-        if (!response.ok) return {available:false,error:`IP intelligence HTTP ${response.status}`};
+        if (!response.ok) {
+            console.warn(`⚠️ IP Intelligence tạm lỗi HTTP ${response.status}.`);
+            return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
+        }
         const data = await response.json().catch(() => null);
-        if (!data || typeof data !== 'object') return {available:false,error:'IP intelligence trả dữ liệu không hợp lệ.'};
+        if (!data || typeof data !== 'object') {
+            console.warn('⚠️ IP Intelligence trả dữ liệu không hợp lệ.');
+            return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
+        }
         const value = {
             available:true,
+            reason:null,
             countryCode:String(data.location?.country_code || data.country_code || '').toUpperCase(),
             isVpn:data.is_vpn === true,
             isProxy:data.is_proxy === true,
@@ -1435,7 +1449,8 @@ async function checkIpRisk(ip) {
         ipRiskCache.set(normalized,{cachedAt:Date.now(),value});
         return value;
     } catch (e) {
-        return {available:false,error:e?.name === 'AbortError' ? 'IP intelligence timeout.' : (e?.message || 'IP intelligence error.')};
+        console.warn(`⚠️ IP Intelligence tạm thời không khả dụng: ${e?.name === 'AbortError' ? 'timeout' : 'network/provider error'}.`);
+        return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
     } finally { clearTimeout(timer); }
 }
 function networkRiskBlocked(risk) {
@@ -5820,7 +5835,7 @@ app.post('/api/task/claim', async (req,res) => {
             }
             if (result.reason==='processing') return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý.'});
             if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
-            if (result.reason==='task_rpc_failed') return res.status(503).json({success:false,retry:true,error:'Daily Task chưa sẵn sàng. Hãy chạy migration #6 trên Supabase.',detail:result.error?.message||''});
+            if (result.reason==='task_rpc_failed') { console.error('Daily Task RPC failed:', result.error?.message || result.error || 'unknown'); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
             return res.status(400).json({success:false,error:result.reason});
         }
         const {data:user}=await readUserRow(userId);
@@ -5847,9 +5862,9 @@ app.post('/api/task/claim-all', async (req,res) => {
         if(defs.some(t=>claims[t.id]!==today)) return res.status(400).json({success:false,error:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.'});
         if(claims.__all===today) { const fresh=await readUserRow(userId); return res.json({success:true,alreadyClaimed:true,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||null}); }
         const reward=DAILY_TASK_ALL_REWARD;
-        if(!SUPABASE_SERVICE_ROLE_KEY) return res.status(503).json({success:false,retry:true,error:'Thiếu SUPABASE_SERVICE_ROLE_KEY cho Daily Task atomic.'});
+        if(!SUPABASE_SERVICE_ROLE_KEY){ console.error('Daily Task atomic unavailable: missing server-side database service credential.'); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
         const {data:rpcRaw,error:rpcError}=await jobMailDb().rpc('daily_task_reward_atomic',{p_user_id:userId,p_day_key:today,p_task_id:'__all',p_coins:Number(reward.coins||0),p_orders:Number(reward.orders||0),p_spins:Number(reward.spins||0)});
-        if(rpcError) return res.status(503).json({success:false,retry:true,error:'Daily Task chưa sẵn sàng. Hãy chạy migration #6 trên Supabase.',detail:rpcError.message});
+        if(rpcError){ console.error('Daily Task claim-all RPC failed:', rpcError.message); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
         const rpc=Array.isArray(rpcRaw)?rpcRaw[0]:rpcRaw;if(!rpc?.ok)return res.status(503).json({success:false,retry:true,error:'RPC Daily Task trả dữ liệu không hợp lệ.'});
         claims.__all=today; await saveUserExtra(userId,{serverTaskClaims:claims}); await flushUserExtra();
         if(!rpc.idempotent){
@@ -7448,11 +7463,11 @@ function linkTaskProviderConfigured(cfg){
     return false;
 }
 function linkTaskUnavailableReason(cfg){
-    if(cfg?.unsupported) return 'Chưa có tài liệu/API Uptolink thực tế nên hệ thống không tự bịa endpoint.';
-    if(!linkTaskProviderConfigured(cfg)) return `Chưa cấu hình API token cho ${cfg?.provider||'provider'}.`;
-    if(!IP_HASH_SECRET) return 'Thiếu IP_HASH_SECRET trên server.';
-    if(!IP_INTELLIGENCE_API_KEY) return 'Thiếu IP_INTELLIGENCE_API_KEY trên server.';
-    if(!SUPABASE_SERVICE_ROLE_KEY) return 'Thiếu SUPABASE_SERVICE_ROLE_KEY trên server.';
+    if(cfg?.unsupported) return 'Nhiệm vụ này chưa có tích hợp API chính thức nên tạm thời chưa khả dụng.';
+    if(!linkTaskProviderConfigured(cfg)) return 'Nhiệm vụ này đang tạm thời chưa khả dụng.';
+    if(!IP_HASH_SECRET) return 'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.';
+    if(!IP_INTELLIGENCE_API_KEY) return 'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.';
+    if(!SUPABASE_SERVICE_ROLE_KEY) return 'Hệ thống lưu trạng thái nhiệm vụ đang tạm thời chưa sẵn sàng.';
     return '';
 }
 function linkTaskRuleText(cfg){
@@ -7547,31 +7562,52 @@ async function getActiveLinkTaskAttempt(userId,taskId){
     if(new Date(data.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',data.id).neq('status','rewarded');return null;}return data;
 }
 async function cleanNetworkForReward(req,{vnOnly=false}={}){
-    const ip=requestIp(req);if(!ip)return {ok:false,status:400,error:'Không xác định được IP.'};
-    const risk=await checkIpRisk(ip);if(!risk.available)return {ok:false,status:503,error:risk.error||'Không kiểm tra được IP/VPN.'};
+    const ip=requestIp(req);
+    if(!ip)return {ok:false,status:503,providerUnavailable:true,networkVerificationRequired:true,networkVerificationReason:'IP_UNAVAILABLE',error:'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.'};
+    const risk=await checkIpRisk(ip);
+    if(!risk.available)return {ok:false,status:503,providerUnavailable:true,networkVerificationRequired:true,networkVerificationReason:risk.reason||'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.'};
     if(networkRiskBlocked(risk))return {ok:false,status:403,vpnBlocked:true,error:'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.'};
     if(vnOnly&&risk.countryCode!=='VN')return {ok:false,status:403,countryBlocked:true,error:'Nhiệm vụ này chỉ dành cho IP Việt Nam. Vui lòng chuyển sang mạng Việt Nam.'};
     return {ok:true,ip,risk};
 }
+async function checkGlobalMiniAppNetworkAccess(req){
+    const ip=requestIp(req);
+    if(!ip)return {ok:true,ip:'',risk:null,networkVerificationAvailable:false,networkVerificationReason:'IP_UNAVAILABLE'};
+    const risk=await checkIpRisk(ip);
+    if(!risk.available)return {ok:true,ip,risk:null,networkVerificationAvailable:false,networkVerificationReason:risk.reason||'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE'};
+    if(networkRiskBlocked(risk))return {ok:false,status:403,vpnBlocked:true,error:'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.'};
+    return {ok:true,ip,risk,networkVerificationAvailable:true,networkVerificationReason:null};
+}
 app.post('/api/access-check',async(req,res)=>{
-    const userId=String(req.body?.userId||'');if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});if(!requireTelegramMobile(req,res))return;
-    const n=await cleanNetworkForReward(req);if(!n.ok)return res.status(n.status).json({success:false,...n});
-    const current=await readUserRow(userId);if(current.data&&String(current.data.ip||'')!==n.ip)await saveUserFields(userId,{ip:n.ip});
-    return res.json({success:true,allowed:true,countryCode:n.risk.countryCode});
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,allowed:false,authBlocked:true,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    try{
+        const current=await readUserRow(userId);
+        if(current.error)throw current.error;
+        if(current.data?.isBanned)return res.status(403).json({success:false,allowed:false,accountBlocked:true,error:'Tài khoản hiện đang bị khóa.'});
+        const n=await checkGlobalMiniAppNetworkAccess(req);
+        if(!n.ok)return res.status(n.status).json({success:false,allowed:false,vpnBlocked:true,error:n.error});
+        if(current.data&&n.ip&&String(current.data.ip||'')!==n.ip)await saveUserFields(userId,{ip:n.ip});
+        return res.json({success:true,allowed:true,networkVerificationAvailable:n.networkVerificationAvailable,networkVerificationReason:n.networkVerificationReason,countryCode:n.risk?.countryCode||''});
+    }catch(e){
+        console.error('Access check failed:',e?.message||e);
+        return res.status(503).json({success:false,allowed:false,serverUnavailable:true,error:'Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.'});
+    }
 });
 app.get('/api/link-task/status/:id',async(req,res)=>{
     const userId=String(req.params.id||'');if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});if(!requireTelegramMobile(req,res))return;
     try{
-        const n=await cleanNetworkForReward(req);if(!n.ok)return res.status(n.status).json({success:false,...n});if(!IP_HASH_SECRET)return res.status(503).json({success:false,error:'Thiếu IP_HASH_SECRET.'});
-        const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Thiếu device ID.'});const ipHash=hashNetworkValue(n.ip,'ip'),deviceHash=hashNetworkValue(deviceId,'device'),db=linkTaskDb(),items=[];
+        const n=await cleanNetworkForReward(req);if(!n.ok)return res.status(n.status).json({success:false,...n});if(!IP_HASH_SECRET)return res.status(503).json({success:false,providerUnavailable:true,networkVerificationRequired:true,error:'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.'});
+        const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});const ipHash=hashNetworkValue(n.ip,'ip'),deviceHash=hashNetworkValue(deviceId,'device'),db=linkTaskDb(),items=[];
         for(const cfg of Object.values(LINK_TASK_CONFIG)){let remaining=(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0),latest=null;if(!linkTaskUnavailableReason(cfg)){const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});remaining=quota.remaining;const {data}=await db.from('link_task_attempts').select('status,expires_at,rewarded_at').eq('user_id',userId).eq('task_id',cfg.taskId).order('created_at',{ascending:false}).limit(1).maybeSingle();latest=data||null;}items.push(linkTaskPublicConfig(cfg,remaining,latest));}
         const {data:user}=await readUserRow(userId);res.set('Cache-Control','no-store');return res.json({success:true,tasks:items,orders:Number(user?.orders||0),coins:Number(user?.coins||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||null});
     }catch(e){console.error('Link task status:',e?.message||e);return res.status(500).json({success:false,error:'Không đọc được trạng thái nhiệm vụ vượt link. Hãy kiểm tra migration/config server.'});}
 });
 app.post('/api/link-task/start',async(req,res)=>{
     const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||'');if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});if(!requireTelegramMobile(req,res))return;
-    const cfg=LINK_TASK_CONFIG[taskId];if(!cfg)return res.status(400).json({success:false,error:'Nhiệm vụ vượt link không hợp lệ.'});const unavailable=linkTaskUnavailableReason(cfg);if(unavailable)return res.status(503).json({success:false,providerUnavailable:true,error:unavailable});
-    const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Thiếu device ID.'});const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).json({success:false,...n});
+    const cfg=LINK_TASK_CONFIG[taskId];if(!cfg)return res.status(400).json({success:false,error:'Nhiệm vụ vượt link không hợp lệ.'});const unavailable=linkTaskUnavailableReason(cfg);if(unavailable)return res.status(503).json({success:false,providerUnavailable:true,networkVerificationRequired:!IP_INTELLIGENCE_API_KEY,error:unavailable});
+    const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).json({success:false,...n});
     const ipHash=hashNetworkValue(n.ip,'ip'),deviceHash=hashNetworkValue(deviceId,'device'),release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),60000);if(!release)return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
     try{
         const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);if(active?.short_url)return res.json({success:true,reused:true,shortUrl:active.short_url,expiresAt:active.expires_at,task:linkTaskPublicConfig(cfg)});
@@ -7593,7 +7629,7 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         const cfg=LINK_TASK_CONFIG[String(a.task_id||'')];if(!cfg)return res.status(400).send('<h2>❌ Nhiệm vụ không hợp lệ.</h2>');if(a.status==='rewarded')return res.send('<h2>ℹ️ Nhiệm vụ này đã được xác nhận trước đó.</h2>');
         if(new Date(a.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).neq('status','rewarded');return res.status(410).send('<h2>❌ Link xác nhận đã hết hạn.</h2>');}
         if(!isMobileUserAgent(req))return res.status(403).send('<h2>📱 Chỉ hỗ trợ hoàn thành nhiệm vụ trên điện thoại.</h2>');
-        const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).send(`<h2>🚫 ${safeHtml(n.error)}</h2>`);const landingIpHash=hashNetworkValue(n.ip,'ip');if(!landingIpHash)return res.status(503).send('<h2>⚠️ Máy chủ chưa cấu hình IP_HASH_SECRET.</h2>');const deviceIpHash=a.device_hash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
+        const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).send(`<h2>🚫 ${safeHtml(n.error)}</h2>`);const landingIpHash=hashNetworkValue(n.ip,'ip');if(!landingIpHash)return res.status(503).send('<h2>⚠️ Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');const deviceIpHash=a.device_hash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
         const {error:ue}=await db.from('link_task_attempts').update({status:'landed',landing_ip_hash:landingIpHash,device_ip_hash:deviceIpHash||null,country_code:n.risk.countryCode||null,is_vpn:false,landed_at:new Date().toISOString()}).eq('id',a.id).in('status',['created','shortened','landed']);if(ue)throw ue;
         const deepLink=`https://t.me/${BOT_USERNAME}?start=lt_${nonce}`;res.set('Cache-Control','no-store');
         return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:#0f172a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{max-width:420px;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:22px;padding:24px}.b{display:block;margin-top:18px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900}.s{color:#94a3b8;font-size:13px;line-height:1.5}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2>ĐÃ ĐI QUA LINK THÀNH CÔNG</h2><p class="s">Bước cuối: mở đúng Telegram Bot để xác nhận tài khoản và nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p><a class="b" href="${safeHtml(deepLink)}">🤖 MỞ BOT TELEGRAM ĐỂ XÁC NHẬN</a></div></body></html>`);
