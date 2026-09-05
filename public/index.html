@@ -1272,7 +1272,7 @@
                             </div>
                             <div class="flex-shrink-0 pl-2">
                                 <span x-show="task.done" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
-                                <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.claim"></button>
+                                <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" :disabled="_taskClaimInFlight" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text disabled:opacity-50" x-text="_taskClaimingId===task.id ? (language==='vi'?'⏳ ĐANG NHẬN...':'⏳ CLAIMING...') : texts.claim"></button>
                                 <span x-show="!task.done && !task.claimable" class="text-slate-500 text-[7px] font-black uppercase" x-text="taskProgressText(task)"></span>
                                 <span x-show="!task.done && task.claimable" class="text-green-400 text-[7px] font-black" x-text="language === 'vi' ? '✅ Hoàn thành — Có thể nhận' : '✅ Complete — Claimable'"></span>
                             </div>
@@ -1283,7 +1283,7 @@
                             <span x-text="texts.completeAll"></span>:
                             <span x-text="allTasksDone ? (texts.readyToClaim || 'Ready to claim!') : ('+' + (1000) + ' 💰 +500 📦 +2 🎁')"></span>
                         </p>
-                        <button x-show="allTasksDone" @click="claimAllTasksReward()" class="cta-shine mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase" x-text="texts.claim"></button>
+                        <button x-show="allTasksDone" @click="claimAllTasksReward()" :disabled="_taskClaimInFlight" class="cta-shine mt-1 px-3 py-1 gold-glow bg-[#fbbf24] text-slate-900 rounded-full font-black text-[9px] uppercase disabled:opacity-50" x-text="_taskClaimingId==='__all' ? (language==='vi'?'⏳ ĐANG NHẬN...':'⏳ CLAIMING...') : texts.claim"></button>
                     </div>
                 </div>
 
@@ -2373,11 +2373,14 @@
                     { id:'deliver5', name:'🚚 Giao hàng 5 lần', icon:'🚚', max:5, reward:50, rewardOrders:50, rewardSpins:0, done:false, claimable:false },
                     { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, reward:150, rewardOrders:50, rewardSpins:0, done:false, claimable:false },
                     { id:'smartlink5', name:'🔗 Hoàn thành 5 SmartLink', icon:'🔗', max:5, reward:75, rewardOrders:75, rewardSpins:0, done:false, claimable:false },
-                    { id:'spin1', name:'🎁 Mở rương', icon:'🎁', max:1, reward:50, rewardOrders:0, rewardSpins:0, done:false, claimable:false, once:true }
+                    { id:'spin1', name:'🎁 Mở rương', icon:'🎁', max:1, reward:50, rewardOrders:0, rewardSpins:0, done:false, claimable:false, once:true },
+                    { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, reward:350, rewardOrders:25, rewardSpins:0, done:false, claimable:false, progress:0 },
+                    { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, reward:500, rewardOrders:100, rewardSpins:1, done:false, claimable:false, progress:0 }
                 ],
                 allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:5,
                 accessBlocked:false, accessBlockIcon:'📱', accessBlockTitle:'', accessBlockMessage:'',
                 linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0, linkTaskStatusError:'',
+                _taskClaimInFlight:false, _taskClaimingId:'',
                 smartlinkCount:0, lastSmartlinkTime:0,
                 groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -4072,8 +4075,8 @@
                     try{
                         const res=await fetch(`${API_URL}/api/link-task/status/${this.user.id}?t=${Date.now()}`,{cache:'no-store'}),data=await res.json().catch(()=>({}));
                         if(!res.ok||!data.success){
-                            if(data.vpnBlocked||data.desktopBlocked){await this.checkAccessGate();return false;}
-                            this.linkTaskStatusError=data.networkVerificationRequired?'Tạm thời chưa thể xác minh IP/VPN. Vui lòng thử lại sau.':(data.error||'Tạm thời chưa tải được nhiệm vụ vượt link.');
+                            if(data.desktopBlocked){await this.checkAccessGate();return false;}
+                            this.linkTaskStatusError=data.error||'Tạm thời chưa tải được nhiệm vụ vượt link.';
                             return false;
                         }
                         this.linkTaskStatusError='';this.linkTasks=Array.isArray(data.tasks)?data.tasks:[];if(typeof data.orders==='number')this.orders=data.orders;if(typeof data.coins==='number')this.coins=data.coins;if(typeof data.spins==='number')this.spinFree=data.spins;if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;this.linkTaskLastSync=Date.now();return true;
@@ -4084,11 +4087,11 @@
                     try{
                         const res=await fetch(`${API_URL}/api/link-task/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,taskId:task.id})}),data=await res.json().catch(()=>({}));
                         if(!res.ok||!data.success||!data.shortUrl){
-                            if(data.vpnBlocked){this.accessBlocked=true;this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}
-                            // Lỗi xác minh của MỘT provider chỉ hiển thị trên card/provider đó sau khi sync,
-                            // không biến thành lỗi chung làm cả khu vực Nhiệm vụ vượt link trông như bị khóa.
-                            if(data.networkVerificationRequired)this.linkTaskStatusError='';
-                            this.showNotification('⚠️ '+(data.error||'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'));await this.syncLinkTasks();return false;
+                            // Lỗi của MỘT provider chỉ sync lại từng card; không khóa toàn Mini App/section.
+                            this.linkTaskStatusError='';
+                            this.showNotification('⚠️ '+(data.error||'Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.'));
+                            await this.syncLinkTasks();
+                            return false;
                         }
                         this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link rồi mở Bot Telegram để xác nhận.');
                         try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');}catch(_){window.location.href=url;}
@@ -4161,6 +4164,7 @@
                         return;
                     }
                     this._taskClaimInFlight = true;
+                    this._taskClaimingId = task.id;
                     try {
                         const res = await fetch(`${API_URL}/api/task/claim`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
@@ -4185,7 +4189,8 @@
                                     account_blocked:'🚫 Tài khoản hiện đang bị khóa.'
                                 };
                             this.showNotification(messages[code] || ('❌ ' + (result.error || this.texts.taskClaimFailed || 'Unable to claim this task reward.')));
-                            await this.syncDailyTasksFromServer();
+                            // Chỉ sync lại khi eligibility có thể đã lệch; lỗi DB/processing không cần thêm request nối đuôi.
+                            if (code === 'not_eligible') this.syncDailyTasksFromServer().catch(() => {});
                             return;
                         }
                         this.coins = Number(result.coins ?? this.coins);
@@ -4193,7 +4198,7 @@
                         this.spinFree = Number(result.spins ?? this.spinFree);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                         if (Array.isArray(result.tasks)) this.dailyTasks = this.localizeDailyTasks(result.tasks);
-                        else await this.syncDailyTasksFromServer();
+                        else this.syncDailyTasksFromServer().catch(() => {});
                         if (!result.alreadyClaimed) {
                             this.showNotification('✅ ' + task.name + ' (+' + this.formatNumber(result.reward?.coins ?? task.reward ?? 0) + ' 💰' +
                                 (result.reward?.orders ? ' +' + this.formatNumber(result.reward.orders) + ' 📦' : '') +
@@ -4204,6 +4209,7 @@
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                     } finally {
                         this._taskClaimInFlight = false;
+                        this._taskClaimingId = '';
                     }
                 },
                 async claimGroupTask(campaignId = 'kiemtienmuakfc_2026_09') {
@@ -4395,10 +4401,11 @@
                     if (this._taskClaimInFlight) return;
                     if (!this.allTasksDone) {
                         this.showNotification('⚠️ ' + (this.texts.completeAllFirst || 'Complete all daily tasks first.'));
-                        await this.syncDailyTasksFromServer();
+                        this.syncDailyTasksFromServer().catch(() => {});
                         return;
                     }
                     this._taskClaimInFlight = true;
+                    this._taskClaimingId = '__all';
                     try {
                         const res = await fetch(`${API_URL}/api/task/claim-all`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
@@ -4407,21 +4414,22 @@
                         const result = await res.json().catch(() => ({}));
                         if (!res.ok || !result.success) {
                             this.showNotification('❌ ' + (result.error || this.texts.completeAllFirst || 'Unable to claim the all-tasks reward.'));
-                            await this.syncDailyTasksFromServer();
+                            if (String(result.code || '') === 'not_eligible') this.syncDailyTasksFromServer().catch(() => {});
                             return;
                         }
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
                         this.spinFree = Number(result.spins ?? this.spinFree);
                         if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        this.allTasksClaimed = true;
-                        await this.syncDailyTasksFromServer();
+                        if (Array.isArray(result.tasks)) this.dailyTasks = this.localizeDailyTasks(result.tasks);
+                        this.allTasksClaimed = result.allTasksClaimed !== false;
                         if (!result.alreadyClaimed) this.showNotification('🎉 ' + (this.texts.allTasksReward || '+1,000 Coin +500 Orders +2 Chests!'));
                     } catch (e) {
                         console.error('Claim all tasks:',e);
                         this.showNotification('❌ ' + (this.texts.serverConnectionError || 'Server connection error.'));
                     } finally {
                         this._taskClaimInFlight = false;
+                        this._taskClaimingId = '';
                     }
                 },
                 async watchExtraDeliveryAd() {
