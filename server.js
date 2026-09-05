@@ -23,6 +23,23 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(bodyParser.json({ limit: '5mb' })); // Không giới hạn số Gmail theo nghiệp vụ; tăng trần payload để batch lớn không bị chặn ở 100KB mặc định.
+
+// ==================== DEPLOY / PROCESS HEALTH ====================
+// GitHub Actions/VPS deploy cần một endpoint phản hồi NGAY để phân biệt "Node đã listen" với
+// trạng thái nghiệp vụ (BOT_LOCKED, Supabase, provider ngoài...). Health check tuyệt đối không gọi
+// database/API ngoài và không bị middleware bảo trì chặn; nếu không một lỗi mạng tạm thời có thể
+// khiến curl hết --max-time (exit 28) và workflow rollback dù process Node thực tế vẫn sống.
+const SERVER_BOOTED_AT = Date.now();
+function sendProcessHealth(_req, res) {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({
+        ok: true,
+        status: 'ok',
+        uptimeSeconds: Math.max(0, Math.floor(process.uptime())),
+        startedAt: new Date(SERVER_BOOTED_AT).toISOString()
+    });
+}
+app.get(['/health', '/healthz', '/api/health', '/api/healthz', '/api/ready'], sendProcessHealth);
 // FIX LỖI "1 SỐ USER BỊ KẸT PHIÊN BẢN CŨ/DEMO": trước đây express.static dùng cache mặc định của trình
 // duyệt/Telegram WebView cho file index.html, khiến sau khi deploy bản mới, một số thiết bị vẫn tiếp tục
 // đọc bản HTML/JS đã lưu cache cục bộ trước đó thay vì tải lại. Ép index.html luôn "no-store" (không lưu
@@ -4982,6 +4999,9 @@ bot.command('ban_ip', async (ctx) => {
     }
 });
 
+let httpServer = null;
+let shutdownStarted = false;
+
 (async () => {
     try {
         await bot.telegram.deleteWebhook({ drop_pending_updates: true });
@@ -4992,9 +5012,50 @@ bot.command('ban_ip', async (ctx) => {
     }
 })();
 
-// Dừng bot đúng cách khi Render tắt instance cũ lúc deploy bản mới, tránh xung đột polling giữa 2 phiên bản
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Graceful shutdown cho systemd/GitHub Actions deploy:
+// - ngừng nhận request mới;
+// - dừng Telegram polling;
+// - flush state đang chờ ghi về Supabase;
+// - thoát có giới hạn thời gian để `systemctl restart` không treo tới TimeoutStopSec.
+// Việc force-exit sau grace period cũng bảo đảm các setInterval scheduler không giữ process cũ sống mãi.
+async function gracefulShutdown(signal) {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    console.log(`🛑 Nhận ${signal}, đang shutdown an toàn...`);
+
+    try { bot.stop(signal); } catch (_) {}
+    if (userExtraFlushTimer) {
+        clearTimeout(userExtraFlushTimer);
+        userExtraFlushTimer = null;
+    }
+
+    const closeHttp = httpServer
+        ? new Promise(resolve => {
+            try {
+                httpServer.close(() => resolve());
+                setTimeout(() => {
+                    try { httpServer?.closeIdleConnections?.(); } catch (_) {}
+                }, 800).unref();
+            } catch (_) { resolve(); }
+        })
+        : Promise.resolve();
+
+    const flushState = Promise.resolve()
+        .then(() => flushUserExtra())
+        .catch(err => console.error('⚠️ Flush state khi shutdown thất bại:', err?.message || err));
+
+    const graceTimeout = new Promise(resolve => {
+        const t = setTimeout(resolve, 6000);
+        t.unref?.();
+    });
+
+    try { await Promise.race([Promise.allSettled([closeHttp, flushState]), graceTimeout]); } catch (_) {}
+    console.log('✅ Shutdown hoàn tất.');
+    process.exit(0);
+}
+
+process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
 
 // Lưới an toàn: không để 1 lỗi bất đồng bộ chưa được catch làm sập toàn bộ server ngoài ý muốn
 process.on('unhandledRejection', (reason) => {
@@ -10707,9 +10768,15 @@ app.get('/admin', async (req, res) => {
     </body></html>`);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`✅ Server running on port ${PORT}`);
+const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
+httpServer = app.listen(PORT, HOST, () => {
+    console.log(`✅ Server running on ${HOST}:${PORT}`);
+    console.log('✅ Deploy health ready: /health /healthz /api/health /api/healthz /api/ready');
     startGoldenHourScheduler().catch(e=>console.error('Golden Hour startup:',e.message));
     startPromoPostScheduler().catch(e=>console.error('Promo scheduler startup:',e.message));
+});
+httpServer.on('error', (err) => {
+    console.error('❌ HTTP server listen error:', err?.message || err);
+    process.exitCode = 1;
 });
