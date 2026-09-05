@@ -1215,7 +1215,8 @@
                             <button @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':(task.status==='landed'?'🤖 MỞ BOT ĐỂ XÁC NHẬN':'BẮT ĐẦU')"></span></button>
                         </div>
                     </template>
-                    <p x-show="!linkTasks.length" class="text-[9px] text-slate-500 text-center">Đang tải nhiệm vụ vượt link...</p>
+                    <p x-show="linkTaskStatusError" class="text-[9px] text-amber-300 text-center" x-text="'⚠️ ' + linkTaskStatusError"></p>
+                    <p x-show="!linkTasks.length && !linkTaskStatusError" class="text-[9px] text-slate-500 text-center">Đang tải nhiệm vụ vượt link...</p>
                 </div>
 
                 <div class="glass p-2 rounded-[20px] flex justify-center overflow-hidden min-h-[66px] items-center" aria-label="Advertisement">
@@ -2373,7 +2374,7 @@
                 ],
                 allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:5,
                 accessBlocked:false, accessBlockIcon:'📱', accessBlockTitle:'', accessBlockMessage:'',
-                linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0,
+                linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0, linkTaskStatusError:'',
                 smartlinkCount:0, lastSmartlinkTime:0,
                 groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
@@ -3123,13 +3124,19 @@
                     try{
                         const res=await fetchWithTimeout(`${API_URL}/api/access-check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})},9000);
                         const data=await res.json().catch(()=>({}));
-                        if(res.ok&&data.success&&data.allowed){this.accessBlocked=false;return true;}
+                        if(res.ok&&data.success&&data.allowed){
+                            // IP Intelligence có thể chưa cấu hình/tạm lỗi; server vẫn cho phép truy cập global.
+                            // Các task nhạy cảm IP/VPN sẽ tự fail-closed ở endpoint riêng.
+                            this.accessBlocked=false;this.accessBlockTitle='';this.accessBlockMessage='';return true;
+                        }
                         this.accessBlocked=true;
                         if(data.desktopBlocked){this.accessBlockIcon='📱';this.accessBlockTitle='MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';this.accessBlockMessage='Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';}
                         else if(data.vpnBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}
-                        else{this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ KIỂM TRA KẾT NỐI';this.accessBlockMessage=data.error||'Máy chủ chưa thể xác minh IP/VPN. Vui lòng thử lại sau.';}
+                        else if(data.accountBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle='TÀI KHOẢN BỊ KHÓA';this.accessBlockMessage='Tài khoản hiện không thể sử dụng Mini App.';}
+                        else if(data.authBlocked||res.status===401){this.accessBlockIcon='🔐';this.accessBlockTitle='PHIÊN ĐĂNG NHẬP KHÔNG HỢP LỆ';this.accessBlockMessage='Vui lòng đóng Mini App và mở lại từ Telegram Bot.';}
+                        else{this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ XÁC MINH PHIÊN';this.accessBlockMessage='Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.';}
                         return false;
-                    }catch(_){this.accessBlocked=true;this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ KIỂM TRA KẾT NỐI';this.accessBlockMessage='Không thể kết nối dịch vụ kiểm tra IP/VPN. Vui lòng thử lại sau.';return false;}
+                    }catch(_){this.accessBlocked=true;this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ KẾT NỐI MÁY CHỦ';this.accessBlockMessage='Không thể kết nối máy chủ. Vui lòng kiểm tra mạng và thử lại.';return false;}
                 },
 
                 async checkMaintenanceLock() {
@@ -4059,19 +4066,27 @@
                     if(!this.user?.id||!this.joinedGroups||this.accessBlocked)return false;
                     try{
                         const res=await fetch(`${API_URL}/api/link-task/status/${this.user.id}?t=${Date.now()}`,{cache:'no-store'}),data=await res.json().catch(()=>({}));
-                        if(!res.ok||!data.success){if(data.vpnBlocked||data.desktopBlocked)await this.checkAccessGate();return false;}
-                        this.linkTasks=Array.isArray(data.tasks)?data.tasks:[];if(typeof data.orders==='number')this.orders=data.orders;if(typeof data.coins==='number')this.coins=data.coins;if(typeof data.spins==='number')this.spinFree=data.spins;if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;this.linkTaskLastSync=Date.now();return true;
-                    }catch(_){return false;}
+                        if(!res.ok||!data.success){
+                            if(data.vpnBlocked||data.desktopBlocked){await this.checkAccessGate();return false;}
+                            this.linkTaskStatusError=data.networkVerificationRequired?'Tạm thời chưa thể xác minh IP/VPN. Vui lòng thử lại sau.':(data.error||'Tạm thời chưa tải được nhiệm vụ vượt link.');
+                            return false;
+                        }
+                        this.linkTaskStatusError='';this.linkTasks=Array.isArray(data.tasks)?data.tasks:[];if(typeof data.orders==='number')this.orders=data.orders;if(typeof data.coins==='number')this.coins=data.coins;if(typeof data.spins==='number')this.spinFree=data.spins;if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;this.linkTaskLastSync=Date.now();return true;
+                    }catch(_){this.linkTaskStatusError='Tạm thời chưa tải được nhiệm vụ vượt link. Vui lòng thử lại sau.';return false;}
                 },
                 async startLinkTask(task) {
                     if(!task?.id||this._linkTaskStarting||!task.available||Number(task.remaining||0)<=0)return false;this._linkTaskStarting=task.id;
                     try{
                         const res=await fetch(`${API_URL}/api/link-task/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,taskId:task.id})}),data=await res.json().catch(()=>({}));
-                        if(!res.ok||!data.success||!data.shortUrl){if(data.vpnBlocked){this.accessBlocked=true;this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}this.showNotification('⚠️ '+(data.error||'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'));await this.syncLinkTasks();return false;}
-                        const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link rồi mở Bot Telegram để xác nhận.');
+                        if(!res.ok||!data.success||!data.shortUrl){
+                            if(data.vpnBlocked){this.accessBlocked=true;this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}
+                            if(data.networkVerificationRequired)this.linkTaskStatusError='Tạm thời chưa thể xác minh IP/VPN. Vui lòng thử lại sau.';
+                            this.showNotification('⚠️ '+(data.networkVerificationRequired?'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.':(data.error||'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.')));await this.syncLinkTasks();return false;
+                        }
+                        this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link rồi mở Bot Telegram để xác nhận.');
                         try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');}catch(_){window.location.href=url;}
                         setTimeout(()=>this.syncLinkTasks(),2500);return true;
-                    }catch(_){this.showNotification('⚠️ Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.');return false;}finally{this._linkTaskStarting='';}
+                    }catch(_){this.linkTaskStatusError='Tạm thời chưa tạo được nhiệm vụ vượt link. Vui lòng thử lại sau.';this.showNotification('⚠️ Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.');return false;}finally{this._linkTaskStarting='';}
                 },
                 // Dùng chung cho cả xem QC và bấm smartlink: báo server tự kiểm tra lại điều kiện mời bạn
                 // (đủ nhóm + đủ QC + đủ smartlink) mỗi khi 1 trong các điều kiện đó có thay đổi.
