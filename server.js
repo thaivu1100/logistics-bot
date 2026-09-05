@@ -1987,7 +1987,10 @@ async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrder
 
         for (const [field] of Object.entries(knownSetFields)) {
             if (Object.prototype.hasOwnProperty.call(current, field)) {
-                query = query.eq(field, current[field] ?? null);
+                const expected = current[field];
+                query = (expected === null || expected === undefined)
+                    ? query.is(field, null)
+                    : query.eq(field, expected);
             }
         }
 
@@ -4929,7 +4932,7 @@ app.post('/api/user/:id', async (req, res) => {
             'lastSmartlinkTime','lastSmartlinkAttemptId',
             'quizDate', 'quizFreeUsed', 'quizAdUnlocked', 'quizUsedIds',
             'dailyTasks', 'allTasksClaimed', 'lastResetDate',
-            'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed',
+            'serverTaskClaims', 'dailyActionFlags', 'loginStreakState', 'groupTaskClaimed', 'lastDailyTaskPayoutId', 'lastDailyTaskAllPayoutId',
             'groupTaskCampaignClaims', 'groupTaskCampaignId',
             'onboardingGroupsVerified', 'onboardingGroupsVerifiedAt', 'onboardingGroupsLegacy',
             'newUserWelcomeEligible','newUserWelcomeClaimed','newUserWelcomeClaimedAt','newUserWelcomePayoutId',
@@ -5695,6 +5698,8 @@ const TASK_REWARDS = {
     watch3rewarded: { coins: 150, orders: 50, spins: 0 },
     smartlink5: { coins: 75, orders: 75, spins: 0 },
     spin1: { coins: 50, orders: 0, spins: 0 },
+    invite1: { coins: 350, orders: 25, spins: 0 },
+    invite5: { coins: 500, orders: 100, spins: 1 },
 };
 const DAILY_TASK_IDS = Object.keys(TASK_REWARDS);
 const DAILY_TASK_ALL_REWARD = { coins: 1000, orders: 500, spins: 2 };
@@ -5703,7 +5708,8 @@ async function getServerTaskClaims(userId) {
     const today = vietnamDayKey();
     const extra = await getUserExtra(userId);
     const legacy = (extra?.serverTaskClaims && typeof extra.serverTaskClaims === 'object') ? { ...extra.serverTaskClaims } : {};
-    // Giữ claim legacy của đúng ngày hiện tại để deploy giữa ngày không cho user nhận lại thưởng cũ.
+    // Marker chính của bản hiện tại nằm trong app_settings/serverTaskClaims. Nếu migration #6 cũ vẫn tồn tại
+    // và service-role khả dụng thì chỉ MERGE thêm dữ liệu cũ để deploy giữa ngày không cho user nhận lại.
     const claims = legacy.__date === today ? legacy : { __date: today };
     if (!SUPABASE_SERVICE_ROLE_KEY) return claims;
     try {
@@ -5712,10 +5718,10 @@ async function getServerTaskClaims(userId) {
         if (error) throw error;
         for (const row of data || []) if (row?.task_id) claims[String(row.task_id)] = today;
     } catch (e) {
-        // Status vẫn đọc được legacy; claim route sẽ fail rõ nếu migration RPC chưa được cài.
+        // Không làm Daily Task chết chỉ vì migration/RPC cũ chưa được cài. Claim mới dùng persistent payout marker.
         if (!getServerTaskClaims._warned) {
             getServerTaskClaims._warned = true;
-            console.error('DAILY TASK DB chưa sẵn sàng. Hãy chạy migration #6:', e?.message || e);
+            console.warn('⚠️ DAILY TASK legacy RPC/table chưa khả dụng; đang dùng persistent payout marker:', e?.message || e);
         }
     }
     return claims;
@@ -5732,6 +5738,7 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
     const rewardedAds = Number(user.rewardedAdsToday || 0);
     const delivery = Number(user.deliveryCount || 0);
     const smartlinks = Number(user.smartlinkCount || 0);
+    const invites = Number(user.dailyValidInvites || 0);
     const defs = [
         { id:'deliver1', name:'🚚 Giao hàng 1 lần', icon:'🚚', max:1, progress:Math.min(delivery,1), eligible:delivery>=1 },
         { id:'deliver3', name:'🚚 Giao hàng 3 lần', icon:'🚚', max:3, progress:Math.min(delivery,3), eligible:delivery>=3 },
@@ -5739,6 +5746,8 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
         { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, progress:Math.min(rewardedAds,3), eligible:rewardedAds>=3 },
         { id:'smartlink5', name:'🔗 Hoàn thành 5 SmartLink', icon:'🔗', max:5, progress:Math.min(smartlinks,5), eligible:smartlinks>=5 },
         { id:'spin1', name:'🎁 Mở rương 1 lần', icon:'🎁', max:1, progress:Number(user.chestOpensToday||0)>=1?1:0, eligible:Number(user.chestOpensToday||0)>=1 },
+        { id:'invite1', name:'👥 Mời 1 bạn thành công', icon:'👥', max:1, progress:Math.min(invites,1), eligible:invites>=1 },
+        { id:'invite5', name:'👥 Mời 5 bạn thành công', icon:'👥', max:5, progress:Math.min(invites,5), eligible:invites>=5 },
     ];
     return defs.map(t => ({
         ...t,
@@ -5751,10 +5760,123 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
     }));
 }
 
+function dailyTaskPayoutId(userId, dayKey, taskId) {
+    return taskId === '__all'
+        ? `daily-task-all:${String(dayKey)}:${String(userId)}`
+        : `daily-task:${String(dayKey)}:${String(userId)}:${String(taskId)}`;
+}
+function dailyTaskPayoutField(taskId) {
+    return taskId === '__all' ? 'lastDailyTaskAllPayoutId' : 'lastDailyTaskPayoutId';
+}
+function dailyTaskPayoutMarkerKey(userId, dayKey, taskId) {
+    return persistentEventKey('daily-task-payout', dailyTaskPayoutId(userId, dayKey, taskId));
+}
+function dailyTaskPayoutLooksApplied(user, marker, payoutField, payoutId) {
+    if (!user || !marker) return false;
+    if (String(user[payoutField] || '') === String(payoutId)) return true;
+    if (String(marker.status || '') !== 'mutating') return false;
+    const walletAt = Date.parse(String(user.walletUpdatedAt || ''));
+    const mutatingAt = Number(marker.mutatingAt || 0);
+    if (mutatingAt > 0 && Number.isFinite(walletAt) && walletAt < mutatingAt) return false;
+    return Number(user.coins || 0) >= Number(marker.targetCoins || 0)
+        && Number(user.orders || 0) >= Number(marker.targetOrders || 0)
+        && Number(user.spins || 0) >= Number(marker.targetSpins || 0);
+}
+async function persistDailyTaskClaim(userId, claims, taskId, today) {
+    const nextClaims = { ...(claims || {}), __date:today, [taskId]:today };
+    await saveUserExtra(userId, { serverTaskClaims:nextClaims });
+    if (!(await flushUserExtra())) throw new Error('Không lưu được trạng thái Daily Task.');
+    return nextClaims;
+}
+async function executeDailyTaskPayout(userId, taskId, reward, claims, today) {
+    const payoutId = dailyTaskPayoutId(userId, today, taskId);
+    const markerKey = dailyTaskPayoutMarkerKey(userId, today, taskId);
+    const payoutField = dailyTaskPayoutField(taskId);
+    let marker = await readPersistentEvent(markerKey);
+
+    if (!marker) {
+        const current = await readUserRow(userId);
+        if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không tìm thấy user.') };
+        const reservation = {
+            status:'reserved', payoutId, userId:String(userId), taskId:String(taskId), dayKey:String(today),
+            rewardCoins:Number(reward.coins || 0), rewardOrders:Number(reward.orders || 0), rewardSpins:Number(reward.spins || 0),
+            preCoins:Number(current.data.coins || 0), preOrders:Number(current.data.orders || 0), preSpins:Number(current.data.spins || 0),
+            targetCoins:Number(current.data.coins || 0) + Number(reward.coins || 0),
+            targetOrders:Number(current.data.orders || 0) + Number(reward.orders || 0),
+            targetSpins:Number(current.data.spins || 0) + Number(reward.spins || 0),
+            createdAt:Date.now(), transactionLogged:false, fraudLogged:false
+        };
+        const once = await createPersistentEventOnce(markerKey, reservation);
+        if (once.error || !once.value) return { ok:false, reason:'database_temporarily_unavailable', error:once.error || new Error('Không tạo được payout marker.') };
+        marker = once.value;
+    }
+
+    if (String(marker.status || '') === 'committed') {
+        await persistDailyTaskClaim(userId, claims, taskId, today);
+        const fresh = await readUserRow(userId);
+        if (fresh.error || !fresh.data) return { ok:false, reason:'database_temporarily_unavailable', error:fresh.error || new Error('Không đọc được ví mới.') };
+        return { ok:true, alreadyClaimed:true, payoutId, dayKey:today, marker, user:fresh.data };
+    }
+
+    let current = await readUserRow(userId);
+    if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không đọc được user.') };
+
+    let alreadyApplied = dailyTaskPayoutLooksApplied(current.data, marker, payoutField, payoutId);
+    if (!alreadyApplied) {
+        marker = { ...marker, status:'mutating', mutatingAt:Date.now() };
+        if (!(await writePersistentEvent(markerKey, marker, 4))) {
+            return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Không persist được payout marker trước khi cộng thưởng.') };
+        }
+
+        const mutation = await atomicWalletMutation(userId, {
+            deltaCoins:Number(reward.coins || 0),
+            deltaOrders:Number(reward.orders || 0),
+            deltaSpins:Number(reward.spins || 0),
+            setFields:{ [payoutField]:payoutId }
+        });
+        if (mutation.error) return { ok:false, reason:'database_temporarily_unavailable', error:mutation.error };
+        // Nếu payoutField nằm trong user_extra_state thì ép flush ngay để giảm tối đa cửa sổ crash sau wallet mutation.
+        if (!(await flushUserExtra())) {
+            return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Phần thưởng đã xử lý nhưng trạng thái payout chưa flush xong.') };
+        }
+    }
+
+    current = await readUserRow(userId);
+    if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không xác minh được ví sau payout.') };
+    alreadyApplied = dailyTaskPayoutLooksApplied(current.data, marker, payoutField, payoutId);
+    if (!alreadyApplied) {
+        return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Không xác minh được trạng thái payout sau khi cập nhật ví.') };
+    }
+
+    await persistDailyTaskClaim(userId, claims, taskId, today);
+    marker = { ...marker, status:'committed', committedAt:marker.committedAt || Date.now(), walletUpdatedAt:current.data.walletUpdatedAt || null };
+    if (!(await writePersistentEvent(markerKey, marker, 4))) {
+        // Claim đã persist nên tuyệt đối không rollback/cộng lại. Lần sau getServerTaskClaims sẽ trả already_claimed.
+        console.warn(`⚠️ Daily Task payout ${payoutId} đã cộng và claim nhưng chưa cập nhật được marker committed.`);
+    }
+    return { ok:true, alreadyClaimed:false, payoutId, dayKey:today, marker, user:current.data };
+}
+
+async function finalizeDailyTaskAudit(userId, taskId, reward, payoutResult, reasonLabel) {
+    if (!payoutResult?.ok || payoutResult.alreadyClaimed) return;
+    let marker = payoutResult.marker || {};
+    const markerKey = dailyTaskPayoutMarkerKey(userId, payoutResult.dayKey || vietnamDayKey(), taskId);
+    if (!marker.fraudLogged) {
+        await recordAntiFraudEvent(userId,'task',{ rewardEvent:true, coins:reward.coins, orders:reward.orders, spins:reward.spins });
+        marker = { ...marker, fraudLogged:true };
+        await writePersistentEvent(markerKey, marker, 2).catch(() => false);
+    }
+    if (!marker.transactionLogged) {
+        const reason = `${reasonLabel} | payout=${payoutResult.payoutId}`;
+        if (reward.coins) await logTransaction(userId,'coin',reward.coins,reason);
+        if (reward.orders) await logTransaction(userId,'orders',reward.orders,reason);
+        marker = { ...marker, transactionLogged:true };
+        await writePersistentEvent(markerKey, marker, 2).catch(() => false);
+    }
+}
+
 const taskClaimProcessing = new Set();
 async function claimServerTask(userId, taskId) {
-    // Khoá theo USER thay vì theo từng task: 2 task khác nhau được claim gần như cùng lúc trước đây
-    // có thể cùng đọc serverTaskClaims cũ rồi ghi đè object của nhau, làm một task "mất trạng thái đã nhận".
     const lockKey = `daily:${String(userId)}`;
     if (taskClaimProcessing.has(lockKey)) return { ok:false, reason:'processing' };
     taskClaimProcessing.add(lockKey);
@@ -5768,35 +5890,24 @@ async function claimServerTask(userId, taskId) {
         if (!user) return { ok:false, reason:'user_not_found' };
         if (user.isBanned) return { ok:false, reason:'banned' };
         if (!TASK_REWARDS[taskId]) return { ok:false, reason:'unsupported_task' };
+
         const today = vietnamDayKey();
         const claims = { ...(await getServerTaskClaims(userId)) };
-        if (claims.__date && claims.__date !== today) Object.keys(claims).forEach(k => { if (k !== '__date') delete claims[k]; });
         claims.__date = today;
         if (claims[taskId] === today) return { ok:false, reason:'already_claimed' };
+
         const actionFlags = await getDailyActionFlags(userId);
-        const defs = dailyTaskDefinitions(user, claims, actionFlags);
-        const task = defs.find(t => t.id === taskId);
+        const task = dailyTaskDefinitions(user, claims, actionFlags).find(t => t.id === taskId);
         if (!task || !task.eligible) return { ok:false, reason:'not_eligible' };
 
         const reward = TASK_REWARDS[taskId];
-        if (!SUPABASE_SERVICE_ROLE_KEY) return { ok:false, reason:'task_rpc_failed', error:new Error('Thiếu SUPABASE_SERVICE_ROLE_KEY.') };
-        const { data: rpcRaw, error: rpcError } = await jobMailDb().rpc('daily_task_reward_atomic', {
-            p_user_id:String(userId), p_day_key:today, p_task_id:String(taskId),
-            p_coins:Number(reward.coins||0), p_orders:Number(reward.orders||0), p_spins:Number(reward.spins||0)
-        });
-        if (rpcError) return { ok:false, reason:'task_rpc_failed', error:rpcError };
-        const rpc = Array.isArray(rpcRaw) ? rpcRaw[0] : rpcRaw;
-        if (!rpc?.ok) return { ok:false, reason:'task_rpc_failed', error:new Error('RPC Daily Task trả dữ liệu không hợp lệ.') };
-        claims[taskId] = today;
-        // Cache compatibility; nguồn chống double-claim thật là daily_task_claims + RPC transaction phía trên.
-        await saveUserExtra(userId, { serverTaskClaims: claims });
-        await flushUserExtra();
-        if (!rpc.idempotent) {
-            await recordAntiFraudEvent(userId,'task',{ rewardEvent:true, coins:reward.coins, orders:reward.orders, spins:reward.spins });
-            if (reward.coins) logTransaction(userId,'coin',reward.coins,`Nhiệm vụ ${taskId}`);
-            if (reward.orders) logTransaction(userId,'orders',reward.orders,`Nhiệm vụ ${taskId}`);
-        }
-        return { ok:true, taskId, reward, alreadyClaimed:!!rpc.idempotent, walletUpdatedAt:rpc.walletUpdatedAt || rpc.walletupdatedat || new Date().toISOString() };
+        const payout = await executeDailyTaskPayout(userId, taskId, reward, claims, today);
+        if (!payout.ok) return payout;
+        await finalizeDailyTaskAudit(userId, taskId, reward, payout, `Nhiệm vụ ${taskId}`);
+        return {
+            ok:true, taskId, reward, alreadyClaimed:!!payout.alreadyClaimed,
+            user:payout.user, walletUpdatedAt:payout.user?.walletUpdatedAt || new Date().toISOString()
+        };
     } finally {
         if (releasePersistentTaskLock) { try { await releasePersistentTaskLock(); } catch (_) {} }
         taskClaimProcessing.delete(lockKey);
@@ -5815,17 +5926,21 @@ app.get('/api/daily-tasks/status/:id', async (req,res) => {
         const today = vietnamDayKey();
         const allTasksClaimed = claims.__all === today;
         const allDone = tasks.every(t => t.done);
-        res.json({ success:true, today, lastResetDate:user.lastResetDate||today, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:DELIVERY_DAILY_LIMIT, extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), smartlinkCount:Number(user.smartlinkCount||0), smartlinksToday:Number(user.smartlinksToday||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
-    } catch(e) { res.status(500).json({success:false,error:e.message}); }
+        res.json({ success:true, today, lastResetDate:user.lastResetDate||today, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:DELIVERY_DAILY_LIMIT, extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), smartlinkCount:Number(user.smartlinkCount||0), smartlinksToday:Number(user.smartlinksToday||0), dailyValidInvites:Number(user.dailyValidInvites||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
+    } catch(e) {
+        console.error('Daily Task status:', e?.message || e);
+        res.status(500).json({success:false,code:'database_temporarily_unavailable',error:'Hệ thống nhiệm vụ đang tạm bận. Vui lòng thử lại.'});
+    }
 });
 
 app.post('/api/task/claim', async (req,res) => {
     const authUserId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,code:'auth_invalid',error:'Telegram session không hợp lệ.'});
     if(!requireTelegramMobile(req,res)) return;
     try {
-        const userId = String(req.body?.userId || ''); const taskId = String(req.body?.taskId || '');
-        if (!userId || !taskId) return res.status(400).json({success:false,error:'Thiếu userId/taskId.'});
+        const userId = authUserId;
+        const taskId = String(req.body?.taskId || '');
+        if (!userId || !taskId) return res.status(400).json({success:false,code:'invalid_request',error:'Thiếu userId/taskId.'});
         const result = await claimServerTask(userId,taskId);
         if (!result.ok) {
             if (result.reason==='already_claimed') {
@@ -5833,47 +5948,65 @@ app.post('/api/task/claim', async (req,res) => {
                 const tasks=dailyTaskDefinitions(user||{},await getServerTaskClaims(userId),await getDailyActionFlags(userId));
                 return res.json({success:true,alreadyClaimed:true,taskId,tasks,coins:user?.coins||0,orders:user?.orders||0,spins:user?.spins||0,walletUpdatedAt:user?.walletUpdatedAt||null});
             }
-            if (result.reason==='processing') return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý.'});
-            if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,...result.fraudGate,verificationRequired:true});
-            if (result.reason==='task_rpc_failed') { console.error('Daily Task RPC failed:', result.error?.message || result.error || 'unknown'); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
-            return res.status(400).json({success:false,error:result.reason});
+            if (result.reason==='processing') return res.status(409).json({success:false,code:'processing',retry:true,error:'Phần thưởng đang được xử lý. Vui lòng chờ một chút.'});
+            if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,code:'fraud_hold',...result.fraudGate,verificationRequired:true});
+            if (result.reason==='not_eligible') return res.status(409).json({success:false,code:'not_eligible',error:'Máy chủ chưa xác nhận bạn hoàn thành nhiệm vụ.'});
+            if (result.reason==='banned') return res.status(403).json({success:false,code:'account_blocked',error:'Tài khoản hiện đang bị khóa.'});
+            if (result.reason==='user_not_found') return res.status(404).json({success:false,code:'user_not_found',error:'Không tìm thấy người dùng.'});
+            if (result.reason==='unsupported_task') return res.status(400).json({success:false,code:'unsupported_task',error:'Nhiệm vụ không hợp lệ.'});
+            if (result.reason==='database_temporarily_unavailable') {
+                console.error('Daily Task persistent payout failed:', result.error?.message || result.error || 'unknown');
+                return res.status(503).json({success:false,code:'database_temporarily_unavailable',retry:true,error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
+            }
+            return res.status(400).json({success:false,code:String(result.reason||'task_failed'),error:'Không thể nhận phần thưởng nhiệm vụ lúc này.'});
         }
-        const {data:user}=await readUserRow(userId);
-        const tasks = dailyTaskDefinitions(user, await getServerTaskClaims(userId), await getDailyActionFlags(userId));
-        res.json({success:true,alreadyClaimed:!!result.alreadyClaimed,...result.reward,reward:result.reward,taskId,tasks,coins:user?.coins||0,orders:user?.orders||0,spins:user?.spins||0,walletUpdatedAt:user?.walletUpdatedAt||null});
-    } catch(e) { res.status(500).json({success:false,error:e.message}); }
+        const user = result.user || (await readUserRow(userId)).data;
+        const tasks = dailyTaskDefinitions(user||{}, await getServerTaskClaims(userId), await getDailyActionFlags(userId));
+        res.json({success:true,alreadyClaimed:!!result.alreadyClaimed,reward:result.reward,taskId,tasks,coins:Number(user?.coins||0),orders:Number(user?.orders||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||result.walletUpdatedAt||null});
+    } catch(e) {
+        console.error('Daily Task claim:', e?.message || e);
+        res.status(500).json({success:false,code:'database_temporarily_unavailable',error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
+    }
 });
 
 app.post('/api/task/claim-all', async (req,res) => {
     const userId=String(req.body?.userId||'');
-    if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!assertTelegramUser(req,userId)) return res.status(401).json({success:false,code:'auth_invalid',error:'Telegram session không hợp lệ.'});
     if(!requireTelegramMobile(req,res)) return;
-    const lockKey=`daily:${userId}`; if(taskClaimProcessing.has(lockKey)) return res.status(409).json({success:false,retry:true,error:'Đang xử lý phần thưởng.'});
+    const lockKey=`daily:${userId}`;
+    if(taskClaimProcessing.has(lockKey)) return res.status(409).json({success:false,code:'processing',retry:true,error:'Phần thưởng đang được xử lý. Vui lòng chờ một chút.'});
     taskClaimProcessing.add(lockKey);
     let releasePersistentTaskLock=null;
     try {
         releasePersistentTaskLock=await acquirePersistentLeaseLock(persistentEventKey('daily-task-user-lock',String(userId)),60*1000);
-        if(!releasePersistentTaskLock) return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được xử lý trên máy chủ khác.'});
-        const fraudGate=await antiFraudRewardGate(userId); if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
-        const user=await loadCurrentDailyUser(userId); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-        const claims={...(await getServerTaskClaims(userId))}; const today=vietnamDayKey();
-        if(claims.__date!==today) return res.status(400).json({success:false,error:'Chưa hoàn thành các nhiệm vụ hôm nay.'});
+        if(!releasePersistentTaskLock) return res.status(409).json({success:false,code:'processing',retry:true,error:'Phần thưởng đang được xử lý trên một phiên khác.'});
+        const fraudGate=await antiFraudRewardGate(userId);
+        if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,code:'fraud_hold',...fraudGate,verificationRequired:true});
+
+        const user=await loadCurrentDailyUser(userId);
+        if(!user) return res.status(404).json({success:false,code:'user_not_found',error:'Không tìm thấy người dùng.'});
+        const today=vietnamDayKey();
+        const claims={...(await getServerTaskClaims(userId)),__date:today};
         const defs=dailyTaskDefinitions(user,claims,await getDailyActionFlags(userId));
-        if(defs.some(t=>claims[t.id]!==today)) return res.status(400).json({success:false,error:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.'});
-        if(claims.__all===today) { const fresh=await readUserRow(userId); return res.json({success:true,alreadyClaimed:true,coins:fresh.data?.coins||0,orders:fresh.data?.orders||0,spins:fresh.data?.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||null}); }
-        const reward=DAILY_TASK_ALL_REWARD;
-        if(!SUPABASE_SERVICE_ROLE_KEY){ console.error('Daily Task atomic unavailable: missing server-side database service credential.'); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
-        const {data:rpcRaw,error:rpcError}=await jobMailDb().rpc('daily_task_reward_atomic',{p_user_id:userId,p_day_key:today,p_task_id:'__all',p_coins:Number(reward.coins||0),p_orders:Number(reward.orders||0),p_spins:Number(reward.spins||0)});
-        if(rpcError){ console.error('Daily Task claim-all RPC failed:', rpcError.message); return res.status(503).json({success:false,retry:true,error:'Daily Task đang tạm thời chưa sẵn sàng. Vui lòng thử lại sau.'}); }
-        const rpc=Array.isArray(rpcRaw)?rpcRaw[0]:rpcRaw;if(!rpc?.ok)return res.status(503).json({success:false,retry:true,error:'RPC Daily Task trả dữ liệu không hợp lệ.'});
-        claims.__all=today; await saveUserExtra(userId,{serverTaskClaims:claims}); await flushUserExtra();
-        if(!rpc.idempotent){
-            await recordAntiFraudEvent(userId,'task',{rewardEvent:true,coins:reward.coins,orders:reward.orders,spins:reward.spins});
-            logTransaction(userId,'coin',reward.coins,'Thưởng hoàn thành tất cả nhiệm vụ ngày'); logTransaction(userId,'orders',reward.orders,'Thưởng hoàn thành tất cả nhiệm vụ ngày');
+        if(defs.some(t=>claims[t.id]!==today)) return res.status(409).json({success:false,code:'not_eligible',error:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.'});
+        if(claims.__all===today) {
+            const fresh=await readUserRow(userId);
+            return res.json({success:true,alreadyClaimed:true,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||null});
         }
-        const fresh=await readUserRow(userId);
-        res.json({success:true,alreadyClaimed:!!rpc.idempotent,...reward,coins:fresh.data?.coins||rpc.coins||0,orders:fresh.data?.orders||rpc.orders||0,spins:fresh.data?.spins||rpc.spins||0,walletUpdatedAt:fresh.data?.walletUpdatedAt||rpc.walletUpdatedAt||rpc.walletupdatedat||null});
-    } catch(e) { res.status(500).json({success:false,error:e.message}); } finally {
+
+        const reward=DAILY_TASK_ALL_REWARD;
+        const payout=await executeDailyTaskPayout(userId,'__all',reward,claims,today);
+        if(!payout.ok) {
+            console.error('Daily Task claim-all persistent payout failed:', payout.error?.message || payout.error || payout.reason);
+            return res.status(503).json({success:false,code:'database_temporarily_unavailable',retry:true,error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
+        }
+        await finalizeDailyTaskAudit(userId,'__all',reward,payout,'Thưởng hoàn thành tất cả nhiệm vụ ngày');
+        const fresh=payout.user || (await readUserRow(userId)).data;
+        return res.json({success:true,alreadyClaimed:!!payout.alreadyClaimed,reward,coins:Number(fresh?.coins||0),orders:Number(fresh?.orders||0),spins:Number(fresh?.spins||0),walletUpdatedAt:fresh?.walletUpdatedAt||null});
+    } catch(e) {
+        console.error('Daily Task claim-all:',e?.message||e);
+        return res.status(500).json({success:false,code:'database_temporarily_unavailable',error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
+    } finally {
         if(releasePersistentTaskLock){try{await releasePersistentTaskLock();}catch(_){}}
         taskClaimProcessing.delete(lockKey);
     }
@@ -7443,14 +7576,14 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
 const LINK_TASK_TTL_MS = 25 * 60 * 1000;
 const LINK_TASK_ROLLING_MS = 24 * 60 * 60 * 1000;
 const LINK_TASK_CONFIG = Object.freeze({
-    shrinkpe:Object.freeze({key:'shrinkpe',provider:'SHRINK.PE',taskId:'shrinkpe',rewardOrders:400,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false}),
-    cuty:Object.freeze({key:'cuty',provider:'CUTY',taskId:'cuty',rewardOrders:200,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false}),
-    bbmkts:Object.freeze({key:'bbmkts',provider:'BBMKTS',taskId:'bbmkts',rewardOrders:3500,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false}),
-    layma:Object.freeze({key:'layma',provider:'LAYMA',taskId:'layma',rewardOrders:4000,quotaType:'vietnamDay',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:true}),
-    uptolink_step2:Object.freeze({key:'uptolink_step2',provider:'UPTOLINK — BƯỚC 2',taskId:'uptolink_step2',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,unsupported:true}),
-    uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,unsupported:true}),
-    uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,unsupported:true}),
-    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:3000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0,vnOnly:false})
+    shrinkpe:Object.freeze({key:'shrinkpe',provider:'SHRINK.PE',taskId:'shrinkpe',rewardOrders:400,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
+    cuty:Object.freeze({key:'cuty',provider:'CUTY',taskId:'cuty',rewardOrders:200,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
+    bbmkts:Object.freeze({key:'bbmkts',provider:'BBMKTS',taskId:'bbmkts',rewardOrders:3500,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
+    layma:Object.freeze({key:'layma',provider:'LAYMA',taskId:'layma',rewardOrders:4000,quotaType:'vietnamDay',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:true,requiresRiskCheck:true}),
+    uptolink_step2:Object.freeze({key:'uptolink_step2',provider:'UPTOLINK — BƯỚC 2',taskId:'uptolink_step2',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
+    uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
+    uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
+    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:3000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false})
 });
 function linkTaskDb(){ return jobMailDb(); }
 function linkTaskProviderConfigured(cfg){
@@ -7462,12 +7595,22 @@ function linkTaskProviderConfigured(cfg){
     if(cfg.key==='site2s') return !!SITE2S_API_TOKEN;
     return false;
 }
-function linkTaskUnavailableReason(cfg){
+function linkTaskRequiresRiskCheck(cfg){
+    return !!(cfg && (cfg.requiresRiskCheck === true || cfg.vnOnly === true));
+}
+function linkTaskNeedsRequestIp(cfg){
+    return !!(cfg && (linkTaskRequiresRiskCheck(cfg) || Number(cfg.maxPerIp||0)>0 || Number(cfg.maxPerDeviceIp||0)>0));
+}
+function linkTaskUnavailableReason(cfg,runtime={}){
     if(cfg?.unsupported) return 'Nhiệm vụ này chưa có tích hợp API chính thức nên tạm thời chưa khả dụng.';
     if(!linkTaskProviderConfigured(cfg)) return 'Nhiệm vụ này đang tạm thời chưa khả dụng.';
     if(!IP_HASH_SECRET) return 'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.';
-    if(!IP_INTELLIGENCE_API_KEY) return 'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.';
     if(!SUPABASE_SERVICE_ROLE_KEY) return 'Hệ thống lưu trạng thái nhiệm vụ đang tạm thời chưa sẵn sàng.';
+    if(linkTaskNeedsRequestIp(cfg) && runtime.ipAvailable === false) return 'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.';
+    if(linkTaskRequiresRiskCheck(cfg) && !IP_INTELLIGENCE_API_KEY) return 'Hệ thống xác minh IP/VPN cho nhiệm vụ này đang tạm thời chưa khả dụng.';
+    if(linkTaskRequiresRiskCheck(cfg) && runtime.networkVerificationAvailable === false) return 'Hệ thống xác minh IP/VPN cho nhiệm vụ này đang tạm thời chưa khả dụng.';
+    if(linkTaskRequiresRiskCheck(cfg) && runtime.networkBlocked === true) return 'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.';
+    if(cfg?.vnOnly && runtime.countryBlocked === true) return 'Nhiệm vụ này chỉ dành cho IP Việt Nam.';
     return '';
 }
 function linkTaskRuleText(cfg){
@@ -7477,12 +7620,19 @@ function linkTaskRuleText(cfg){
     if(cfg.maxPerDevice>0) out.push(`${cfg.maxPerDevice} lần/thiết bị${suffix}`);
     if(cfg.maxPerDeviceIp>0) out.push(`${cfg.maxPerDeviceIp} lần/thiết bị/IP${suffix}`);
     if(cfg.vnOnly) out.push('chỉ IP Việt Nam');
-    out.push('cấm VPN/Proxy');
+    if(linkTaskRequiresRiskCheck(cfg)) out.push('cấm VPN/Proxy');
     return out.join(' • ');
 }
-function linkTaskPublicConfig(cfg,remaining=null,latest=null){
-    const reason=linkTaskUnavailableReason(cfg);
-    return {id:cfg.key,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,vnOnly:cfg.vnOnly,rule:linkTaskRuleText(cfg),available:!reason,unavailableReason:reason,remaining:remaining===null?(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0):Math.max(0,Number(remaining||0)),status:latest?.status||'idle',expiresAt:latest?.expires_at||null,rewardedAt:latest?.rewarded_at||null};
+function linkTaskPublicConfig(cfg,remaining=null,latest=null,runtime={}){
+    const reason=runtime.forcedReason || linkTaskUnavailableReason(cfg,runtime);
+    return {
+        id:cfg.key,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,
+        maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,
+        vnOnly:cfg.vnOnly,requiresRiskCheck:linkTaskRequiresRiskCheck(cfg),rule:linkTaskRuleText(cfg),
+        available:!reason,unavailableReason:reason,
+        remaining:remaining===null?(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0):Math.max(0,Number(remaining||0)),
+        status:latest?.status||'idle',expiresAt:latest?.expires_at||null,rewardedAt:latest?.rewarded_at||null
+    };
 }
 function safeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 async function fetchWithTimeoutServer(url,options={},timeoutMs=8000){
@@ -7596,44 +7746,195 @@ app.post('/api/access-check',async(req,res)=>{
     }
 });
 app.get('/api/link-task/status/:id',async(req,res)=>{
-    const userId=String(req.params.id||'');if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});if(!requireTelegramMobile(req,res))return;
+    const userId=String(req.params.id||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
     try{
-        const n=await cleanNetworkForReward(req);if(!n.ok)return res.status(n.status).json({success:false,...n});if(!IP_HASH_SECRET)return res.status(503).json({success:false,providerUnavailable:true,networkVerificationRequired:true,error:'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.'});
-        const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});const ipHash=hashNetworkValue(n.ip,'ip'),deviceHash=hashNetworkValue(deviceId,'device'),db=linkTaskDb(),items=[];
-        for(const cfg of Object.values(LINK_TASK_CONFIG)){let remaining=(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0),latest=null;if(!linkTaskUnavailableReason(cfg)){const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});remaining=quota.remaining;const {data}=await db.from('link_task_attempts').select('status,expires_at,rewarded_at').eq('user_id',userId).eq('task_id',cfg.taskId).order('created_at',{ascending:false}).limit(1).maybeSingle();latest=data||null;}items.push(linkTaskPublicConfig(cfg,remaining,latest));}
-        const {data:user}=await readUserRow(userId);res.set('Cache-Control','no-store');return res.json({success:true,tasks:items,orders:Number(user?.orders||0),coins:Number(user?.coins||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||null});
-    }catch(e){console.error('Link task status:',e?.message||e);return res.status(500).json({success:false,error:'Không đọc được trạng thái nhiệm vụ vượt link. Hãy kiểm tra migration/config server.'});}
+        const ip=requestIp(req);
+        const deviceId=requestDeviceId(req);
+        if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
+
+        const deviceHash=IP_HASH_SECRET?hashNetworkValue(deviceId,'device'):'';
+        const ipHash=(IP_HASH_SECRET&&ip)?hashNetworkValue(ip,'ip'):'';
+        const riskConfigs=Object.values(LINK_TASK_CONFIG).filter(cfg=>linkTaskRequiresRiskCheck(cfg)&&!cfg.unsupported&&linkTaskProviderConfigured(cfg));
+        let risk=null;
+        if(riskConfigs.length&&ip&&IP_INTELLIGENCE_API_KEY){
+            risk=await checkIpRisk(ip);
+        }
+
+        const items=[];
+        for(const cfg of Object.values(LINK_TASK_CONFIG)){
+            const runtime={
+                ipAvailable:!!ip,
+                networkVerificationAvailable:linkTaskRequiresRiskCheck(cfg)?!!risk?.available:true,
+                networkBlocked:!!(linkTaskRequiresRiskCheck(cfg)&&risk?.available&&networkRiskBlocked(risk)),
+                countryBlocked:!!(cfg.vnOnly&&risk?.available&&risk.countryCode!=='VN')
+            };
+            let reason=linkTaskUnavailableReason(cfg,runtime);
+            let remaining=(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0);
+            let latest=null;
+
+            if(!reason){
+                try{
+                    const db=linkTaskDb();
+                    const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});
+                    remaining=quota.remaining;
+                    const latestResult=await db.from('link_task_attempts')
+                        .select('status,expires_at,rewarded_at')
+                        .eq('user_id',userId).eq('task_id',cfg.taskId)
+                        .order('created_at',{ascending:false}).limit(1).maybeSingle();
+                    if(latestResult.error)throw latestResult.error;
+                    latest=latestResult.data||null;
+                }catch(e){
+                    console.error(`Link task status ${cfg.key}:`,e?.message||e);
+                    reason='Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.';
+                }
+            }
+            items.push(linkTaskPublicConfig(cfg,remaining,latest,{...runtime,forcedReason:reason}));
+        }
+
+        const {data:user}=await readUserRow(userId);
+        res.set('Cache-Control','no-store');
+        return res.json({
+            success:true,tasks:items,
+            orders:Number(user?.orders||0),coins:Number(user?.coins||0),spins:Number(user?.spins||0),
+            walletUpdatedAt:user?.walletUpdatedAt||null
+        });
+    }catch(e){
+        console.error('Link task status:',e?.message||e);
+        return res.status(500).json({success:false,error:'Không đọc được trạng thái nhiệm vụ vượt link. Vui lòng thử lại sau.'});
+    }
 });
 app.post('/api/link-task/start',async(req,res)=>{
-    const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||'');if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});if(!requireTelegramMobile(req,res))return;
-    const cfg=LINK_TASK_CONFIG[taskId];if(!cfg)return res.status(400).json({success:false,error:'Nhiệm vụ vượt link không hợp lệ.'});const unavailable=linkTaskUnavailableReason(cfg);if(unavailable)return res.status(503).json({success:false,providerUnavailable:true,networkVerificationRequired:!IP_INTELLIGENCE_API_KEY,error:unavailable});
-    const deviceId=requestDeviceId(req);if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).json({success:false,...n});
-    const ipHash=hashNetworkValue(n.ip,'ip'),deviceHash=hashNetworkValue(deviceId,'device'),release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),60000);if(!release)return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
+    const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+
+    const cfg=LINK_TASK_CONFIG[taskId];
+    if(!cfg)return res.status(400).json({success:false,error:'Nhiệm vụ vượt link không hợp lệ.'});
+
+    const ip=requestIp(req);
+    const deviceId=requestDeviceId(req);
+    if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
+
+    const baseRuntime={ipAvailable:!!ip,networkVerificationAvailable:!linkTaskRequiresRiskCheck(cfg)||!!IP_INTELLIGENCE_API_KEY};
+    const unavailable=linkTaskUnavailableReason(cfg,baseRuntime);
+    if(unavailable){
+        return res.status(503).json({
+            success:false,providerUnavailable:true,
+            networkVerificationRequired:linkTaskRequiresRiskCheck(cfg)&&(!IP_INTELLIGENCE_API_KEY||!ip),
+            error:unavailable
+        });
+    }
+
+    let verifiedIp=ip;
+    let risk=null;
+    if(linkTaskRequiresRiskCheck(cfg)){
+        const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});
+        if(!n.ok)return res.status(n.status).json({success:false,...n});
+        verifiedIp=n.ip;
+        risk=n.risk;
+    }else if(linkTaskNeedsRequestIp(cfg)&&!verifiedIp){
+        return res.status(503).json({success:false,providerUnavailable:true,error:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'});
+    }
+
+    const ipHash=verifiedIp?hashNetworkValue(verifiedIp,'ip'):'';
+    const deviceHash=hashNetworkValue(deviceId,'device');
+    if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash){
+        return res.status(503).json({success:false,providerUnavailable:true,error:'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.'});
+    }
+
+    const release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),60000);
+    if(!release)return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
     try{
-        const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);if(active?.short_url)return res.json({success:true,reused:true,shortUrl:active.short_url,expiresAt:active.expires_at,task:linkTaskPublicConfig(cfg)});
-        const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});if(quota.remaining<=0)return res.status(429).json({success:false,limitReached:true,error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'});
-        const nonce=crypto.randomBytes(18).toString('base64url'),now=new Date(),expiresAt=new Date(now.getTime()+LINK_TASK_TTL_MS).toISOString(),destination=new URL(`/api/link-task/landing/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString(),db=linkTaskDb();
-        const row={nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,country_code:n.risk.countryCode||null,is_vpn:false,created_at:now.toISOString(),expires_at:expiresAt,metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0}};
+        const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+        if(active?.short_url)return res.json({success:true,reused:true,shortUrl:active.short_url,expiresAt:active.expires_at,task:linkTaskPublicConfig(cfg)});
+
+        const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});
+        if(quota.remaining<=0)return res.status(429).json({success:false,limitReached:true,error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'});
+
+        const nonce=crypto.randomBytes(18).toString('base64url');
+        const now=new Date();
+        const expiresAt=new Date(now.getTime()+LINK_TASK_TTL_MS).toISOString();
+        const destination=new URL(`/api/link-task/landing/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString();
+        const db=linkTaskDb();
+        const row={
+            nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
+            reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
+            issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
+            country_code:risk?.countryCode||null,is_vpn:false,
+            created_at:now.toISOString(),expires_at:expiresAt,
+            metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,requiresRiskCheck:linkTaskRequiresRiskCheck(cfg)}
+        };
         const {data:inserted,error:insertError}=await db.from('link_task_attempts').insert(row).select('*').single();
-        if(insertError){if(insertError.code==='23505'){const existing=await getActiveLinkTaskAttempt(userId,cfg.taskId);if(existing?.short_url)return res.json({success:true,reused:true,shortUrl:existing.short_url,expiresAt:existing.expires_at,task:linkTaskPublicConfig(cfg)});}throw insertError;}
+        if(insertError){
+            if(insertError.code==='23505'){
+                const existing=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+                if(existing?.short_url)return res.json({success:true,reused:true,shortUrl:existing.short_url,expiresAt:existing.expires_at,task:linkTaskPublicConfig(cfg)});
+            }
+            throw insertError;
+        }
         try{
-            const made=await createProviderShortUrl(cfg,destination,nonce);const {data:updated,error:updateError}=await db.from('link_task_attempts').update({status:'shortened',short_url:made.shortUrl,provider_slug:made.slug||null,provider_view_baseline:Number.isFinite(Number(made.baseline))?Number(made.baseline):null}).eq('id',inserted.id).select('*').single();if(updateError)throw updateError;
+            const made=await createProviderShortUrl(cfg,destination,nonce);
+            const {data:updated,error:updateError}=await db.from('link_task_attempts')
+                .update({status:'shortened',short_url:made.shortUrl,provider_slug:made.slug||null,provider_view_baseline:Number.isFinite(Number(made.baseline))?Number(made.baseline):null})
+                .eq('id',inserted.id).select('*').single();
+            if(updateError)throw updateError;
             return res.json({success:true,shortUrl:updated.short_url,expiresAt:updated.expires_at,task:linkTaskPublicConfig(cfg)});
-        }catch(pe){await db.from('link_task_attempts').update({status:'cancelled',metadata:{...row.metadata,providerError:String(pe?.message||pe).slice(0,180)}}).eq('id',inserted.id);console.error(`Link provider ${cfg.key}:`,pe?.message||pe);return res.status(503).json({success:false,providerUnavailable:true,error:'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'});}
-    }catch(e){console.error('Link task start:',e?.message||e);return res.status(500).json({success:false,error:'Không thể tạo nhiệm vụ vượt link. Hãy kiểm tra Supabase migration/config.'});}finally{try{await release();}catch(_){}}
+        }catch(pe){
+            await db.from('link_task_attempts').update({status:'cancelled',metadata:{...row.metadata,providerError:String(pe?.message||pe).slice(0,180)}}).eq('id',inserted.id);
+            console.error(`Link provider ${cfg.key}:`,pe?.message||pe);
+            return res.status(503).json({success:false,providerUnavailable:true,error:'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'});
+        }
+    }catch(e){
+        console.error('Link task start:',e?.message||e);
+        return res.status(500).json({success:false,error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
+    }finally{
+        try{await release();}catch(_){}
+    }
 });
 app.get('/api/link-task/landing/:nonce',async(req,res)=>{
     const nonce=String(req.params.nonce||'');
     try{
-        const db=linkTaskDb(),{data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',nonce).maybeSingle();if(error||!a)return res.status(404).send('<h2>❌ Link xác nhận không hợp lệ.</h2>');
-        const cfg=LINK_TASK_CONFIG[String(a.task_id||'')];if(!cfg)return res.status(400).send('<h2>❌ Nhiệm vụ không hợp lệ.</h2>');if(a.status==='rewarded')return res.send('<h2>ℹ️ Nhiệm vụ này đã được xác nhận trước đó.</h2>');
-        if(new Date(a.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).neq('status','rewarded');return res.status(410).send('<h2>❌ Link xác nhận đã hết hạn.</h2>');}
+        const db=linkTaskDb();
+        const {data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',nonce).maybeSingle();
+        if(error||!a)return res.status(404).send('<h2>❌ Link xác nhận không hợp lệ.</h2>');
+        const cfg=LINK_TASK_CONFIG[String(a.task_id||'')];
+        if(!cfg)return res.status(400).send('<h2>❌ Nhiệm vụ không hợp lệ.</h2>');
+        if(a.status==='rewarded')return res.send('<h2>ℹ️ Nhiệm vụ này đã được xác nhận trước đó.</h2>');
+        if(new Date(a.expires_at).getTime()<=Date.now()){
+            await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).neq('status','rewarded');
+            return res.status(410).send('<h2>❌ Link xác nhận đã hết hạn.</h2>');
+        }
         if(!isMobileUserAgent(req))return res.status(403).send('<h2>📱 Chỉ hỗ trợ hoàn thành nhiệm vụ trên điện thoại.</h2>');
-        const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});if(!n.ok)return res.status(n.status).send(`<h2>🚫 ${safeHtml(n.error)}</h2>`);const landingIpHash=hashNetworkValue(n.ip,'ip');if(!landingIpHash)return res.status(503).send('<h2>⚠️ Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');const deviceIpHash=a.device_hash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
-        const {error:ue}=await db.from('link_task_attempts').update({status:'landed',landing_ip_hash:landingIpHash,device_ip_hash:deviceIpHash||null,country_code:n.risk.countryCode||null,is_vpn:false,landed_at:new Date().toISOString()}).eq('id',a.id).in('status',['created','shortened','landed']);if(ue)throw ue;
-        const deepLink=`https://t.me/${BOT_USERNAME}?start=lt_${nonce}`;res.set('Cache-Control','no-store');
+
+        let landingIp=requestIp(req);
+        let risk=null;
+        if(linkTaskRequiresRiskCheck(cfg)){
+            const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});
+            if(!n.ok)return res.status(n.status).send(`<h2>🚫 ${safeHtml(n.error)}</h2>`);
+            landingIp=n.ip;
+            risk=n.risk;
+        }else if(linkTaskNeedsRequestIp(cfg)&&!landingIp){
+            return res.status(503).send('<h2>⚠️ Tạm thời chưa xác định được IP kết nối. Vui lòng thử lại sau.</h2>');
+        }
+
+        const landingIpHash=landingIp?hashNetworkValue(landingIp,'ip'):'';
+        if(linkTaskNeedsRequestIp(cfg)&&!landingIpHash)return res.status(503).send('<h2>⚠️ Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
+        const deviceIpHash=a.device_hash&&landingIpHash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
+        const {error:ue}=await db.from('link_task_attempts').update({
+            status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,
+            country_code:risk?.countryCode||a.country_code||null,is_vpn:false,landed_at:new Date().toISOString()
+        }).eq('id',a.id).in('status',['created','shortened','landed']);
+        if(ue)throw ue;
+
+        const deepLink=`https://t.me/${BOT_USERNAME}?start=lt_${nonce}`;
+        res.set('Cache-Control','no-store');
         return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:#0f172a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{max-width:420px;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:22px;padding:24px}.b{display:block;margin-top:18px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900}.s{color:#94a3b8;font-size:13px;line-height:1.5}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2>ĐÃ ĐI QUA LINK THÀNH CÔNG</h2><p class="s">Bước cuối: mở đúng Telegram Bot để xác nhận tài khoản và nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p><a class="b" href="${safeHtml(deepLink)}">🤖 MỞ BOT TELEGRAM ĐỂ XÁC NHẬN</a></div></body></html>`);
-    }catch(e){console.error('Link task landing:',e?.message||e);return res.status(500).send('<h2>⚠️ Không thể xác nhận nhiệm vụ lúc này.</h2>');}
+    }catch(e){
+        console.error('Link task landing:',e?.message||e);
+        return res.status(500).send('<h2>⚠️ Không thể xác nhận nhiệm vụ lúc này.</h2>');
+    }
 });
 app.get('/link-task/bbmkts/:nonce',async(req,res)=>{
     const nonce=String(req.params.nonce||'');
