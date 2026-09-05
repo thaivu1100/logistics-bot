@@ -7,6 +7,17 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const crypto = require('crypto');
 
+function readSecretEnv(name, fallback = '') {
+    const raw = String(process.env[name] ?? fallback ?? '').trim();
+    if (
+        raw.length >= 2 &&
+        ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'")))
+    ) {
+        return raw.slice(1, -1).trim();
+    }
+    return raw;
+}
+
 const app = express();
 // Render/other reverse proxies: trust exactly the immediate proxy hop so req.ip is canonicalized by Express.
 app.set('trust proxy', 1);
@@ -350,7 +361,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 
 // --- CẤU HÌNH ---
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+const SUPABASE_SERVICE_ROLE_KEY = readSecretEnv('SUPABASE_SERVICE_ROLE_KEY');
 const jobMailSupabase = SUPABASE_SERVICE_ROLE_KEY
     ? createClient(process.env.SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth:{ persistSession:false, autoRefreshToken:false } })
     : null;
@@ -844,31 +855,31 @@ const ADMIN_PASS = process.env.ADMIN_PASS;
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
 const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
 const BOT_USERNAME = String(process.env.BOT_USERNAME || 'KhoHangKiemtien_Bot').replace(/^@/, '');
-const IP_HASH_SECRET = String(process.env.IP_HASH_SECRET || '').trim();
-const IP_INTELLIGENCE_API_KEY = String(process.env.IP_INTELLIGENCE_API_KEY || '').trim();
-const SHRINKPE_API_TOKEN = String(process.env.SHRINKPE_API_TOKEN || '').trim();
-const CUTY_API_TOKEN = String(process.env.CUTY_API_TOKEN || '').trim();
-const BBMKTS_API_TOKEN = String(process.env.BBMKTS_API_TOKEN || '').trim();
-const LAYMA_API_TOKEN = String(process.env.LAYMA_API_TOKEN || '').trim();
-const SITE2S_API_TOKEN = String(process.env.SITE2S_API_TOKEN || '').trim();
-const UPTOLINK_API_TOKEN = String(process.env.UPTOLINK_API_TOKEN || '').trim();
-const MONETAG_POSTBACK_SECRET = String(process.env.MONETAG_POSTBACK_SECRET || '').trim();
-const MONETAG_ZONE_ID = String(process.env.MONETAG_ZONE_ID || '11457064').trim();
+const IP_HASH_SECRET = readSecretEnv('IP_HASH_SECRET');
+const IP_INTELLIGENCE_API_KEY = readSecretEnv('IP_INTELLIGENCE_API_KEY');
+const SHRINKPE_API_TOKEN = readSecretEnv('SHRINKPE_API_TOKEN');
+const CUTY_API_TOKEN = readSecretEnv('CUTY_API_TOKEN');
+const BBMKTS_API_TOKEN = readSecretEnv('BBMKTS_API_TOKEN');
+const LAYMA_API_TOKEN = readSecretEnv('LAYMA_API_TOKEN');
+const SITE2S_API_TOKEN = readSecretEnv('SITE2S_API_TOKEN');
+const UPTOLINK_API_TOKEN = readSecretEnv('UPTOLINK_API_TOKEN');
+const MONETAG_POSTBACK_SECRET = readSecretEnv('MONETAG_POSTBACK_SECRET');
+const MONETAG_ZONE_ID = readSecretEnv('MONETAG_ZONE_ID', '11457064');
 
 // Chỉ log trạng thái CÓ/THIẾU cấu hình Link Task một lần khi process khởi động.
 // Tuyệt đối không log giá trị token/secret.
-for (const [provider, configured] of [
-    ['SHRINK.PE', !!SHRINKPE_API_TOKEN],
-    ['CUTY', !!CUTY_API_TOKEN],
-    ['BBMKTS', !!BBMKTS_API_TOKEN],
-    ['LAYMA', !!LAYMA_API_TOKEN],
-    ['UPTOLINK', !!UPTOLINK_API_TOKEN],
-    ['SITE2S', !!SITE2S_API_TOKEN]
+for (const [provider, envName, configured] of [
+    ['SHRINK.PE', 'SHRINKPE_API_TOKEN', !!SHRINKPE_API_TOKEN],
+    ['CUTY', 'CUTY_API_TOKEN', !!CUTY_API_TOKEN],
+    ['BBMKTS', 'BBMKTS_API_TOKEN', !!BBMKTS_API_TOKEN],
+    ['LAYMA', 'LAYMA_API_TOKEN', !!LAYMA_API_TOKEN],
+    ['UPTOLINK', 'UPTOLINK_API_TOKEN', !!UPTOLINK_API_TOKEN],
+    ['SITE2S', 'SITE2S_API_TOKEN', !!SITE2S_API_TOKEN]
 ]) {
-    console.log(`${configured ? '✅' : '❌'} LINK TASK ${provider}: ${configured ? 'configured' : 'missing token'}`);
+    console.log(`${configured ? '✅' : '❌'} LINK TASK ${provider}: ${configured ? 'configured' : `missing ${envName}`}`);
 }
-if (!IP_HASH_SECRET) console.warn('⚠️ LINK TASK: thiếu secret hash mạng/thiết bị; nhiệm vụ vượt link sẽ tạm khóa an toàn.');
-if (!SUPABASE_SERVICE_ROLE_KEY) console.warn('⚠️ LINK TASK DB: thiếu service-role server-side; nhiệm vụ vượt link sẽ tạm khóa an toàn.');
+console.log(`${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} LINK TASK DB: ${SUPABASE_SERVICE_ROLE_KEY ? 'service role configured' : 'missing SUPABASE_SERVICE_ROLE_KEY'}`);
+console.log(`${IP_HASH_SECRET ? '✅' : '❌'} LINK TASK HASH: ${IP_HASH_SECRET ? 'IP hash secret configured' : 'missing IP_HASH_SECRET'}`);
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -3676,6 +3687,32 @@ bot.command('saoke', async (ctx) => {
             await ctx.reply(chunks[i] + pageInfo).catch(() => {});
         });
     }
+});
+
+// /linkconfig - ADMIN diagnostic: chỉ hiển thị configured/missing, tuyệt đối không lộ token/secret.
+bot.command('linkconfig', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    let webAppUrlState = '❌ URL không hợp lệ';
+    try {
+        const u = new URL(String(WEB_APP_URL || ''));
+        webAppUrlState = u.protocol === 'https:' ? `✅ ${u.origin}` : `⚠️ ${u.origin} (không phải HTTPS)`;
+    } catch (_) {}
+    const rows = [
+        ['SHRINK.PE', !!SHRINKPE_API_TOKEN],
+        ['CUTY', !!CUTY_API_TOKEN],
+        ['BBMKTS', !!BBMKTS_API_TOKEN],
+        ['LAYMA', !!LAYMA_API_TOKEN],
+        ['UPTOLINK', !!UPTOLINK_API_TOKEN],
+        ['SITE2S', !!SITE2S_API_TOKEN]
+    ];
+    const body = rows.map(([name, ok]) => `${ok ? '✅' : '❌'} ${name}`).join('\n');
+    return ctx.reply(
+        `🔗 LINK TASK CONFIG\n\n${body}\n\n` +
+        `${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} SUPABASE SERVICE ROLE\n` +
+        `${IP_HASH_SECRET ? '✅' : '❌'} IP HASH SECRET\n` +
+        `🌐 WEB_APP_URL: ${webAppUrlState}\n\n` +
+        'ℹ️ Chỉ hiển thị trạng thái cấu hình, không hiển thị giá trị secret.'
+    );
 });
 
 // /lsmail - shortcut ADMIN: đọc lịch sử mail đã duyệt trực tiếp từ Supabase, không dùng RAM làm source of truth.
@@ -7728,7 +7765,7 @@ function linkTaskNeedsRequestIp(cfg){
 }
 function linkTaskUnavailableState(cfg,runtime={}){
     if(!cfg) return {code:'provider_unsupported',message:'Nhiệm vụ này chưa được hỗ trợ.'};
-    if(!linkTaskProviderConfigured(cfg)) return {code:'missing_provider_token',message:'Nhiệm vụ này chưa được cấu hình trên máy chủ.'};
+    if(!linkTaskProviderConfigured(cfg)) return {code:'missing_provider_token',message:'Nhiệm vụ này đang được cấu hình trên máy chủ. Vui lòng thử lại sau.'};
     if(!SUPABASE_SERVICE_ROLE_KEY) return {code:'missing_service_role',message:'Hệ thống nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
     // device_hash trong schema hiện tại cũng dùng cùng secret HMAC, vì vậy Link Task cần secret này ngay cả
     // khi provider chỉ giới hạn theo thiết bị.
@@ -7738,6 +7775,22 @@ function linkTaskUnavailableState(cfg,runtime={}){
 }
 function linkTaskUnavailableReason(cfg,runtime={}){
     return linkTaskUnavailableState(cfg,runtime).message;
+}
+function linkTaskDbErrorState(error){
+    const code=String(error?.code||'').toUpperCase();
+    const message=String(error?.message||error||'').toLowerCase();
+    const mentionsLinkTaskObject = message.includes('link_task_attempts') || message.includes('link_task_reward_atomic');
+    const schemaMissing = ['42P01','42703','42883','PGRST202','PGRST204','PGRST205'].includes(code)
+        || (mentionsLinkTaskObject && (
+            message.includes('does not exist') ||
+            message.includes('could not find') ||
+            message.includes('schema cache') ||
+            message.includes('not found')
+        ));
+    if(schemaMissing){
+        return {code:'link_task_db_not_ready',message:'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'};
+    }
+    return null;
 }
 function linkTaskRuleText(cfg){
     const suffix=cfg.quotaType==='rolling24h'?'/24H':'/ngày';
@@ -7960,9 +8013,10 @@ app.get('/api/link-task/status/:id',async(req,res)=>{
                 return linkTaskPublicConfig(cfg,quota.remaining,latestResult.data||null,runtime);
             }catch(e){
                 console.error(`Link task status ${cfg.key}:`,e?.message||e);
+                const dbState=linkTaskDbErrorState(e);
                 return linkTaskPublicConfig(cfg,null,null,{
                     ...runtime,
-                    forcedState:{code:'status_load_failed',message:'Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.'}
+                    forcedState:dbState||{code:'database_error',message:'Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.'}
                 });
             }
         }));
@@ -8045,13 +8099,22 @@ app.post('/api/link-task/start',async(req,res)=>{
             if(updateError)throw updateError;
             return res.json({success:true,shortUrl:updated.short_url,expiresAt:updated.expires_at,task:linkTaskPublicConfig(cfg)});
         }catch(pe){
-            await db.from('link_task_attempts').update({status:'cancelled',metadata:{...row.metadata,providerError:String(pe?.message||pe).slice(0,180)}}).eq('id',inserted.id);
+            const dbState=linkTaskDbErrorState(pe);
+            try{
+                await db.from('link_task_attempts').update({
+                    status:'cancelled',
+                    metadata:{...row.metadata,providerError:String(pe?.message||pe).slice(0,180)}
+                }).eq('id',inserted.id);
+            }catch(_){}
             console.error(`Link provider ${cfg.key}:`,pe?.message||pe);
+            if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
             return res.status(503).json({success:false,providerUnavailable:true,code:'provider_error',error:'Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.'});
         }
     }catch(e){
         console.error('Link task start:',e?.message||e);
-        return res.status(500).json({success:false,code:'link_task_start_failed',error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
+        const dbState=linkTaskDbErrorState(e);
+        if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
+        return res.status(500).json({success:false,code:'database_error',error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
     }finally{
         try{await release();}catch(_){}
     }
