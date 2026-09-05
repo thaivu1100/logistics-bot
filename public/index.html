@@ -1012,8 +1012,27 @@
         </div>
     </div>
 
+    <!-- PUBLIC LANDING: chỉ hiện khi mở domain ngoài Telegram. Không chạy game/không dùng guest ID. -->
+    <div x-show="isPublicBrowser && !isAppLoading" x-cloak class="min-h-screen flex items-center justify-center px-5 py-10 relative overflow-hidden">
+        <div class="absolute inset-0 opacity-20" style="background:radial-gradient(circle at 50% 18%,#2563eb,transparent 42%),radial-gradient(circle at 20% 80%,#f59e0b,transparent 34%);"></div>
+        <div class="relative w-full max-w-md glass rounded-[30px] p-6 border border-cyan-500/20 shadow-2xl text-center overflow-hidden">
+            <div class="text-6xl mb-3 loading-box-bounce">🚚</div>
+            <h1 class="text-xl font-black text-cyan-300 tracking-tight">📦 KHO HÀNG KIẾM TIỀN</h1>
+            <p class="text-xs text-slate-300 leading-relaxed mt-2">Kho Hàng được sử dụng trực tiếp trong Telegram Mini App. Mở Telegram để đăng nhập đúng tài khoản và sử dụng đầy đủ tính năng.</p>
+            <div class="grid grid-cols-1 gap-2 mt-5 text-left">
+                <div class="bg-slate-900/65 rounded-2xl p-3 border border-white/5"><div class="text-[9px] text-slate-400 uppercase font-black">👥 Tổng người dùng</div><div class="text-xl font-black mt-1" x-text="formatNumber(publicStats.totalUsers)"></div></div>
+                <div class="bg-slate-900/65 rounded-2xl p-3 border border-white/5"><div class="text-[9px] text-slate-400 uppercase font-black">📦 Tổng Đơn Hàng hiện có</div><div class="text-xl font-black mt-1 text-blue-300" x-text="formatNumber(publicStats.totalOrders)"></div></div>
+                <div class="bg-slate-900/65 rounded-2xl p-3 border border-white/5"><div class="text-[9px] text-slate-400 uppercase font-black">💰 Tổng Coin hiện có</div><div class="text-xl font-black mt-1 text-yellow-300" x-text="formatNumber(publicStats.totalCoins)"></div></div>
+            </div>
+            <p x-show="publicStatsLoading" class="text-[10px] text-slate-400 mt-3">⏳ Đang cập nhật thống kê...</p>
+            <p x-show="publicStatsError" class="text-[10px] text-amber-300 mt-3" x-text="'⚠️ '+publicStatsError"></p>
+            <a x-show="publicTelegramMiniAppUrl" :href="publicTelegramMiniAppUrl" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex w-full items-center justify-center py-3.5 rounded-2xl bg-blue-600 text-white font-black text-sm shadow-lg">🚀 MỞ MINI APP TRÊN TELEGRAM</a>
+            <a x-show="publicTelegramBotUrl" :href="publicTelegramBotUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex w-full items-center justify-center py-3 rounded-2xl bg-slate-800 text-white font-black text-xs">🤖 MỞ BOT TELEGRAM</a>
+        </div>
+    </div>
+
     <!-- ONBOARDING LOCK: chỉ dựa trên marker persistent từ server, KHÔNG live-check Telegram membership. -->
-    <div x-show="!joinedGroups && !bannedScreen && !maintenanceLocked && !isAppLoading" x-cloak class="ui-onboarding-screen min-h-screen flex items-center justify-center px-5 py-10">
+    <div x-show="!isPublicBrowser && !joinedGroups && !bannedScreen && !maintenanceLocked && !isAppLoading" x-cloak class="ui-onboarding-screen min-h-screen flex items-center justify-center px-5 py-10">
         <div class="glass w-full max-w-sm rounded-[28px] p-6 text-center border border-white/10 shadow-2xl">
             <div class="text-5xl mb-3">🔒</div>
             <h2 class="text-lg font-black text-yellow-400 mb-2" x-text="language === 'en' ? 'Verification required' : 'Bạn chưa hoàn tất xác minh'"></h2>
@@ -1235,7 +1254,15 @@
                                 <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' Đơn Hàng'"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+task.rule"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+task.unavailableReason"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p></div>
                                 <div class="text-right flex-shrink-0"><p class="text-[9px] font-black text-cyan-300" x-text="'Còn '+Math.max(0,Number(task.remaining||0))+' lượt'"></p></div>
                             </div>
-                            <button x-show="task.status!=='landed'" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':'BẮT ĐẦU'"></span></button>
+                            <button x-show="task.status!=='landed' && !task.shortUrl" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':'BẮT ĐẦU'"></span></button>
+                            <div x-show="task.shortUrl" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-blue-500/20 space-y-2">
+                                <p class="text-[9px] font-black text-blue-300">🔗 LINK NHIỆM VỤ</p>
+                                <p class="text-[9px] text-slate-200 break-all select-all" x-text="task.shortUrl"></p>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button @click="copyLinkTaskUrl(task)" class="py-2 rounded-xl bg-slate-700 text-white font-black text-[9px]">📋 SAO CHÉP</button>
+                                    <button @click="openLinkTaskUrl(task)" class="py-2 rounded-xl bg-blue-600 text-white font-black text-[9px]">🌐 MỞ LINK</button>
+                                </div>
+                            </div>
                             <div x-show="task.status==='landed'" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-cyan-500/20 space-y-2">
                                 <p class="text-[9px] font-black text-cyan-300">🔐 NHẬP MÃ XÁC NHẬN</p>
                                 <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
@@ -1764,6 +1791,15 @@
                 </template>
             </div>
 
+            <!-- QUẢNG CÁO: dùng lại đúng 1 shared-ad-rail phía trên, không duplicate script/container. -->
+            <div x-show="tab === 'ads'" x-transition class="tab-enter ui-tab ui-ads space-y-3">
+                <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2">📺 QUẢNG CÁO</h2>
+                <div class="glass p-4 rounded-[25px] text-center border border-blue-500/20">
+                    <p class="text-sm font-black text-blue-300">Native Banner + Banner 320x50</p>
+                    <p class="text-[10px] text-slate-400 mt-2 leading-relaxed">Hai định dạng quảng cáo dùng chung đang hiển thị phía trên. Không có phần thưởng cho việc click banner và hệ thống không tự click/ép click.</p>
+                </div>
+            </div>
+
             <!-- CÀI ĐẶT -->
             <div x-show="tab === 'settings'" x-transition class="tab-enter ui-tab ui-settings space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2" x-text="texts.settings"></h2>
@@ -2092,7 +2128,7 @@
                  smartlinkCompleted:'SmartLink hoàn thành! +25 Coin +25 Đơn Hàng.',
                  smartlinkRetry:'SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.', smartlinkTooEarly:'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!',
                  deliveryProcessing:'Đang xử lý giao hàng...',  streakCheckinFailed:'Không thể điểm danh lúc này.', streakRecovered:'Đã khôi phục chuỗi!', streakRecoveryFailed:'Không thể khôi phục chuỗi.', taskClaimFailed:'Không thể nhận thưởng nhiệm vụ.', taskNotReady:'Nhiệm vụ chưa đủ điều kiện.', withdrawDailyLimit:'Bạn đã hết lượt rút hôm nay.', withdrawError:'Không thể gửi yêu cầu rút tiền.', withdrawInsufficient:'Không đủ Đơn Hàng.', withdrawMin:'Số Đơn Hàng rút tối thiểu là 30.000.', withdrawNotEligible:'Bạn chưa đủ điều kiện rút tiền.', withdrawSubmitted:'Đã gửi yêu cầu rút tiền thành công.',
-                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_jobmail: 'JOB MAIL', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +1 lượt giao hàng!',
+                nav_home: 'Trang chủ', nav_chest: 'Rương', nav_tasks: 'Nhiệm vụ', nav_leaderboard: 'BXH', nav_friends: 'Mời bạn', nav_withdraw: 'Rút tiền', nav_giftcode: 'Nhập Code', nav_jobmail: 'JOB MAIL', nav_ads: 'QC', nav_settings: 'Cài đặt', extraDeliverySuccess: '🚚 +1 lượt giao hàng!',
                 captchaEnterCode: 'Nhập chính xác mã bên dưới để tiếp tục', captchaRefresh: '🔄 Đổi mã', captchaConfirm: '✅ Xác nhận', captchaLoadError:'Không tạo được CAPTCHA từ máy chủ. Vui lòng thử lại.', captchaIncorrect:'CAPTCHA không đúng. Vui lòng nhập lại!',
                 quizTitle: 'TRẢ LỜI CÂU HỎI', quizRulesText: '✅ Trả lời đúng: +150 💰 +1 🎁 · ❌ Sai: không nhận gì · ⏭️ Bỏ qua: 0 thưởng', quizSkip: '⏭️ Bỏ qua (Xem QC)', close: 'Đóng'
             },
@@ -2170,7 +2206,7 @@
                  smartlinkRetry:'The SmartLink was completed but is still syncing. Return to the app to retry.', smartlinkTooEarly:'You must wait at least 5 seconds. Please try again!!',
                  deliveryProcessing:'Delivery is already being processed.',
  streakCheckinFailed:'Could not check in right now.', streakRecovered:'Streak recovered!', streakRecoveryFailed:'Could not recover the streak.', taskClaimFailed:'Could not claim the task reward.', taskNotReady:'This task is not ready.', withdrawDailyLimit:"You have used today's withdrawal.", withdrawError:'Could not submit the withdrawal request.', withdrawInsufficient:'Not enough Orders.', withdrawMin:'Minimum withdrawal is 30,000 Orders.', withdrawNotEligible:'You are not eligible to withdraw.', withdrawSubmitted:'Withdrawal request submitted successfully.',
-                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_jobmail: 'JOB MAIL', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +1 delivery!',
+                nav_home: 'Home', nav_chest: 'Chest', nav_tasks: 'Tasks', nav_leaderboard: 'Ranking', nav_friends: 'Invite', nav_withdraw: 'Withdraw', nav_giftcode: 'Redeem', nav_jobmail: 'JOB MAIL', nav_ads: 'Ads', nav_settings: 'Settings', extraDeliverySuccess: '🚚 +1 delivery!',
                 captchaEnterCode: 'Enter the exact code below to continue', captchaRefresh: '🔄 New code', captchaConfirm: '✅ Confirm', captchaLoadError:'Could not create a server CAPTCHA. Please try again.', captchaIncorrect:'Incorrect CAPTCHA. Please try again!',
                 quizTitle: 'ANSWER THE QUESTION', quizRulesText: '✅ Correct answer: +150 💰 +1 🎁 · ❌ Wrong: nothing earned · ⏭️ Skip: no reward', quizSkip: '⏭️ Skip (watch ad)', close: 'Close'
             }
@@ -2328,6 +2364,8 @@
         function app() {
             return {
                 joinedGroups: false, // Mặc định là false để hiển thị banner khi mới vào
+                isPublicBrowser:false, publicStatsLoading:false, publicStatsError:'',
+                publicStats:{totalUsers:0,totalOrders:0,totalCoins:0}, publicTelegramMiniAppUrl:'', publicTelegramBotUrl:'',
                 dismissedJoinBanner: false, dismissedPromoBanner: false,
                 tab: 'home', user: { id: '', name: '', joinDate: '', accountCreatedAt: null }, truckLevel: 1, orders: 0, coins: 0,
                 // JOB MAIL: chỉ lưu email + metadata trạng thái, tuyệt đối không có password.
@@ -2711,6 +2749,39 @@
                     }
                 },
                 
+                animatePublicStat(key,target,duration=900) {
+                    const end=Math.max(0,Number(target||0));
+                    const startAt=performance.now();
+                    const step=(now)=>{
+                        const p=Math.min(1,(now-startAt)/duration);
+                        const eased=1-Math.pow(1-p,3);
+                        this.publicStats={...this.publicStats,[key]:Math.floor(end*eased)};
+                        if(p<1)requestAnimationFrame(step);else this.publicStats={...this.publicStats,[key]:end};
+                    };
+                    requestAnimationFrame(step);
+                },
+                async loadPublicLanding() {
+                    this.publicStatsLoading=true;this.publicStatsError='';
+                    try{
+                        const [statsRes,configRes]=await Promise.all([
+                            fetchWithTimeout(`${API_URL}/api/public/stats`,{cache:'no-store'},8000),
+                            fetchWithTimeout(`${API_URL}/api/public/config`,{cache:'no-store'},8000)
+                        ]);
+                        const stats=await statsRes.json().catch(()=>({}));
+                        const config=await configRes.json().catch(()=>({}));
+                        if(configRes.ok&&config.success){
+                            this.publicTelegramMiniAppUrl=String(config.telegramMiniAppUrl||'');
+                            this.publicTelegramBotUrl=String(config.telegramBotUrl||'');
+                        }
+                        if(!statsRes.ok||!stats.success)throw new Error(stats.error||'Đang cập nhật thống kê.');
+                        this.publicStats={totalUsers:0,totalOrders:0,totalCoins:0};
+                        this.animatePublicStat('totalUsers',stats.totalUsers);
+                        this.animatePublicStat('totalOrders',stats.totalOrders);
+                        this.animatePublicStat('totalCoins',stats.totalCoins);
+                    }catch(e){
+                        this.publicStatsError=e?.message||'Đang cập nhật thống kê. Vui lòng thử lại sau.';
+                    }finally{this.publicStatsLoading=false;}
+                },
                 // FIX LỖI "CÓ MÁY MẤT DỮ LIỆU, CÓ MÁY KHÔNG" khi tải lại / khởi động lại bot: trước đây code
                 // đọc Telegram.WebApp.initDataUnsafe.user NGAY LẬP TỨC lúc app khởi động. Một số client
                 // Telegram (đặc biệt WebView Android khởi động nguội, mạng chậm) cần thêm vài trăm mili-giây
@@ -2734,14 +2805,8 @@
                     // Đánh dấu Alpine đã khởi động thành công để script watchdog thuần (không phụ thuộc
                     // Alpine, xem đầu file <body>) biết KHÔNG cần hiện màn "Tải lại trang" nữa.
                     window.__appBootOk = true;
-                    // Kiểm tra ngay từ đầu xem Bot/Mini App có đang bị Admin khoá bảo trì (/khoabot) hay không.
-                    // Nếu có, hiện màn hình bảo trì và KHÔNG chạy tiếp phần khởi tạo dữ liệu game bên dưới.
-                    // Đồng thời tự kiểm tra lại định kỳ để tự động vào lại app ngay khi Admin /mokhoabot.
-                    await this.checkMaintenanceLock();
-                    setInterval(() => this.checkMaintenanceLock(), 15000);
-                    if (this.maintenanceLocked) { this.finishAppLoading(); return; }
-
-                    // Mini App chỉ chấp nhận Telegram WebApp user thật. Không dùng guest/localStorage ID để tránh bypass onboarding.
+                    // Mini App chỉ chấp nhận Telegram WebApp user thật. Trình duyệt thường nhận PUBLIC LANDING,
+                    // tuyệt đối không tạo guest/localStorage ID và không chạy game.
                     if (window.Telegram && window.Telegram.WebApp) {
                         window.Telegram.WebApp.ready();
                         window.Telegram.WebApp.expand();
@@ -2749,18 +2814,23 @@
                     const tgUser = await this.waitForTelegramUser();
                     const initData = window.Telegram?.WebApp?.initData || '';
                     if (!tgUser || !initData) {
-                        this.user.id = '';
-                        this.user.name = 'Shipper';
-                        this.joinedGroups = false;
-                        this._serverHydrationFailed = true;
-                        this.language = localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi';
-                        this.texts = translations[this.language];
-                        document.documentElement.lang = this.language;
-                        document.title = this.language === 'en' ? 'Logistics Warehouse' : 'Kho Hàng Logistics';
+                        this.user.id='';this.user.name='Shipper';this.joinedGroups=false;this.isPublicBrowser=true;
+                        this._serverHydrationFailed=true;
+                        this.language=localStorage.getItem('shipper_language')==='en'?'en':'vi';
+                        this.texts=translations[this.language];
+                        document.documentElement.lang=this.language;
+                        document.title=this.language==='en'?'Logistics Warehouse':'Kho Hàng Logistics';
+                        await this.loadPublicLanding();
                         await this.finishAppLoading();
                         this.translateStaticUi();
                         return;
                     }
+
+                    // Bảo trì chỉ áp dụng luồng Mini App thật; public landing vẫn có thể hiển thị thông tin/CTA Telegram.
+                    await this.checkMaintenanceLock();
+                    setInterval(() => this.checkMaintenanceLock(), 15000);
+                    if (this.maintenanceLocked) { this.finishAppLoading(); return; }
+                    this.isPublicBrowser=false;
                     this.user.id = tgUser.id.toString();
                     this.user.name = tgUser.first_name || 'Shipper';
                     if (tgUser.last_name) this.user.name += ' ' + tgUser.last_name;
@@ -4106,10 +4176,24 @@
                             await this.syncLinkTasks();
                             return false;
                         }
-                        this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link để nhận mã xác nhận rồi quay lại nhập mã.');
-                        try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');}catch(_){window.location.href=url;}
+                        this.linkTaskStatusError='';const url=String(data.shortUrl);
+                        const index=this.linkTasks.findIndex(x=>String(x?.id||'')===String(task.id));
+                        if(index>=0){this.linkTasks[index]={...this.linkTasks[index],status:'shortened',shortUrl:url,expiresAt:data.expiresAt||this.linkTasks[index].expiresAt};this.linkTasks=[...this.linkTasks];}
+                        this.showNotification('🔗 Đã tạo nhiệm vụ. Link đã được giữ trên thẻ để bạn có thể sao chép/mở lại.');
+                        this.openLinkTaskUrl({shortUrl:url});
                         setTimeout(()=>this.syncLinkTasks(),2500);return true;
                     }catch(_){this.linkTaskStatusError='Tạm thời chưa tạo được nhiệm vụ vượt link. Vui lòng thử lại sau.';this.showNotification('⚠️ Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.');return false;}finally{this._linkTaskStarting='';}
+                },
+                async copyLinkTaskUrl(task) {
+                    const url=String(task?.shortUrl||'').trim();if(!url)return false;
+                    try{await navigator.clipboard.writeText(url);this.showNotification('📋 Đã sao chép link nhiệm vụ!');return true;}catch(_){
+                        try{const t=document.createElement('textarea');t.value=url;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();const ok=document.execCommand('copy');document.body.removeChild(t);if(ok){this.showNotification('📋 Đã sao chép link nhiệm vụ!');return true;}}catch(__){}
+                    }
+                    this.showNotification('⚠️ Không thể tự sao chép. Hãy nhấn giữ vào link để copy.');return false;
+                },
+                openLinkTaskUrl(task) {
+                    const url=String(task?.shortUrl||'').trim();if(!url)return false;
+                    try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');return true;}catch(_){try{window.open(url,'_blank','noopener,noreferrer');return true;}catch(__){return false;}}
                 },
                 linkTaskCodeCooldownSeconds(taskId) {
                     // linkTaskCodeNow là reactive tick chỉ để render countdown; server mới là source-of-truth cooldown.
@@ -5847,6 +5931,7 @@
                     { id: 'withdraw', name: 'Rút tiền', icon: '💳' },
                     { id: 'giftcode', name: 'Nhập Code', icon: '🎟️' },
                     { id: 'jobmail', name: 'JOB MAIL', icon: '📩' },
+                    { id: 'ads', name: 'Quảng cáo', icon: '📺' },
                     { id: 'settings', name: 'Cài đặt', icon: '⚙️' }
                 ]
             };
