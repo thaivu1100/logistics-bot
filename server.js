@@ -195,6 +195,8 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //      landed_at timestamptz,
 //      confirmed_at timestamptz,
 //      rewarded_at timestamptz,
+//      verify_last_attempt_at timestamptz,
+//      verify_attempt_count integer not null default 0,
 //      metadata jsonb not null default '{}'::jsonb
 //    );
 //
@@ -221,12 +223,15 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    alter table public.link_task_attempts add column if not exists landed_at timestamptz;
 //    alter table public.link_task_attempts add column if not exists confirmed_at timestamptz;
 //    alter table public.link_task_attempts add column if not exists rewarded_at timestamptz;
+//    alter table public.link_task_attempts add column if not exists verify_last_attempt_at timestamptz;
+//    alter table public.link_task_attempts add column if not exists verify_attempt_count integer not null default 0;
 //    alter table public.link_task_attempts add column if not exists metadata jsonb default '{}'::jsonb;
 //
 //    alter table public.link_task_attempts alter column status set default 'created';
 //    alter table public.link_task_attempts alter column reward_orders set default 0;
 //    alter table public.link_task_attempts alter column created_at set default now();
 //    alter table public.link_task_attempts alter column metadata set default '{}'::jsonb;
+//    alter table public.link_task_attempts alter column verify_attempt_count set default 0;
 //
 //    -- Backfill CHỈ các giá trị có thể suy ra an toàn; không giả dữ liệu user/IP/quota.
 //    update public.link_task_attempts set created_at = now() where created_at is null;
@@ -234,6 +239,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    update public.link_task_attempts set status = 'cancelled'
 //      where status is null or status not in ('created','shortened','landed','rewarded','expired','cancelled');
 //    update public.link_task_attempts set reward_orders = 0 where reward_orders is null;
+//    update public.link_task_attempts set verify_attempt_count = 0 where verify_attempt_count is null;
 //
 //    -- Nếu database cũ từng tạo duplicate active attempt, giữ attempt mới nhất và chỉ huỷ trạng thái
 //    -- của các attempt cũ; KHÔNG DELETE row/lịch sử.
@@ -458,12 +464,100 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    end;
 //    $$;
 //
+//    -- Xác minh mã Link Task + cooldown 7 giây + reward trong cùng transaction.
+//    -- p_code_valid được tính SERVER-SIDE bằng HMAC; client tuyệt đối không tự gửi cờ này.
+//    create or replace function public.link_task_verify_code_atomic(
+//      p_nonce text,
+//      p_user_id text,
+//      p_code_valid boolean,
+//      p_quota_type text,
+//      p_window_start timestamptz,
+//      p_day_key text,
+//      p_max_ip integer,
+//      p_max_device integer,
+//      p_max_device_ip integer
+//    ) returns jsonb
+//    language plpgsql
+//    security definer
+//    set search_path = public
+//    as $$
+//    declare
+//      a public.link_task_attempts%rowtype;
+//      retry_ms integer := 0;
+//      reward_result jsonb;
+//      current_orders bigint := 0;
+//    begin
+//      select * into a
+//        from public.link_task_attempts
+//       where nonce = p_nonce
+//       for update;
+//
+//      if not found then
+//        return jsonb_build_object('ok',false,'code','not_found');
+//      end if;
+//      if a.user_id <> p_user_id then
+//        return jsonb_build_object('ok',false,'code','wrong_user');
+//      end if;
+//
+//      -- Replay mã đúng sau khi reward: chỉ trả trạng thái hiện tại, không cộng thêm.
+//      if a.status = 'rewarded' then
+//        if not coalesce(p_code_valid,false) then
+//          return jsonb_build_object('ok',false,'code','invalid_code');
+//        end if;
+//        select coalesce(orders,0) into current_orders
+//          from public.users where id::text = a.user_id;
+//        return jsonb_build_object(
+//          'ok',true,'idempotent',true,
+//          'reward_orders',coalesce(a.reward_orders,0),
+//          'orders',coalesce(current_orders,0),
+//          'provider',a.provider,'task_id',a.task_id
+//        );
+//      end if;
+//
+//      if a.expires_at is null or a.expires_at <= now() then
+//        update public.link_task_attempts
+//           set status='expired'
+//         where id=a.id and status <> 'rewarded';
+//        return jsonb_build_object('ok',false,'code','expired');
+//      end if;
+//      if a.status <> 'landed' or a.landed_at is null then
+//        return jsonb_build_object('ok',false,'code','not_landed');
+//      end if;
+//
+//      if a.verify_last_attempt_at is not null
+//         and a.verify_last_attempt_at > now() - interval '7 seconds' then
+//        retry_ms := greatest(1, ceil(extract(epoch from ((a.verify_last_attempt_at + interval '7 seconds') - now())) * 1000)::integer);
+//        return jsonb_build_object('ok',false,'code','code_cooldown','retry_after_ms',retry_ms);
+//      end if;
+//
+//      update public.link_task_attempts
+//         set verify_last_attempt_at=now(),
+//             verify_attempt_count=coalesce(verify_attempt_count,0)+1
+//       where id=a.id;
+//
+//      if not coalesce(p_code_valid,false) then
+//        return jsonb_build_object('ok',false,'code','invalid_code','retry_after_ms',7000);
+//      end if;
+//
+//      -- Hàm reward hiện tại đã SELECT ... FOR UPDATE, advisory-lock quota và update users atomically.
+//      reward_result := public.link_task_reward_atomic(
+//        p_nonce,p_user_id,p_quota_type,p_window_start,p_day_key,
+//        p_max_ip,p_max_device,p_max_device_ip
+//      );
+//      return reward_result;
+//    end;
+//    $$;
+//
 //    alter table public.link_task_attempts enable row level security;
 //    revoke all on table public.link_task_attempts from anon, authenticated;
 //    revoke all on function public.link_task_reward_atomic(text,text,text,timestamptz,text,integer,integer,integer)
 //      from public, anon, authenticated;
+//    revoke all on function public.link_task_verify_code_atomic(text,text,boolean,text,timestamptz,text,integer,integer,integer)
+//      from public, anon, authenticated;
 //    grant select, insert, update, delete on table public.link_task_attempts to service_role;
 //    grant execute on function public.link_task_reward_atomic(text,text,text,timestamptz,text,integer,integer,integer)
+//      to service_role;
+//    grant execute on function public.link_task_verify_code_atomic(text,text,boolean,text,timestamptz,text,integer,integer,integer)
 //      to service_role;
 //
 //    -- Identity/serial sequence có thể mang tên khác trên database legacy, nên tìm động.
@@ -3894,12 +3988,13 @@ bot.command('linkconfig', async (ctx) => {
     const body = rows.map(([name, ok]) => `${ok ? '✅' : '❌'} ${name}`).join('\n');
 
     const db = await checkLinkTaskDatabaseReadiness({force:true}).catch(() => ({
-        ready:false,tableReady:false,columnsReady:false,rpcReady:false,accessReady:false,
-        tableCode:'UNKNOWN',columnsCode:'UNKNOWN',rpcCode:'UNKNOWN',missingColumn:''
+        ready:false,tableReady:false,columnsReady:false,rpcReady:false,rewardRpcReady:false,verifyRpcReady:false,accessReady:false,
+        tableCode:'UNKNOWN',columnsCode:'UNKNOWN',rpcCode:'UNKNOWN',rewardRpcCode:'UNKNOWN',verifyRpcCode:'UNKNOWN',missingColumn:''
     }));
     const tableLine = `${db.tableReady ? '✅' : '❌'} TABLE link_task_attempts${db.tableReady ? '' : ` — Mã: ${db.tableCode || 'UNKNOWN'}`}`;
     const columnsLine = `${db.columnsReady ? '✅' : '❌'} COLUMNS${db.columnsReady ? '' : ` — Mã: ${db.columnsCode || 'UNKNOWN'}${db.missingColumn ? ` — Cột: ${db.missingColumn}` : ''}`}`;
-    const rpcLine = `${db.rpcReady ? '✅' : '❌'} RPC link_task_reward_atomic${db.rpcReady ? '' : ` — Mã: ${db.rpcCode || 'UNKNOWN'}`}`;
+    const rewardRpcLine = `${db.rewardRpcReady ? '✅' : '❌'} RPC link_task_reward_atomic${db.rewardRpcReady ? '' : ` — Mã: ${db.rewardRpcCode || db.rpcCode || 'UNKNOWN'}`}`;
+    const verifyRpcLine = `${db.verifyRpcReady ? '✅' : '❌'} RPC link_task_verify_code_atomic${db.verifyRpcReady ? '' : ` — Mã: ${db.verifyRpcCode || db.rpcCode || 'UNKNOWN'}`}`;
     const accessLine = `${db.accessReady ? '✅' : '❌'} RLS/SERVICE ROLE ACCESS`;
 
     return ctx.reply(
@@ -3907,7 +4002,7 @@ bot.command('linkconfig', async (ctx) => {
         `${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} SUPABASE SERVICE ROLE\n` +
         `${IP_HASH_SECRET ? '✅' : '❌'} IP HASH SECRET\n` +
         `🌐 WEB_APP_URL: ${webAppUrlState}\n\n` +
-        `🗄 DATABASE\n${tableLine}\n${columnsLine}\n${rpcLine}\n${accessLine}\n\n` +
+        `🗄 DATABASE\n${tableLine}\n${columnsLine}\n${rewardRpcLine}\n${verifyRpcLine}\n${accessLine}\n\n` +
         'ℹ️ Chỉ hiển thị trạng thái cấu hình/diagnostic an toàn, không hiển thị giá trị secret.'
     );
 });
@@ -3916,15 +4011,16 @@ bot.command('linkconfig', async (ctx) => {
 bot.command('linkdb', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const db = await checkLinkTaskDatabaseReadiness({force:true}).catch(() => ({
-        ready:false,tableReady:false,columnsReady:false,rpcReady:false,accessReady:false,
-        tableCode:'UNKNOWN',columnsCode:'UNKNOWN',rpcCode:'UNKNOWN',missingColumn:''
+        ready:false,tableReady:false,columnsReady:false,rpcReady:false,rewardRpcReady:false,verifyRpcReady:false,accessReady:false,
+        tableCode:'UNKNOWN',columnsCode:'UNKNOWN',rpcCode:'UNKNOWN',rewardRpcCode:'UNKNOWN',verifyRpcCode:'UNKNOWN',missingColumn:''
     }));
     const lines = [
         '🗄 LINK TASK DATABASE',
         '',
         `Table: ${db.tableReady ? '✅' : '❌'}${db.tableReady ? '' : ` (${db.tableCode || 'UNKNOWN'})`}`,
         `Columns: ${db.columnsReady ? '✅' : '❌'}${db.columnsReady ? '' : ` (${db.columnsCode || 'UNKNOWN'}${db.missingColumn ? `, thiếu/không đọc được: ${db.missingColumn}` : ''})`}`,
-        `RPC: ${db.rpcReady ? '✅' : '❌'}${db.rpcReady ? '' : ` (${db.rpcCode || 'UNKNOWN'})`}`,
+        `RPC reward: ${db.rewardRpcReady ? '✅' : '❌'}${db.rewardRpcReady ? '' : ` (${db.rewardRpcCode || db.rpcCode || 'UNKNOWN'})`}`,
+        `RPC verify-code: ${db.verifyRpcReady ? '✅' : '❌'}${db.verifyRpcReady ? '' : ` (${db.verifyRpcCode || db.rpcCode || 'UNKNOWN'})`}`,
         `Service Role Access: ${db.accessReady ? '✅' : '❌'}`,
         '',
         db.ready
@@ -4926,7 +5022,10 @@ function extractRequestUserId(req) {
 // dành cho Admin, và mọi request đến từ chính Admin CHÍNH - ID 6327666718 - để Admin luôn thao tác được
 // bình thường qua Mini App/web /admin trong lúc bảo trì).
 app.use('/api', (req, res, next) => {
-    if (BOT_LOCKED && req.path !== '/lock-status' && !req.path.startsWith('/admin')) {
+    // Attempt đã được phát trước lúc bảo trì vẫn phải đi tới landing để ghi nhận "landed" và hiện mã.
+    // Chỉ whitelist GET landing; /link-task/start và /link-task/verify-code vẫn bị khóa khi BOT_LOCKED.
+    const isLinkTaskLanding = req.method === 'GET' && /^\/link-task\/landing\/[^/]+$/.test(req.path);
+    if (BOT_LOCKED && req.path !== '/lock-status' && !req.path.startsWith('/admin') && !isLinkTaskLanding) {
         if (String(extractRequestUserId(req)) === String(ADMIN_ID)) return next();
         return res.status(503).json({ locked: true, error: MAINTENANCE_MESSAGE, message: MAINTENANCE_MESSAGE });
     }
@@ -6793,7 +6892,7 @@ const CHEST_REWARD_POOL = [
     { label: '500💰', prob: 0.04, type: 'coin', value: 500 },
     { label: '1k💰', prob: 0.025, type: 'coin', value: 1000 },
     { label: '3k📦', prob: 0.02, type: 'order', value: 3000 },
-    { label: '💎75k', prob: 0.0001, type: 'order', value: 75000 }
+    { label: '💎30k', prob: 0.0001, type: 'order', value: 30000 }
 ];
 function pickWeightedReward(pool) {
     let r = Math.random(), cumulative = 0;
@@ -7958,6 +8057,7 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
 // ==================== MOBILE ACCESS + LINK TASKS / VƯỢT LINK ====================
 const LINK_TASK_TTL_MS = 25 * 60 * 1000;
 const LINK_TASK_ROLLING_MS = 24 * 60 * 60 * 1000;
+const LINK_TASK_CODE_COOLDOWN_MS = 7 * 1000;
 const LINK_TASK_CONFIG = Object.freeze({
     shrinkpe:Object.freeze({key:'shrinkpe',provider:'SHRINK.PE',taskId:'shrinkpe',rewardOrders:400,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0}),
     cuty:Object.freeze({key:'cuty',provider:'CUTY',taskId:'cuty',rewardOrders:200,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0}),
@@ -7998,7 +8098,7 @@ function linkTaskUnavailableReason(cfg,runtime={}){
 function linkTaskDbErrorState(error){
     const code=String(error?.code||'').toUpperCase();
     const message=String(error?.message||error||'').toLowerCase();
-    const mentionsLinkTaskObject = message.includes('link_task_attempts') || message.includes('link_task_reward_atomic');
+    const mentionsLinkTaskObject = message.includes('link_task_attempts') || message.includes('link_task_reward_atomic') || message.includes('link_task_verify_code_atomic');
     const schemaMissing = ['42P01','42703','42883','PGRST202','PGRST204','PGRST205'].includes(code)
         || (mentionsLinkTaskObject && (
             message.includes('does not exist') ||
@@ -8019,7 +8119,7 @@ const LINK_TASK_DB_COLUMNS = Object.freeze([
     'id','nonce','user_id','provider','task_id','status','reward_orders','day_key',
     'issued_ip_hash','landing_ip_hash','device_hash','device_ip_hash','country_code','is_vpn',
     'short_url','provider_slug','provider_view_baseline','created_at','expires_at',
-    'landed_at','confirmed_at','rewarded_at','metadata'
+    'landed_at','confirmed_at','rewarded_at','verify_last_attempt_at','verify_attempt_count','metadata'
 ]);
 const LINK_TASK_DB_READY_TTL_MS = 60 * 1000;
 const LINK_TASK_DB_NOT_READY_TTL_MS = 30 * 1000;
@@ -8053,8 +8153,8 @@ async function checkLinkTaskDatabaseReadiness({force=false}={}){
     const now=Date.now();
     if(!SUPABASE_SERVICE_ROLE_KEY){
         return {
-            ready:false,tableReady:false,columnsReady:false,rpcReady:false,accessReady:false,
-            code:'missing_service_role',tableCode:'NOT_CHECKED',columnsCode:'NOT_CHECKED',rpcCode:'NOT_CHECKED',
+            ready:false,tableReady:false,columnsReady:false,rpcReady:false,rewardRpcReady:false,verifyRpcReady:false,accessReady:false,
+            code:'missing_service_role',tableCode:'NOT_CHECKED',columnsCode:'NOT_CHECKED',rpcCode:'NOT_CHECKED',rewardRpcCode:'NOT_CHECKED',verifyRpcCode:'NOT_CHECKED',
             missingColumn:'',checkedAt:now,safeReason:'Hệ thống nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'
         };
     }
@@ -8067,8 +8167,9 @@ async function checkLinkTaskDatabaseReadiness({force=false}={}){
 
     linkTaskDbReadinessPromise=(async()=>{
         const base={
-            ready:false,tableReady:false,columnsReady:false,rpcReady:false,accessReady:false,
+            ready:false,tableReady:false,columnsReady:false,rpcReady:false,rewardRpcReady:false,verifyRpcReady:false,accessReady:false,
             code:'link_task_db_not_ready',tableCode:'NOT_CHECKED',columnsCode:'NOT_CHECKED',rpcCode:'NOT_CHECKED',
+            rewardRpcCode:'NOT_CHECKED',verifyRpcCode:'NOT_CHECKED',
             missingColumn:'',checkedAt:Date.now(),safeReason:'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'
         };
         try{
@@ -8094,12 +8195,23 @@ async function checkLinkTaskDatabaseReadiness({force=false}={}){
             base.tableReady=true;
             base.tableCode='OK';
 
-            // Columns và RPC độc lập sau khi table đã đọc được -> chạy song song để giảm latency.
-            const [columnsProbe,rpcProbe]=await Promise.all([
+            // Columns và 2 RPC độc lập sau khi table đã đọc được -> chạy song song để giảm latency.
+            const [columnsProbe,rewardRpcProbe,verifyRpcProbe]=await Promise.all([
                 db.from('link_task_attempts').select(LINK_TASK_DB_COLUMNS.join(',')).limit(1),
                 db.rpc('link_task_reward_atomic',{
                     p_nonce:'__linkdb_probe__',
                     p_user_id:'__diagnostic__',
+                    p_quota_type:'rolling24h',
+                    p_window_start:new Date(0).toISOString(),
+                    p_day_key:vietnamDayKey(),
+                    p_max_ip:0,
+                    p_max_device:0,
+                    p_max_device_ip:0
+                }),
+                db.rpc('link_task_verify_code_atomic',{
+                    p_nonce:'__linkdb_probe__',
+                    p_user_id:'__diagnostic__',
+                    p_code_valid:false,
                     p_quota_type:'rolling24h',
                     p_window_start:new Date(0).toISOString(),
                     p_day_key:vietnamDayKey(),
@@ -8120,36 +8232,40 @@ async function checkLinkTaskDatabaseReadiness({force=false}={}){
                 columnsState=linkTaskDbErrorState(columnsProbe.error);
             }
 
-            let rpcReady=true;
-            let rpcCode='OK';
-            let rpcState=null;
-            if(rpcProbe.error){
-                rpcReady=false;
-                rpcCode=linkTaskDbDiagnosticCode(rpcProbe.error);
-                rpcState=linkTaskDbErrorState(rpcProbe.error);
-            }else{
-                const rpcResult=Array.isArray(rpcProbe.data)?rpcProbe.data[0]:rpcProbe.data;
-                if(!(rpcResult && rpcResult.ok===false && String(rpcResult.code||'')==='not_found')){
-                    rpcReady=false;
-                    rpcCode='UNEXPECTED_RESULT';
+            const inspectRpcProbe=(probe)=>{
+                if(probe.error){
+                    return {ready:false,code:linkTaskDbDiagnosticCode(probe.error),state:linkTaskDbErrorState(probe.error)};
                 }
-            }
+                const rpcResult=Array.isArray(probe.data)?probe.data[0]:probe.data;
+                if(rpcResult && rpcResult.ok===false && String(rpcResult.code||'')==='not_found'){
+                    return {ready:true,code:'OK',state:null};
+                }
+                return {ready:false,code:'UNEXPECTED_RESULT',state:null};
+            };
+            const rewardRpc=inspectRpcProbe(rewardRpcProbe);
+            const verifyRpc=inspectRpcProbe(verifyRpcProbe);
+            const rpcReady=rewardRpc.ready && verifyRpc.ready;
+            const rpcCode=rewardRpc.ready ? (verifyRpc.ready ? 'OK' : verifyRpc.code) : rewardRpc.code;
 
             // tableProbe bằng service-role đã đọc được => quyền truy cập server-side hoạt động.
             // RPC/columns là readiness riêng, không đánh đồng thành lỗi RLS.
             const accessReady=base.tableReady;
             const ready=base.tableReady && columnsReady && rpcReady && accessReady;
-            const state=columnsState||rpcState;
+            const state=columnsState||rewardRpc.state||verifyRpc.state;
             const result={
                 ...base,
                 ready,
                 tableReady:true,
                 columnsReady,
                 rpcReady,
+                rewardRpcReady:rewardRpc.ready,
+                verifyRpcReady:verifyRpc.ready,
                 accessReady,
                 tableCode:'OK',
                 columnsCode,
                 rpcCode,
+                rewardRpcCode:rewardRpc.code,
+                verifyRpcCode:verifyRpc.code,
                 missingColumn,
                 code:ready?'ready':(state?.code||'link_task_db_not_ready'),
                 checkedAt:Date.now(),
@@ -8196,6 +8312,17 @@ function linkTaskPublicConfig(cfg,remaining=null,latest=null,runtime={}){
     };
 }
 function safeHtml(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function linkTaskVerificationCode(attempt){
+    if(!attempt||!IP_HASH_SECRET) return '';
+    const digest=crypto.createHmac('sha256',IP_HASH_SECRET)
+        .update(`link-code-v1|${String(attempt.nonce||'')}|${String(attempt.user_id||'')}|${String(attempt.task_id||'')}`)
+        .digest();
+    return String(digest.readUInt32BE(0)%1000000).padStart(6,'0');
+}
+function timingSafeEqualDigits(a,b){
+    const left=Buffer.from(String(a||''),'utf8'),right=Buffer.from(String(b||''),'utf8');
+    return left.length===right.length && left.length>0 && crypto.timingSafeEqual(left,right);
+}
 async function fetchWithTimeoutServer(url,options={},timeoutMs=8000){
     const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),timeoutMs);
     try{return await fetch(url,{...options,signal:controller.signal});}finally{clearTimeout(timer);}
@@ -8228,15 +8355,34 @@ async function readProviderJson(response, providerName) {
 }
 async function createProviderShortUrl(cfg,destination,nonce){
     if(cfg.key==='shrinkpe'){
-        const u=new URL('https://shrink.pe/api');
-        u.searchParams.set('api',SHRINKPE_API_TOKEN);
-        u.searchParams.set('url',destination);
-        u.searchParams.set('format','json');
-        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
-        const data=await readProviderJson(r,'SHRINK.PE');
-        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`SHRINK.PE HTTP ${r.status}`);
-        const shortUrl=validateShortUrl(data?.shortenedUrl,['shrink.pe']);
-        if(!shortUrl)throw new Error('SHRINK.PE trả link không hợp lệ.');
+        const buildUrl=(format)=>{
+            const u=new URL('https://shrink.pe/api');
+            u.searchParams.set('api',SHRINKPE_API_TOKEN);
+            u.searchParams.set('url',destination);
+            u.searchParams.set('format',format);
+            return u;
+        };
+
+        // Lần 1: JSON. Body chỉ đọc đúng một lần rồi tự parse từ raw text.
+        const jsonResponse=await fetchProviderWithRetry(buildUrl('json'),{headers:{accept:'application/json,text/plain;q=0.8'}},8000,1);
+        const jsonRaw=await jsonResponse.text();
+        if(!jsonResponse.ok) throw new Error(`SHRINK.PE HTTP ${jsonResponse.status}`);
+        if(!jsonRaw.trim()) throw new Error('SHRINK.PE empty response');
+
+        let jsonData=null;
+        try{jsonData=JSON.parse(jsonRaw);}catch(_){jsonData=null;}
+        if(jsonData && String(jsonData?.status||'').toLowerCase()==='success'){
+            const shortUrl=validateShortUrl(jsonData?.shortenedUrl,['shrink.pe']);
+            if(shortUrl)return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
+        }
+
+        // Lần 2 duy nhất theo format=text: dùng khi JSON 200 nhưng parse/field/link không hợp lệ.
+        const textResponse=await fetchProviderWithRetry(buildUrl('text'),{headers:{accept:'text/plain'}},8000,0);
+        const textRaw=(await textResponse.text()).trim();
+        if(!textResponse.ok) throw new Error(`SHRINK.PE text HTTP ${textResponse.status}`);
+        if(!textRaw) throw new Error('SHRINK.PE text empty response');
+        const shortUrl=validateShortUrl(textRaw,['shrink.pe']);
+        if(!shortUrl) throw new Error(jsonData ? 'SHRINK.PE invalid short URL' : 'SHRINK.PE invalid JSON/text URL');
         return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
     }
     if(cfg.key==='cuty'){
@@ -8563,26 +8709,93 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         }).eq('id',a.id).in('status',['created','shortened','landed']);
         if(ue)throw ue;
 
-        const deepLink=`https://t.me/${BOT_USERNAME}?start=lt_${nonce}`;
-        res.set('Cache-Control','no-store');
-        return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:#0f172a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{max-width:420px;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:22px;padding:24px}.b{display:block;margin-top:18px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900}.s{color:#94a3b8;font-size:13px;line-height:1.5}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2>ĐÃ ĐI QUA LINK THÀNH CÔNG</h2><p class="s">Bước cuối: mở đúng Telegram Bot để xác nhận tài khoản và nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p><a class="b" href="${safeHtml(deepLink)}">🤖 MỞ BOT TELEGRAM ĐỂ XÁC NHẬN</a></div></body></html>`);
+        const verificationCode=linkTaskVerificationCode(a);
+        if(!verificationCode)return res.status(503).send('<h2>⚠️ Hệ thống mã xác nhận chưa sẵn sàng.</h2>');
+        res.set('Cache-Control','no-store, no-cache, must-revalidate');
+        return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mã xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:linear-gradient(180deg,#07111f,#0f172a);color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{width:min(420px,100%);box-sizing:border-box;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:24px;padding:24px;box-shadow:0 18px 50px rgba(0,0,0,.35)}.code{font-size:40px;letter-spacing:10px;font-weight:900;color:#fbbf24;background:#0f172a;border:1px solid #475569;border-radius:16px;padding:14px 8px;margin:14px 0}.b{display:block;width:100%;box-sizing:border-box;border:0;margin-top:12px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900;font-size:14px}.b2{background:#0f766e}.s{color:#cbd5e1;font-size:13px;line-height:1.55}.ok{color:#86efac}.hint{color:#94a3b8;font-size:12px;margin-top:14px}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2 class="ok">VƯỢT LINK THÀNH CÔNG</h2><p class="s">🔐 MÃ XÁC NHẬN CỦA BẠN</p><div id="code" class="code">${safeHtml(verificationCode)}</div><button class="b" onclick="copyCode()">📋 SAO CHÉP MÃ</button><a class="b b2" href="${safeHtml(WEB_APP_URL)}">🚀 QUAY LẠI MINI APP</a><p class="hint">Quay lại Mini App → Nhiệm vụ → nhập mã này vào đúng nhiệm vụ vừa làm để nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p></div><script>function copyCode(){var c=document.getElementById('code').textContent.trim();if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(function(){alert('✅ Đã sao chép mã: '+c);}).catch(function(){fallback(c);});}else{fallback(c);}}function fallback(c){var t=document.createElement('textarea');t.value=c;document.body.appendChild(t);t.select();try{document.execCommand('copy');alert('✅ Đã sao chép mã: '+c);}catch(e){alert('Mã của bạn: '+c);}document.body.removeChild(t);}</script></body></html>`);
     }catch(e){
         console.error('Link task landing:',e?.message||e);
         return res.status(500).send('<h2>⚠️ Không thể xác nhận nhiệm vụ lúc này.</h2>');
     }
 });
-async function handleLinkTaskBotConfirmation(ctx,nonce){
-    const userId=String(ctx.from?.id||''),token=String(nonce||'');if(!userId||!token)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');
+app.post('/api/link-task/verify-code',async(req,res)=>{
+    const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||''),submittedCode=String(req.body?.code||'').trim();
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,code:'auth_failed',error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    const cfg=LINK_TASK_CONFIG[taskId];
+    if(!cfg)return res.status(400).json({success:false,code:'provider_unsupported',error:'Nhiệm vụ vượt link không hợp lệ.'});
+    // Kể cả payload không đủ 6 số cũng đi qua RPC với p_code_valid=false để mọi lần thử đều chịu cooldown server-side.
+    const submittedCodeFormatValid=/^\d{6}$/.test(submittedCode);
     try{
-        const db=linkTaskDb(),{data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',token).maybeSingle();if(error||!a)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');if(String(a.user_id)!==userId)return ctx.reply('❌ Link xác nhận này thuộc về tài khoản Telegram khác.');
-        const cfg=LINK_TASK_CONFIG[String(a.task_id||'')];if(!cfg)return ctx.reply('❌ Nhiệm vụ không còn tồn tại.');if(a.status==='rewarded')return ctx.reply('ℹ️ Nhiệm vụ này đã được xác nhận trước đó.\\nKhông có phần thưởng nào được cộng thêm.');
-        if(new Date(a.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).neq('status','rewarded');return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');}
-        if(a.status!=='landed'||!a.landed_at||!a.landing_ip_hash)return ctx.reply('❌ Chưa xác nhận hoàn thành quá trình vượt link.');
-        const {data:rpc,error:rpcError}=await db.rpc('link_task_reward_atomic',{p_nonce:token,p_user_id:userId,p_quota_type:cfg.quotaType,p_window_start:new Date(Date.now()-LINK_TASK_ROLLING_MS).toISOString(),p_day_key:vietnamDayKey(),p_max_ip:cfg.maxPerIp,p_max_device:cfg.maxPerDevice,p_max_device_ip:cfg.maxPerDeviceIp||0});if(rpcError)throw rpcError;
-        const result=Array.isArray(rpc)?rpc[0]:rpc;if(!result?.ok){const code=String(result?.code||'');if(code==='ip_limit')return ctx.reply('⚠️ IP này đã hết lượt nhận thưởng cho nhiệm vụ.');if(code==='device_limit')return ctx.reply('⚠️ Thiết bị này đã hết lượt nhận thưởng cho nhiệm vụ.');if(code==='device_ip_limit')return ctx.reply('⚠️ Cặp thiết bị/IP này đã hết lượt nhận thưởng cho nhiệm vụ.');if(code==='expired')return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');if(code==='not_landed')return ctx.reply('❌ Chưa xác nhận hoàn thành quá trình vượt link.');if(code==='wrong_user')return ctx.reply('❌ Link xác nhận này thuộc về tài khoản Telegram khác.');return ctx.reply('⚠️ Chưa thể xác nhận nhiệm vụ. Vui lòng thử lại.');}
-        if(!result.idempotent){await recordAntiFraudEvent(userId,'link-task',{rewardEvent:true,orders:Number(result.reward_orders||cfg.rewardOrders)});logTransaction(userId,'orders',Number(result.reward_orders||cfg.rewardOrders),`Vượt link ${cfg.provider}`);}
-        return ctx.reply(`✅ XÁC NHẬN VƯỢT LINK THÀNH CÔNG\\n\\n🔗 Nhiệm vụ: ${cfg.provider}\\n💰 Phần thưởng: +${Number(result.reward_orders||cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng\\n📦 Số dư mới: ${Number(result.orders||0).toLocaleString('vi-VN')} Đơn Hàng\\n\\n🎉 Phần thưởng đã được cộng vào tài khoản.`);
-    }catch(e){console.error('Link task bot confirm:',e?.message||e);return ctx.reply('⚠️ Không thể xác nhận nhiệm vụ lúc này. Vui lòng thử lại sau.');}
+        const dbReadiness=await checkLinkTaskDatabaseReadiness();
+        if(!dbReadiness.ready){
+            return res.status(503).json({success:false,code:dbReadiness.code||'link_task_db_not_ready',error:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'});
+        }
+        const db=linkTaskDb();
+        const {data:attempt,error:attemptError}=await db.from('link_task_attempts').select('*')
+            .eq('user_id',userId).eq('task_id',taskId)
+            .order('created_at',{ascending:false}).limit(1).maybeSingle();
+        if(attemptError)throw attemptError;
+        if(!attempt)return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+        if(attempt.status!=='rewarded' && (!attempt.expires_at || new Date(attempt.expires_at).getTime()<=Date.now())){
+            await db.from('link_task_attempts').update({status:'expired'}).eq('id',attempt.id).neq('status','rewarded');
+            return res.status(410).json({success:false,code:'expired',error:'Phiên vượt link đã hết hạn. Vui lòng nhận nhiệm vụ mới.'});
+        }
+        if(attempt.status!=='landed' && attempt.status!=='rewarded'){
+            return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+        }
+        const expectedCode=linkTaskVerificationCode(attempt);
+        const codeValid=submittedCodeFormatValid && /^\d{6}$/.test(expectedCode) && timingSafeEqualDigits(submittedCode,expectedCode);
+        const {data:rpc,error:rpcError}=await db.rpc('link_task_verify_code_atomic',{
+            p_nonce:String(attempt.nonce||''),p_user_id:userId,p_code_valid:codeValid,
+            p_quota_type:cfg.quotaType,p_window_start:new Date(Date.now()-LINK_TASK_ROLLING_MS).toISOString(),p_day_key:vietnamDayKey(),
+            p_max_ip:cfg.maxPerIp,p_max_device:cfg.maxPerDevice,p_max_device_ip:cfg.maxPerDeviceIp||0
+        });
+        if(rpcError)throw rpcError;
+        const result=Array.isArray(rpc)?rpc[0]:rpc;
+        if(!result?.ok){
+            const code=String(result?.code||'verify_failed');
+            if(code==='code_cooldown')return res.status(429).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.'});
+            if(code==='invalid_code')return res.status(400).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Mã xác nhận không đúng.'});
+            if(code==='expired')return res.status(410).json({success:false,code,error:'Phiên vượt link đã hết hạn. Vui lòng nhận nhiệm vụ mới.'});
+            if(code==='not_landed'||code==='not_found')return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+            if(code==='wrong_user')return res.status(403).json({success:false,code,error:'Mã xác nhận không thuộc tài khoản này.'});
+            if(code==='ip_limit')return res.status(429).json({success:false,code,error:'IP này đã hết lượt nhận thưởng cho nhiệm vụ.'});
+            if(code==='device_limit')return res.status(429).json({success:false,code,error:'Thiết bị này đã hết lượt nhận thưởng cho nhiệm vụ.'});
+            if(code==='device_ip_limit')return res.status(429).json({success:false,code,error:'Cặp thiết bị/IP này đã hết lượt nhận thưởng cho nhiệm vụ.'});
+            return res.status(409).json({success:false,code,error:'Chưa thể xác nhận nhiệm vụ. Vui lòng thử lại.'});
+        }
+        if(!result.idempotent){
+            await recordAntiFraudEvent(userId,'link-task',{rewardEvent:true,orders:Number(result.reward_orders||cfg.rewardOrders)});
+            logTransaction(userId,'orders',Number(result.reward_orders||cfg.rewardOrders),`Vượt link ${cfg.provider}`);
+        }
+        const fresh=await readUserRow(userId);
+        const freshUser=fresh?.data||{};
+        return res.json({
+            success:true,idempotent:!!result.idempotent,taskId,taskStatus:'rewarded',
+            rewardOrders:Number(result.reward_orders||cfg.rewardOrders),orders:Number(result.orders??freshUser.orders??0),
+            walletUpdatedAt:freshUser.walletUpdatedAt||null
+        });
+    }catch(e){
+        console.error('Link task verify code:',linkTaskDbDiagnosticCode(e),e?.message||e);
+        const dbState=linkTaskDbErrorState(e);if(dbState)linkTaskDbReadinessCache=null;
+        return res.status(503).json({success:false,code:dbState?.code||'database_error',error:dbState?.message||'Không thể xác nhận mã lúc này. Vui lòng thử lại sau.'});
+    }
+});
+
+async function handleLinkTaskBotConfirmation(ctx,nonce){
+    const userId=String(ctx.from?.id||''),token=String(nonce||'');
+    if(!userId||!token)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');
+    try{
+        const db=linkTaskDb();
+        const {data:a,error}=await db.from('link_task_attempts').select('user_id,task_id,status,expires_at,landed_at').eq('nonce',token).maybeSingle();
+        if(error||!a)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');
+        if(String(a.user_id)!==userId)return ctx.reply('❌ Link xác nhận này thuộc về tài khoản Telegram khác.');
+        if(a.status==='rewarded')return ctx.reply('ℹ️ Nhiệm vụ này đã được xác nhận trước đó. Không có phần thưởng nào được cộng thêm.');
+        if(!a.expires_at||new Date(a.expires_at).getTime()<=Date.now())return ctx.reply('❌ Link xác nhận đã hết hạn. Vui lòng nhận nhiệm vụ mới.');
+        if(a.status!=='landed'||!a.landed_at)return ctx.reply('❌ Chưa xác nhận hoàn thành quá trình vượt link.');
+        return ctx.reply('✅ Link của bạn đã được ghi nhận.\n\n🔐 Flow xác nhận hiện tại: quay lại Mini App → Nhiệm vụ → nhập mã 6 số đã hiển thị ở trang sau khi vượt link để nhận thưởng.');
+    }catch(e){console.error('Link task bot confirm legacy:',e?.message||e);return ctx.reply('⚠️ Không thể kiểm tra nhiệm vụ lúc này. Vui lòng thử lại sau.');}
 }
 // Configure Monetag S2S postback with ymid={ymid}&event_type={event_type}&zone_id={zone_id}&secret=<MONETAG_POSTBACK_SECRET>.
 app.get('/api/monetag/postback',async(req,res)=>{
