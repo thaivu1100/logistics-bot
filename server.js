@@ -855,6 +855,21 @@ const UPTOLINK_API_TOKEN = String(process.env.UPTOLINK_API_TOKEN || '').trim();
 const MONETAG_POSTBACK_SECRET = String(process.env.MONETAG_POSTBACK_SECRET || '').trim();
 const MONETAG_ZONE_ID = String(process.env.MONETAG_ZONE_ID || '11457064').trim();
 
+// Chỉ log trạng thái CÓ/THIẾU cấu hình Link Task một lần khi process khởi động.
+// Tuyệt đối không log giá trị token/secret.
+for (const [provider, configured] of [
+    ['SHRINK.PE', !!SHRINKPE_API_TOKEN],
+    ['CUTY', !!CUTY_API_TOKEN],
+    ['BBMKTS', !!BBMKTS_API_TOKEN],
+    ['LAYMA', !!LAYMA_API_TOKEN],
+    ['UPTOLINK', !!UPTOLINK_API_TOKEN],
+    ['SITE2S', !!SITE2S_API_TOKEN]
+]) {
+    console.log(`${configured ? '✅' : '❌'} LINK TASK ${provider}: ${configured ? 'configured' : 'missing token'}`);
+}
+if (!IP_HASH_SECRET) console.warn('⚠️ LINK TASK: thiếu secret hash mạng/thiết bị; nhiệm vụ vượt link sẽ tạm khóa an toàn.');
+if (!SUPABASE_SERVICE_ROLE_KEY) console.warn('⚠️ LINK TASK DB: thiếu service-role server-side; nhiệm vụ vượt link sẽ tạm khóa an toàn.');
+
 const bot = new Telegraf(BOT_TOKEN);
 
 // ==================== BOT USER LANGUAGE + PERSISTENT REPLY KEYBOARD ====================
@@ -3663,6 +3678,56 @@ bot.command('saoke', async (ctx) => {
     }
 });
 
+// /lsmail - shortcut ADMIN: đọc lịch sử mail đã duyệt trực tiếp từ Supabase, không dùng RAM làm source of truth.
+bot.command('lsmail', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    const BATCH_SIZE = 250;
+    const MAX_CHUNK = 3400;
+    try {
+        const db = jobMailDb();
+        const { count, error:countError } = await db.from('job_mails')
+            .select('id', { count:'exact', head:true })
+            .eq('status','approved');
+        if (countError) throw countError;
+        const total = Number(count || 0);
+        if (total <= 0) return ctx.reply('📭 Chưa có mail nào được duyệt.');
+
+        const chunks = [];
+        let current = `📧 DANH SÁCH MAIL ĐÃ DUYỆT\nTổng: ${total.toLocaleString('vi-VN')}\n`;
+        let offset = 0;
+        while (offset < total) {
+            const { data, error } = await db.from('job_mails')
+                .select('id,email_original,user_id,username,reviewed_at,reward_orders')
+                .eq('status','approved')
+                .order('reviewed_at',{ascending:false})
+                .range(offset, Math.min(offset + BATCH_SIZE - 1, total - 1));
+            if (error) throw error;
+            const rows = data || [];
+            if (!rows.length) break;
+            for (const mail of rows) {
+                const username = String(mail.username || '').replace(/^@/,'').trim();
+                const entry = `\n✅ MAIL ĐÃ DUYỆT #${mail.id}\n📧 Mail: ${mail.email_original || 'N/A'}\n🆔 User ID: ${mail.user_id || 'N/A'}\n👤 Username: ${username ? '@' + username : 'Không có username'}\n🕐 Duyệt lúc: ${mail.reviewed_at ? vietnamTimeText(new Date(mail.reviewed_at)) : 'N/A'}\n📦 Thưởng: ${Number(mail.reward_orders || JOB_MAIL_REWARD_ORDERS).toLocaleString('vi-VN')} Đơn Hàng\n`;
+                if ((current + entry).length > MAX_CHUNK && current.trim()) {
+                    chunks.push(current.trimEnd());
+                    current = '';
+                }
+                current += entry;
+            }
+            offset += rows.length;
+            if (rows.length < BATCH_SIZE) break;
+        }
+        if (current.trim()) chunks.push(current.trimEnd());
+
+        for (let i = 0; i < chunks.length; i++) {
+            const page = chunks.length > 1 ? `\n\n📄 Trang ${i + 1}/${chunks.length}` : '';
+            await replyJobMailMessageWithRetry(ctx, chunks[i] + page);
+        }
+    } catch (e) {
+        console.error('/lsmail:', e?.message || e);
+        return ctx.reply(jobMailDbUnavailable(e) ? jobMailSetupMessage(e) : '❌ Không thể tải lịch sử mail đã duyệt lúc này.');
+    }
+});
+
 // /mail - menu quản lý JOB MAIL (dùng được cả chat riêng và group, luôn kiểm tra isAdmin server-side)
 bot.command('mail', async (ctx) => {
     if (!isAdmin(ctx)) return;
@@ -5704,26 +5769,39 @@ const TASK_REWARDS = {
 const DAILY_TASK_IDS = Object.keys(TASK_REWARDS);
 const DAILY_TASK_ALL_REWARD = { coins: 1000, orders: 500, spins: 2 };
 
+const dailyTaskLegacyClaimsCache = new Map();
+let dailyTaskLegacyClaimsCacheDay = '';
 async function getServerTaskClaims(userId) {
     const today = vietnamDayKey();
+    if (dailyTaskLegacyClaimsCacheDay !== today) {
+        dailyTaskLegacyClaimsCache.clear();
+        dailyTaskLegacyClaimsCacheDay = today;
+    }
     const extra = await getUserExtra(userId);
     const legacy = (extra?.serverTaskClaims && typeof extra.serverTaskClaims === 'object') ? { ...extra.serverTaskClaims } : {};
-    // Marker chính của bản hiện tại nằm trong app_settings/serverTaskClaims. Nếu migration #6 cũ vẫn tồn tại
-    // và service-role khả dụng thì chỉ MERGE thêm dữ liệu cũ để deploy giữa ngày không cho user nhận lại.
+    // Marker chính của bản hiện tại nằm trong app_settings/serverTaskClaims. Migration #6 chỉ được đọc như
+    // nguồn tương thích cũ. Cache theo user/ngày để không query lại cùng bảng legacy ở mọi lần bấm NHẬN.
     const claims = legacy.__date === today ? legacy : { __date: today };
     if (!SUPABASE_SERVICE_ROLE_KEY) return claims;
-    try {
-        const { data, error } = await jobMailDb().from('daily_task_claims')
-            .select('task_id,day_key').eq('user_id', String(userId)).eq('day_key', today);
-        if (error) throw error;
-        for (const row of data || []) if (row?.task_id) claims[String(row.task_id)] = today;
-    } catch (e) {
-        // Không làm Daily Task chết chỉ vì migration/RPC cũ chưa được cài. Claim mới dùng persistent payout marker.
-        if (!getServerTaskClaims._warned) {
-            getServerTaskClaims._warned = true;
-            console.warn('⚠️ DAILY TASK legacy RPC/table chưa khả dụng; đang dùng persistent payout marker:', e?.message || e);
+    const cacheKey = `${String(userId)}:${today}`;
+    let legacyRows = dailyTaskLegacyClaimsCache.get(cacheKey);
+    if (!legacyRows) {
+        try {
+            const { data, error } = await jobMailDb().from('daily_task_claims')
+                .select('task_id,day_key').eq('user_id', String(userId)).eq('day_key', today);
+            if (error) throw error;
+            legacyRows = Array.isArray(data) ? data : [];
+            dailyTaskLegacyClaimsCache.set(cacheKey, legacyRows);
+        } catch (e) {
+            if (!getServerTaskClaims._warned) {
+                getServerTaskClaims._warned = true;
+                console.warn('⚠️ DAILY TASK legacy RPC/table chưa khả dụng; đang dùng persistent payout marker:', e?.message || e);
+            }
+            legacyRows = [];
+            dailyTaskLegacyClaimsCache.set(cacheKey, legacyRows);
         }
     }
+    for (const row of legacyRows) if (row?.task_id) claims[String(row.task_id)] = today;
     return claims;
 }
 async function getDailyActionFlags(userId) {
@@ -5782,28 +5860,32 @@ function dailyTaskPayoutLooksApplied(user, marker, payoutField, payoutId) {
         && Number(user.orders || 0) >= Number(marker.targetOrders || 0)
         && Number(user.spins || 0) >= Number(marker.targetSpins || 0);
 }
-async function persistDailyTaskClaim(userId, claims, taskId, today) {
+async function persistDailyTaskClaim(userId, claims, taskId, today, flushNow = true) {
     const nextClaims = { ...(claims || {}), __date:today, [taskId]:today };
     await saveUserExtra(userId, { serverTaskClaims:nextClaims });
-    if (!(await flushUserExtra())) throw new Error('Không lưu được trạng thái Daily Task.');
+    if (flushNow && !(await flushUserExtra())) throw new Error('Không lưu được trạng thái Daily Task.');
     return nextClaims;
 }
-async function executeDailyTaskPayout(userId, taskId, reward, claims, today) {
+async function executeDailyTaskPayout(userId, taskId, reward, claims, today, initialUser = null) {
     const payoutId = dailyTaskPayoutId(userId, today, taskId);
     const markerKey = dailyTaskPayoutMarkerKey(userId, today, taskId);
     const payoutField = dailyTaskPayoutField(taskId);
     let marker = await readPersistentEvent(markerKey);
+    let initial = initialUser || null;
 
     if (!marker) {
-        const current = await readUserRow(userId);
-        if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không tìm thấy user.') };
+        if (!initial) {
+            const current = await readUserRow(userId);
+            if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không tìm thấy user.') };
+            initial = current.data;
+        }
         const reservation = {
             status:'reserved', payoutId, userId:String(userId), taskId:String(taskId), dayKey:String(today),
             rewardCoins:Number(reward.coins || 0), rewardOrders:Number(reward.orders || 0), rewardSpins:Number(reward.spins || 0),
-            preCoins:Number(current.data.coins || 0), preOrders:Number(current.data.orders || 0), preSpins:Number(current.data.spins || 0),
-            targetCoins:Number(current.data.coins || 0) + Number(reward.coins || 0),
-            targetOrders:Number(current.data.orders || 0) + Number(reward.orders || 0),
-            targetSpins:Number(current.data.spins || 0) + Number(reward.spins || 0),
+            preCoins:Number(initial.coins || 0), preOrders:Number(initial.orders || 0), preSpins:Number(initial.spins || 0),
+            targetCoins:Number(initial.coins || 0) + Number(reward.coins || 0),
+            targetOrders:Number(initial.orders || 0) + Number(reward.orders || 0),
+            targetSpins:Number(initial.spins || 0) + Number(reward.spins || 0),
             createdAt:Date.now(), transactionLogged:false, fraudLogged:false
         };
         const once = await createPersistentEventOnce(markerKey, reservation);
@@ -5812,16 +5894,25 @@ async function executeDailyTaskPayout(userId, taskId, reward, claims, today) {
     }
 
     if (String(marker.status || '') === 'committed') {
-        await persistDailyTaskClaim(userId, claims, taskId, today);
-        const fresh = await readUserRow(userId);
-        if (fresh.error || !fresh.data) return { ok:false, reason:'database_temporarily_unavailable', error:fresh.error || new Error('Không đọc được ví mới.') };
-        return { ok:true, alreadyClaimed:true, payoutId, dayKey:today, marker, user:fresh.data };
+        const nextClaims = await persistDailyTaskClaim(userId, claims, taskId, today);
+        let freshData = initial;
+        if (!freshData || !dailyTaskPayoutLooksApplied(freshData, marker, payoutField, payoutId)) {
+            const fresh = await readUserRow(userId);
+            if (fresh.error || !fresh.data) return { ok:false, reason:'database_temporarily_unavailable', error:fresh.error || new Error('Không đọc được ví mới.') };
+            freshData = fresh.data;
+        }
+        return { ok:true, alreadyClaimed:true, payoutId, dayKey:today, marker, claims:nextClaims, user:freshData };
     }
 
-    let current = await readUserRow(userId);
-    if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không đọc được user.') };
+    let currentData = initial;
+    if (!currentData) {
+        const current = await readUserRow(userId);
+        if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không đọc được user.') };
+        currentData = current.data;
+    }
 
-    let alreadyApplied = dailyTaskPayoutLooksApplied(current.data, marker, payoutField, payoutId);
+    let alreadyApplied = dailyTaskPayoutLooksApplied(currentData, marker, payoutField, payoutId);
+    let nextClaims = null;
     if (!alreadyApplied) {
         marker = { ...marker, status:'mutating', mutatingAt:Date.now() };
         if (!(await writePersistentEvent(markerKey, marker, 4))) {
@@ -5835,28 +5926,33 @@ async function executeDailyTaskPayout(userId, taskId, reward, claims, today) {
             setFields:{ [payoutField]:payoutId }
         });
         if (mutation.error) return { ok:false, reason:'database_temporarily_unavailable', error:mutation.error };
-        // Nếu payoutField nằm trong user_extra_state thì ép flush ngay để giảm tối đa cửa sổ crash sau wallet mutation.
+
+        // Gộp payout-field fallback + serverTaskClaims vào CÙNG một lần flush user_extra_state để giảm latency.
+        // Wallet đã commit bằng CAS trước bước này; nếu process chết trước flush, marker "mutating" + target balance
+        // vẫn cho phép recovery mà không cộng lần hai.
+        nextClaims = await persistDailyTaskClaim(userId, claims, taskId, today, false);
         if (!(await flushUserExtra())) {
-            return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Phần thưởng đã xử lý nhưng trạng thái payout chưa flush xong.') };
+            return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Phần thưởng đã xử lý nhưng trạng thái payout/claim chưa flush xong.') };
         }
+
+        const fresh = await readUserRow(userId);
+        if (fresh.error || !fresh.data) return { ok:false, reason:'database_temporarily_unavailable', error:fresh.error || new Error('Không xác minh được ví sau payout.') };
+        currentData = fresh.data;
+        alreadyApplied = dailyTaskPayoutLooksApplied(currentData, marker, payoutField, payoutId);
+        if (!alreadyApplied) {
+            return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Không xác minh được trạng thái payout sau khi cập nhật ví.') };
+        }
+    } else {
+        nextClaims = await persistDailyTaskClaim(userId, claims, taskId, today);
     }
 
-    current = await readUserRow(userId);
-    if (current.error || !current.data) return { ok:false, reason:'database_temporarily_unavailable', error:current.error || new Error('Không xác minh được ví sau payout.') };
-    alreadyApplied = dailyTaskPayoutLooksApplied(current.data, marker, payoutField, payoutId);
-    if (!alreadyApplied) {
-        return { ok:false, reason:'database_temporarily_unavailable', error:new Error('Không xác minh được trạng thái payout sau khi cập nhật ví.') };
-    }
-
-    await persistDailyTaskClaim(userId, claims, taskId, today);
-    marker = { ...marker, status:'committed', committedAt:marker.committedAt || Date.now(), walletUpdatedAt:current.data.walletUpdatedAt || null };
+    marker = { ...marker, status:'committed', committedAt:marker.committedAt || Date.now(), walletUpdatedAt:currentData.walletUpdatedAt || null };
     if (!(await writePersistentEvent(markerKey, marker, 4))) {
-        // Claim đã persist nên tuyệt đối không rollback/cộng lại. Lần sau getServerTaskClaims sẽ trả already_claimed.
+        // Payout + claim đã persist nên tuyệt đối không rollback/cộng lại. Lần sau payoutId/serverTaskClaims sẽ recover.
         console.warn(`⚠️ Daily Task payout ${payoutId} đã cộng và claim nhưng chưa cập nhật được marker committed.`);
     }
-    return { ok:true, alreadyClaimed:false, payoutId, dayKey:today, marker, user:current.data };
+    return { ok:true, alreadyClaimed:false, payoutId, dayKey:today, marker, claims:nextClaims, user:currentData };
 }
-
 async function finalizeDailyTaskAudit(userId, taskId, reward, payoutResult, reasonLabel) {
     if (!payoutResult?.ok || payoutResult.alreadyClaimed) return;
     let marker = payoutResult.marker || {};
@@ -5884,29 +5980,49 @@ async function claimServerTask(userId, taskId) {
     try {
         releasePersistentTaskLock = await acquirePersistentLeaseLock(persistentEventKey('daily-task-user-lock', String(userId)),60*1000);
         if (!releasePersistentTaskLock) return {ok:false,reason:'processing'};
-        const fraudGate = await antiFraudRewardGate(userId);
+
+        // Hai nhánh này độc lập; chạy song song để giảm round-trip trước khi đánh giá task.
+        const [fraudGate,user] = await Promise.all([
+            antiFraudRewardGate(userId),
+            loadCurrentDailyUser(userId)
+        ]);
         if (!fraudGate.allowed) return { ok:false, reason:'fraud_hold', fraudGate };
-        const user = await loadCurrentDailyUser(userId);
         if (!user) return { ok:false, reason:'user_not_found' };
         if (user.isBanned) return { ok:false, reason:'banned' };
         if (!TASK_REWARDS[taskId]) return { ok:false, reason:'unsupported_task' };
 
         const today = vietnamDayKey();
-        const claims = { ...(await getServerTaskClaims(userId)) };
-        claims.__date = today;
-        if (claims[taskId] === today) return { ok:false, reason:'already_claimed' };
+        const [rawClaims,actionFlags] = await Promise.all([
+            getServerTaskClaims(userId),
+            getDailyActionFlags(userId)
+        ]);
+        const claims = { ...rawClaims, __date:today };
+        const reward = TASK_REWARDS[taskId];
 
-        const actionFlags = await getDailyActionFlags(userId);
+        if (claims[taskId] === today) {
+            return {
+                ok:true, taskId, reward, alreadyClaimed:true, user,
+                tasks:dailyTaskDefinitions(user,claims,actionFlags),
+                walletUpdatedAt:user.walletUpdatedAt || null
+            };
+        }
+
         const task = dailyTaskDefinitions(user, claims, actionFlags).find(t => t.id === taskId);
         if (!task || !task.eligible) return { ok:false, reason:'not_eligible' };
 
-        const reward = TASK_REWARDS[taskId];
-        const payout = await executeDailyTaskPayout(userId, taskId, reward, claims, today);
+        const payout = await executeDailyTaskPayout(userId, taskId, reward, claims, today, user);
         if (!payout.ok) return payout;
-        await finalizeDailyTaskAudit(userId, taskId, reward, payout, `Nhiệm vụ ${taskId}`);
+
+        const committedClaims = payout.claims || { ...claims, [taskId]:today };
+        const freshUser = payout.user || user;
+        // Audit không nằm trên critical path của số dư/claim; marker fraudLogged/transactionLogged giữ idempotency.
+        void finalizeDailyTaskAudit(userId, taskId, reward, payout, `Nhiệm vụ ${taskId}`)
+            .catch(e => console.error('Daily Task audit:', e?.message || e));
+
         return {
             ok:true, taskId, reward, alreadyClaimed:!!payout.alreadyClaimed,
-            user:payout.user, walletUpdatedAt:payout.user?.walletUpdatedAt || new Date().toISOString()
+            user:freshUser, tasks:dailyTaskDefinitions(freshUser,committedClaims,actionFlags),
+            walletUpdatedAt:freshUser?.walletUpdatedAt || new Date().toISOString()
         };
     } finally {
         if (releasePersistentTaskLock) { try { await releasePersistentTaskLock(); } catch (_) {} }
@@ -5920,8 +6036,7 @@ app.get('/api/daily-tasks/status/:id', async (req,res) => {
     try {
         const user = await loadCurrentDailyUser(userId);
         if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-        const claims = await getServerTaskClaims(userId);
-        const flags = await getDailyActionFlags(userId);
+        const [claims,flags] = await Promise.all([getServerTaskClaims(userId),getDailyActionFlags(userId)]);
         const tasks = dailyTaskDefinitions(user,claims,flags);
         const today = vietnamDayKey();
         const allTasksClaimed = claims.__all === today;
@@ -5943,11 +6058,6 @@ app.post('/api/task/claim', async (req,res) => {
         if (!userId || !taskId) return res.status(400).json({success:false,code:'invalid_request',error:'Thiếu userId/taskId.'});
         const result = await claimServerTask(userId,taskId);
         if (!result.ok) {
-            if (result.reason==='already_claimed') {
-                const {data:user}=await readUserRow(userId);
-                const tasks=dailyTaskDefinitions(user||{},await getServerTaskClaims(userId),await getDailyActionFlags(userId));
-                return res.json({success:true,alreadyClaimed:true,taskId,tasks,coins:user?.coins||0,orders:user?.orders||0,spins:user?.spins||0,walletUpdatedAt:user?.walletUpdatedAt||null});
-            }
             if (result.reason==='processing') return res.status(409).json({success:false,code:'processing',retry:true,error:'Phần thưởng đang được xử lý. Vui lòng chờ một chút.'});
             if (result.reason==='fraud_hold') return res.status(result.fraudGate.status).json({success:false,code:'fraud_hold',...result.fraudGate,verificationRequired:true});
             if (result.reason==='not_eligible') return res.status(409).json({success:false,code:'not_eligible',error:'Máy chủ chưa xác nhận bạn hoàn thành nhiệm vụ.'});
@@ -5961,7 +6071,9 @@ app.post('/api/task/claim', async (req,res) => {
             return res.status(400).json({success:false,code:String(result.reason||'task_failed'),error:'Không thể nhận phần thưởng nhiệm vụ lúc này.'});
         }
         const user = result.user || (await readUserRow(userId)).data;
-        const tasks = dailyTaskDefinitions(user||{}, await getServerTaskClaims(userId), await getDailyActionFlags(userId));
+        const tasks = Array.isArray(result.tasks)
+            ? result.tasks
+            : dailyTaskDefinitions(user||{}, ...(await Promise.all([getServerTaskClaims(userId),getDailyActionFlags(userId)])));
         res.json({success:true,alreadyClaimed:!!result.alreadyClaimed,reward:result.reward,taskId,tasks,coins:Number(user?.coins||0),orders:Number(user?.orders||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||result.walletUpdatedAt||null});
     } catch(e) {
         console.error('Daily Task claim:', e?.message || e);
@@ -5980,29 +6092,39 @@ app.post('/api/task/claim-all', async (req,res) => {
     try {
         releasePersistentTaskLock=await acquirePersistentLeaseLock(persistentEventKey('daily-task-user-lock',String(userId)),60*1000);
         if(!releasePersistentTaskLock) return res.status(409).json({success:false,code:'processing',retry:true,error:'Phần thưởng đang được xử lý trên một phiên khác.'});
-        const fraudGate=await antiFraudRewardGate(userId);
-        if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,code:'fraud_hold',...fraudGate,verificationRequired:true});
 
-        const user=await loadCurrentDailyUser(userId);
+        const [fraudGate,user]=await Promise.all([
+            antiFraudRewardGate(userId),
+            loadCurrentDailyUser(userId)
+        ]);
+        if(!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,code:'fraud_hold',...fraudGate,verificationRequired:true});
         if(!user) return res.status(404).json({success:false,code:'user_not_found',error:'Không tìm thấy người dùng.'});
+
         const today=vietnamDayKey();
-        const claims={...(await getServerTaskClaims(userId)),__date:today};
-        const defs=dailyTaskDefinitions(user,claims,await getDailyActionFlags(userId));
+        const [rawClaims,actionFlags]=await Promise.all([getServerTaskClaims(userId),getDailyActionFlags(userId)]);
+        const claims={...rawClaims,__date:today};
+        const defs=dailyTaskDefinitions(user,claims,actionFlags);
         if(defs.some(t=>claims[t.id]!==today)) return res.status(409).json({success:false,code:'not_eligible',error:'Chưa hoàn thành toàn bộ nhiệm vụ hôm nay.'});
         if(claims.__all===today) {
-            const fresh=await readUserRow(userId);
-            return res.json({success:true,alreadyClaimed:true,coins:Number(fresh.data?.coins||0),orders:Number(fresh.data?.orders||0),spins:Number(fresh.data?.spins||0),walletUpdatedAt:fresh.data?.walletUpdatedAt||null});
+            return res.json({
+                success:true,alreadyClaimed:true,tasks:defs,allTasksClaimed:true,
+                coins:Number(user.coins||0),orders:Number(user.orders||0),spins:Number(user.spins||0),walletUpdatedAt:user.walletUpdatedAt||null
+            });
         }
 
         const reward=DAILY_TASK_ALL_REWARD;
-        const payout=await executeDailyTaskPayout(userId,'__all',reward,claims,today);
+        const payout=await executeDailyTaskPayout(userId,'__all',reward,claims,today,user);
         if(!payout.ok) {
             console.error('Daily Task claim-all persistent payout failed:', payout.error?.message || payout.error || payout.reason);
             return res.status(503).json({success:false,code:'database_temporarily_unavailable',retry:true,error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
         }
-        await finalizeDailyTaskAudit(userId,'__all',reward,payout,'Thưởng hoàn thành tất cả nhiệm vụ ngày');
-        const fresh=payout.user || (await readUserRow(userId)).data;
-        return res.json({success:true,alreadyClaimed:!!payout.alreadyClaimed,reward,coins:Number(fresh?.coins||0),orders:Number(fresh?.orders||0),spins:Number(fresh?.spins||0),walletUpdatedAt:fresh?.walletUpdatedAt||null});
+        void finalizeDailyTaskAudit(userId,'__all',reward,payout,'Thưởng hoàn thành tất cả nhiệm vụ ngày')
+            .catch(e=>console.error('Daily Task claim-all audit:',e?.message||e));
+        const fresh=payout.user || user;
+        return res.json({
+            success:true,alreadyClaimed:!!payout.alreadyClaimed,reward,tasks:defs,allTasksClaimed:true,
+            coins:Number(fresh?.coins||0),orders:Number(fresh?.orders||0),spins:Number(fresh?.spins||0),walletUpdatedAt:fresh?.walletUpdatedAt||null
+        });
     } catch(e) {
         console.error('Daily Task claim-all:',e?.message||e);
         return res.status(500).json({success:false,code:'database_temporarily_unavailable',error:'Hệ thống phần thưởng đang tạm bận. Vui lòng thử lại.'});
@@ -7552,17 +7674,22 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
                 if (released) return;
                 released = true;
                 try {
-                    const current = await readPersistentEvent(lockKey);
-                    if (current?.owner === owner) {
-                        await supabase.from('app_settings').delete().eq('key', lockKey);
-                    }
+                    // app_settings.value là jsonb: xoá có điều kiện theo owner ngay trong DB để vừa giảm 1 round-trip
+                    // vừa tránh race read->delete làm xoá nhầm lease mới của instance khác.
+                    await supabase.from('app_settings').delete().eq('key', lockKey).contains('value', { owner });
                 } catch (_) {}
             };
         }
         if (once.error) return null;
         const existing = once.value || await readPersistentEvent(lockKey);
         if (!existing || existing.status === 'released' || Number(existing.leaseUntil || 0) <= Date.now()) {
-            try { await supabase.from('app_settings').delete().eq('key', lockKey); } catch (_) {}
+            try {
+                if (existing?.owner) {
+                    await supabase.from('app_settings').delete().eq('key', lockKey).contains('value', { owner:String(existing.owner) });
+                } else if (!existing) {
+                    // Không có row để dọn; vòng sau thử insert lại ngay.
+                }
+            } catch (_) {}
             await new Promise(r => setTimeout(r, 40 + attempt * 30));
             continue;
         }
@@ -7576,42 +7703,41 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
 const LINK_TASK_TTL_MS = 25 * 60 * 1000;
 const LINK_TASK_ROLLING_MS = 24 * 60 * 60 * 1000;
 const LINK_TASK_CONFIG = Object.freeze({
-    shrinkpe:Object.freeze({key:'shrinkpe',provider:'SHRINK.PE',taskId:'shrinkpe',rewardOrders:400,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
-    cuty:Object.freeze({key:'cuty',provider:'CUTY',taskId:'cuty',rewardOrders:200,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
-    bbmkts:Object.freeze({key:'bbmkts',provider:'BBMKTS',taskId:'bbmkts',rewardOrders:3500,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false}),
-    layma:Object.freeze({key:'layma',provider:'LAYMA',taskId:'layma',rewardOrders:4000,quotaType:'vietnamDay',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,vnOnly:true,requiresRiskCheck:true}),
-    uptolink_step2:Object.freeze({key:'uptolink_step2',provider:'UPTOLINK — BƯỚC 2',taskId:'uptolink_step2',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
-    uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
-    uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,vnOnly:false,requiresRiskCheck:false,unsupported:true}),
-    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:3000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0,vnOnly:false,requiresRiskCheck:false})
+    shrinkpe:Object.freeze({key:'shrinkpe',provider:'SHRINK.PE',taskId:'shrinkpe',rewardOrders:400,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0}),
+    cuty:Object.freeze({key:'cuty',provider:'CUTY',taskId:'cuty',rewardOrders:200,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0}),
+    bbmkts:Object.freeze({key:'bbmkts',provider:'BBMKTS',taskId:'bbmkts',rewardOrders:3500,quotaType:'rolling24h',maxPerIp:1,maxPerDevice:0,maxPerDeviceIp:0}),
+    layma:Object.freeze({key:'layma',provider:'LAYMA',taskId:'layma',rewardOrders:4000,quotaType:'vietnamDay',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0}),
+    uptolink_step2:Object.freeze({key:'uptolink_step2',provider:'UPTOLINK — BƯỚC 2',taskId:'uptolink_step2',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'4'}),
+    uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'3'}),
+    uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'0'}),
+    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:3000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0})
 });
 function linkTaskDb(){ return jobMailDb(); }
 function linkTaskProviderConfigured(cfg){
-    if(!cfg||cfg.unsupported) return false;
+    if(!cfg) return false;
     if(cfg.key==='shrinkpe') return !!SHRINKPE_API_TOKEN;
     if(cfg.key==='cuty') return !!CUTY_API_TOKEN;
     if(cfg.key==='bbmkts') return !!BBMKTS_API_TOKEN;
     if(cfg.key==='layma') return !!LAYMA_API_TOKEN;
     if(cfg.key==='site2s') return !!SITE2S_API_TOKEN;
+    if(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4') return !!UPTOLINK_API_TOKEN;
     return false;
 }
-function linkTaskRequiresRiskCheck(cfg){
-    return !!(cfg && (cfg.requiresRiskCheck === true || cfg.vnOnly === true));
-}
 function linkTaskNeedsRequestIp(cfg){
-    return !!(cfg && (linkTaskRequiresRiskCheck(cfg) || Number(cfg.maxPerIp||0)>0 || Number(cfg.maxPerDeviceIp||0)>0));
+    return !!(cfg && (Number(cfg.maxPerIp||0)>0 || Number(cfg.maxPerDeviceIp||0)>0));
+}
+function linkTaskUnavailableState(cfg,runtime={}){
+    if(!cfg) return {code:'provider_unsupported',message:'Nhiệm vụ này chưa được hỗ trợ.'};
+    if(!linkTaskProviderConfigured(cfg)) return {code:'missing_provider_token',message:'Nhiệm vụ này chưa được cấu hình trên máy chủ.'};
+    if(!SUPABASE_SERVICE_ROLE_KEY) return {code:'missing_service_role',message:'Hệ thống nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
+    // device_hash trong schema hiện tại cũng dùng cùng secret HMAC, vì vậy Link Task cần secret này ngay cả
+    // khi provider chỉ giới hạn theo thiết bị.
+    if(!IP_HASH_SECRET) return {code:'missing_ip_hash_secret',message:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
+    if(linkTaskNeedsRequestIp(cfg) && runtime.ipAvailable === false) return {code:'ip_unavailable',message:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'};
+    return {code:'',message:''};
 }
 function linkTaskUnavailableReason(cfg,runtime={}){
-    if(cfg?.unsupported) return 'Nhiệm vụ này chưa có tích hợp API chính thức nên tạm thời chưa khả dụng.';
-    if(!linkTaskProviderConfigured(cfg)) return 'Nhiệm vụ này đang tạm thời chưa khả dụng.';
-    if(!IP_HASH_SECRET) return 'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.';
-    if(!SUPABASE_SERVICE_ROLE_KEY) return 'Hệ thống lưu trạng thái nhiệm vụ đang tạm thời chưa sẵn sàng.';
-    if(linkTaskNeedsRequestIp(cfg) && runtime.ipAvailable === false) return 'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.';
-    if(linkTaskRequiresRiskCheck(cfg) && !IP_INTELLIGENCE_API_KEY) return 'Hệ thống xác minh IP/VPN cho nhiệm vụ này đang tạm thời chưa khả dụng.';
-    if(linkTaskRequiresRiskCheck(cfg) && runtime.networkVerificationAvailable === false) return 'Hệ thống xác minh IP/VPN cho nhiệm vụ này đang tạm thời chưa khả dụng.';
-    if(linkTaskRequiresRiskCheck(cfg) && runtime.networkBlocked === true) return 'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.';
-    if(cfg?.vnOnly && runtime.countryBlocked === true) return 'Nhiệm vụ này chỉ dành cho IP Việt Nam.';
-    return '';
+    return linkTaskUnavailableState(cfg,runtime).message;
 }
 function linkTaskRuleText(cfg){
     const suffix=cfg.quotaType==='rolling24h'?'/24H':'/ngày';
@@ -7619,17 +7745,15 @@ function linkTaskRuleText(cfg){
     if(cfg.maxPerIp>0) out.push(`${cfg.maxPerIp} lần/IP${suffix}`);
     if(cfg.maxPerDevice>0) out.push(`${cfg.maxPerDevice} lần/thiết bị${suffix}`);
     if(cfg.maxPerDeviceIp>0) out.push(`${cfg.maxPerDeviceIp} lần/thiết bị/IP${suffix}`);
-    if(cfg.vnOnly) out.push('chỉ IP Việt Nam');
-    if(linkTaskRequiresRiskCheck(cfg)) out.push('cấm VPN/Proxy');
     return out.join(' • ');
 }
 function linkTaskPublicConfig(cfg,remaining=null,latest=null,runtime={}){
-    const reason=runtime.forcedReason || linkTaskUnavailableReason(cfg,runtime);
+    const state=runtime.forcedState || linkTaskUnavailableState(cfg,runtime);
     return {
         id:cfg.key,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,
         maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,
-        vnOnly:cfg.vnOnly,requiresRiskCheck:linkTaskRequiresRiskCheck(cfg),rule:linkTaskRuleText(cfg),
-        available:!reason,unavailableReason:reason,
+        rule:linkTaskRuleText(cfg),
+        available:!state.message,unavailableCode:state.code||'',unavailableReason:state.message||'',
         remaining:remaining===null?(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0):Math.max(0,Number(remaining||0)),
         status:latest?.status||'idle',expiresAt:latest?.expires_at||null,rewardedAt:latest?.rewarded_at||null
     };
@@ -7659,36 +7783,95 @@ async function fetchProviderWithRetry(url,options={},timeoutMs=8000,retries=1){
 function validateShortUrl(raw,hosts){
     try{const u=new URL(String(raw||'').trim());const h=u.hostname.toLowerCase();return u.protocol==='https:'&&hosts.some(x=>h===x||h.endsWith('.'+x))?u.toString():'';}catch(_){return '';}
 }
+async function readProviderJson(response, providerName) {
+    const raw = await response.text();
+    if (!raw) throw new Error(`${providerName} trả response rỗng.`);
+    try { return JSON.parse(raw); }
+    catch (_) { throw new Error(`${providerName} trả JSON không hợp lệ.`); }
+}
 async function createProviderShortUrl(cfg,destination,nonce){
-    if(cfg.key==='bbmkts') return {shortUrl:new URL(`/link-task/bbmkts/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString(),slug:''};
     if(cfg.key==='shrinkpe'){
-        const u=new URL('https://shrink.pe/api');u.searchParams.set('api',SHRINKPE_API_TOKEN);u.searchParams.set('url',destination);u.searchParams.set('format','text');
-        const r=await fetchProviderWithRetry(u,{headers:{accept:'text/plain'}},8000,1);if(!r.ok)throw new Error(`SHRINK.PE HTTP ${r.status}`);
-        const shortUrl=validateShortUrl((await r.text()).trim(),['shrink.pe']);if(!shortUrl)throw new Error('SHRINK.PE trả link không hợp lệ.');
+        const u=new URL('https://shrink.pe/api');
+        u.searchParams.set('api',SHRINKPE_API_TOKEN);
+        u.searchParams.set('url',destination);
+        u.searchParams.set('format','json');
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'SHRINK.PE');
+        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`SHRINK.PE HTTP ${r.status}`);
+        const shortUrl=validateShortUrl(data?.shortenedUrl,['shrink.pe']);
+        if(!shortUrl)throw new Error('SHRINK.PE trả link không hợp lệ.');
         return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
     }
     if(cfg.key==='cuty'){
-        const body=new URLSearchParams({token:CUTY_API_TOKEN,url:destination,title:`Logistics ${nonce}`});
-        const r=await fetchProviderWithRetry('https://api.cuty.io/full',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',accept:'application/json'},body},8000,1);
-        const data=await r.json().catch(()=>({}));
-        if(r.status===429)throw new Error('CUTY đang giới hạn request.');if(r.status===422)throw new Error('CUTY từ chối dữ liệu.');if(r.status>=500)throw new Error('CUTY đang lỗi máy chủ.');
-        const shortUrl=validateShortUrl(data?.data?.short_url,['cuty.io']);if(!shortUrl)throw new Error('CUTY trả link không hợp lệ.');
+        const u=new URL('https://cuty.io/api');
+        u.searchParams.set('api',CUTY_API_TOKEN);
+        u.searchParams.set('url',destination);
+        u.searchParams.set('format','json');
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'CUTY');
+        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`CUTY HTTP ${r.status}`);
+        const shortUrl=validateShortUrl(data?.shortenedUrl,['cuty.io']);
+        if(!shortUrl)throw new Error('CUTY trả link không hợp lệ.');
+        return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
+    }
+    if(cfg.key==='bbmkts'){
+        const u=new URL('https://bbmkts.com/dapi');
+        u.searchParams.set('token',BBMKTS_API_TOKEN);
+        u.searchParams.set('longurl',destination);
+        u.searchParams.set('format','json');
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'BBMKTS');
+        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`BBMKTS HTTP ${r.status}`);
+        const shortUrl=validateShortUrl(data?.bbmktsUrl,['bbmkts.com']);
+        if(!shortUrl)throw new Error('BBMKTS trả link không hợp lệ.');
         return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
     }
     if(cfg.key==='layma'){
-        const u=new URL('https://api.layma.net/api/admin/shortlink/quicklink');u.searchParams.set('tokenUser',LAYMA_API_TOKEN);u.searchParams.set('format','json');u.searchParams.set('url',destination);u.searchParams.set('link_du_phong',destination);
-        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);const data=await r.json().catch(()=>({}));
+        const u=new URL('https://api.layma.net/api/admin/shortlink/quicklink');
+        u.searchParams.set('tokenUser',LAYMA_API_TOKEN);
+        u.searchParams.set('format','json');
+        u.searchParams.set('url',destination);
+        u.searchParams.set('link_du_phong',destination);
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'LAYMA');
         if(!r.ok||data?.success!==true)throw new Error(`LAYMA HTTP ${r.status}`);
-        const shortUrl=validateShortUrl(data?.html,['layma.net']);if(!shortUrl)throw new Error('LAYMA trả link không hợp lệ.');
+        const shortUrl=validateShortUrl(data?.html,['layma.net']);
+        if(!shortUrl)throw new Error('LAYMA trả link không hợp lệ.');
+        return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
+    }
+    if(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4'){
+        const u=new URL('https://octolink.vip/api');
+        u.searchParams.set('api',UPTOLINK_API_TOKEN);
+        u.searchParams.set('url',destination);
+        u.searchParams.set('format','json');
+        u.searchParams.set('type',String(cfg.uptolinkType));
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'UPTOLINK');
+        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`UPTOLINK HTTP ${r.status}`);
+        const shortUrl=validateShortUrl(data?.shortenedUrl,['octolink.vip']);
+        if(!shortUrl)throw new Error('UPTOLINK trả link không hợp lệ.');
         return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
     }
     if(cfg.key==='site2s'){
-        const u=new URL('https://site2s.com/api');u.searchParams.set('api',SITE2S_API_TOKEN);u.searchParams.set('url',destination);u.searchParams.set('format','json');u.searchParams.set('type','1');
-        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);const data=await r.json().catch(()=>({}));
-        if(!r.ok||String(data?.status||'').toLowerCase()==='error')throw new Error(`SITE2S HTTP ${r.status}`);
-        const shortUrl=validateShortUrl(data?.shortenedUrl,['site2s.com']);if(!shortUrl)throw new Error('SITE2S trả link không hợp lệ.');
-        const slug=new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||'';let baseline=null;
-        if(slug){try{const info=await fetchWithTimeoutServer(`https://site2s.com/${encodeURIComponent(slug)}/info/json`,{headers:{accept:'application/json'}},5000);const j=await info.json().catch(()=>({}));if(info.ok&&Number.isFinite(Number(j?.view)))baseline=Number(j.view);}catch(_){}}
+        const u=new URL('https://site2s.com/api');
+        u.searchParams.set('api',SITE2S_API_TOKEN);
+        u.searchParams.set('url',destination);
+        u.searchParams.set('format','json');
+        u.searchParams.set('type','1');
+        const r=await fetchProviderWithRetry(u,{headers:{accept:'application/json'}},8000,1);
+        const data=await readProviderJson(r,'SITE2S');
+        if(!r.ok||String(data?.status||'').toLowerCase()!=='success')throw new Error(`SITE2S HTTP ${r.status}`);
+        const shortUrl=validateShortUrl(data?.shortenedUrl,['site2s.com']);
+        if(!shortUrl)throw new Error('SITE2S trả link không hợp lệ.');
+        const slug=new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||'';
+        let baseline=null;
+        if(slug){
+            try{
+                const info=await fetchWithTimeoutServer(`https://site2s.com/${encodeURIComponent(slug)}/info/json`,{headers:{accept:'application/json'}},5000);
+                const j=await info.json().catch(()=>({}));
+                if(info.ok&&Number.isFinite(Number(j?.view)))baseline=Number(j.view);
+            }catch(_){}
+        }
         return {shortUrl,slug,baseline};
     }
     throw new Error('Provider chưa được hỗ trợ.');
@@ -7696,11 +7879,21 @@ async function createProviderShortUrl(cfg,destination,nonce){
 async function linkTaskCountFor(cfg,{ipHash='',deviceHash=''}={}){
     const db=linkTaskDb();
     const apply=q=>cfg.quotaType==='vietnamDay'?q.eq('day_key',vietnamDayKey()):q.gte('rewarded_at',new Date(Date.now()-LINK_TASK_ROLLING_MS).toISOString());
-    let ipCount=0,deviceCount=0,deviceIpCount=0;
     const deviceIpHash=ipHash&&deviceHash?hashNetworkValue(`${deviceHash}:${ipHash}`,'device-ip'):'';
-    if(cfg.maxPerIp>0&&ipHash){let q=db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').eq('landing_ip_hash',ipHash);q=apply(q);const {count,error}=await q;if(error)throw error;ipCount=Number(count||0);}
-    if(cfg.maxPerDevice>0&&deviceHash){let q=db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').eq('device_hash',deviceHash);q=apply(q);const {count,error}=await q;if(error)throw error;deviceCount=Number(count||0);}
-    if(cfg.maxPerDeviceIp>0&&deviceIpHash){let q=db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').eq('device_ip_hash',deviceIpHash);q=apply(q);const {count,error}=await q;if(error)throw error;deviceIpCount=Number(count||0);}
+    const countQuery=async(field,value)=>{
+        if(!value)return 0;
+        let q=db.from('link_task_attempts').select('id',{count:'exact',head:true})
+            .eq('task_id',cfg.taskId).eq('status','rewarded').eq(field,value);
+        q=apply(q);
+        const {count,error}=await q;
+        if(error)throw error;
+        return Number(count||0);
+    };
+    const [ipCount,deviceCount,deviceIpCount]=await Promise.all([
+        cfg.maxPerIp>0?countQuery('landing_ip_hash',ipHash):Promise.resolve(0),
+        cfg.maxPerDevice>0?countQuery('device_hash',deviceHash):Promise.resolve(0),
+        cfg.maxPerDeviceIp>0?countQuery('device_ip_hash',deviceIpHash):Promise.resolve(0)
+    ]);
     const a=cfg.maxPerIp>0?Math.max(0,cfg.maxPerIp-ipCount):Number.MAX_SAFE_INTEGER;
     const b=cfg.maxPerDevice>0?Math.max(0,cfg.maxPerDevice-deviceCount):Number.MAX_SAFE_INTEGER;
     const c=cfg.maxPerDeviceIp>0?Math.max(0,cfg.maxPerDeviceIp-deviceIpCount):Number.MAX_SAFE_INTEGER;
@@ -7710,15 +7903,6 @@ async function getActiveLinkTaskAttempt(userId,taskId){
     const db=linkTaskDb();const {data,error}=await db.from('link_task_attempts').select('*').eq('user_id',String(userId)).eq('task_id',taskId).in('status',['created','shortened','landed']).order('created_at',{ascending:false}).limit(1).maybeSingle();
     if(error)throw error;if(!data)return null;
     if(new Date(data.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',data.id).neq('status','rewarded');return null;}return data;
-}
-async function cleanNetworkForReward(req,{vnOnly=false}={}){
-    const ip=requestIp(req);
-    if(!ip)return {ok:false,status:503,providerUnavailable:true,networkVerificationRequired:true,networkVerificationReason:'IP_UNAVAILABLE',error:'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.'};
-    const risk=await checkIpRisk(ip);
-    if(!risk.available)return {ok:false,status:503,providerUnavailable:true,networkVerificationRequired:true,networkVerificationReason:risk.reason||'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Hệ thống xác minh IP/VPN đang tạm thời chưa khả dụng. Vui lòng thử lại sau.'};
-    if(networkRiskBlocked(risk))return {ok:false,status:403,vpnBlocked:true,error:'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.'};
-    if(vnOnly&&risk.countryCode!=='VN')return {ok:false,status:403,countryBlocked:true,error:'Nhiệm vụ này chỉ dành cho IP Việt Nam. Vui lòng chuyển sang mạng Việt Nam.'};
-    return {ok:true,ip,risk};
 }
 async function checkGlobalMiniAppNetworkAccess(req){
     const ip=requestIp(req);
@@ -7756,44 +7940,34 @@ app.get('/api/link-task/status/:id',async(req,res)=>{
 
         const deviceHash=IP_HASH_SECRET?hashNetworkValue(deviceId,'device'):'';
         const ipHash=(IP_HASH_SECRET&&ip)?hashNetworkValue(ip,'ip'):'';
-        const riskConfigs=Object.values(LINK_TASK_CONFIG).filter(cfg=>linkTaskRequiresRiskCheck(cfg)&&!cfg.unsupported&&linkTaskProviderConfigured(cfg));
-        let risk=null;
-        if(riskConfigs.length&&ip&&IP_INTELLIGENCE_API_KEY){
-            risk=await checkIpRisk(ip);
-        }
-
-        const items=[];
-        for(const cfg of Object.values(LINK_TASK_CONFIG)){
-            const runtime={
-                ipAvailable:!!ip,
-                networkVerificationAvailable:linkTaskRequiresRiskCheck(cfg)?!!risk?.available:true,
-                networkBlocked:!!(linkTaskRequiresRiskCheck(cfg)&&risk?.available&&networkRiskBlocked(risk)),
-                countryBlocked:!!(cfg.vnOnly&&risk?.available&&risk.countryCode!=='VN')
-            };
-            let reason=linkTaskUnavailableReason(cfg,runtime);
-            let remaining=(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0);
-            let latest=null;
-
-            if(!reason){
-                try{
-                    const db=linkTaskDb();
-                    const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});
-                    remaining=quota.remaining;
-                    const latestResult=await db.from('link_task_attempts')
+        const userPromise=readUserRow(userId);
+        const items=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{
+            const runtime={ipAvailable:!!ip};
+            const unavailable=linkTaskUnavailableState(cfg,runtime);
+            if(unavailable.message){
+                return linkTaskPublicConfig(cfg,null,null,{...runtime,forcedState:unavailable});
+            }
+            try{
+                const db=linkTaskDb();
+                const [quota,latestResult]=await Promise.all([
+                    linkTaskCountFor(cfg,{ipHash,deviceHash}),
+                    db.from('link_task_attempts')
                         .select('status,expires_at,rewarded_at')
                         .eq('user_id',userId).eq('task_id',cfg.taskId)
-                        .order('created_at',{ascending:false}).limit(1).maybeSingle();
-                    if(latestResult.error)throw latestResult.error;
-                    latest=latestResult.data||null;
-                }catch(e){
-                    console.error(`Link task status ${cfg.key}:`,e?.message||e);
-                    reason='Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.';
-                }
+                        .order('created_at',{ascending:false}).limit(1).maybeSingle()
+                ]);
+                if(latestResult.error)throw latestResult.error;
+                return linkTaskPublicConfig(cfg,quota.remaining,latestResult.data||null,runtime);
+            }catch(e){
+                console.error(`Link task status ${cfg.key}:`,e?.message||e);
+                return linkTaskPublicConfig(cfg,null,null,{
+                    ...runtime,
+                    forcedState:{code:'status_load_failed',message:'Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.'}
+                });
             }
-            items.push(linkTaskPublicConfig(cfg,remaining,latest,{...runtime,forcedReason:reason}));
-        }
+        }));
 
-        const {data:user}=await readUserRow(userId);
+        const {data:user}=await userPromise;
         res.set('Cache-Control','no-store');
         return res.json({
             success:true,tasks:items,
@@ -7811,47 +7985,36 @@ app.post('/api/link-task/start',async(req,res)=>{
     if(!requireTelegramMobile(req,res))return;
 
     const cfg=LINK_TASK_CONFIG[taskId];
-    if(!cfg)return res.status(400).json({success:false,error:'Nhiệm vụ vượt link không hợp lệ.'});
+    if(!cfg)return res.status(400).json({success:false,code:'provider_unsupported',error:'Nhiệm vụ vượt link không hợp lệ.'});
 
     const ip=requestIp(req);
     const deviceId=requestDeviceId(req);
-    if(!deviceId)return res.status(400).json({success:false,error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
+    if(!deviceId)return res.status(400).json({success:false,code:'device_unavailable',error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
 
-    const baseRuntime={ipAvailable:!!ip,networkVerificationAvailable:!linkTaskRequiresRiskCheck(cfg)||!!IP_INTELLIGENCE_API_KEY};
-    const unavailable=linkTaskUnavailableReason(cfg,baseRuntime);
-    if(unavailable){
-        return res.status(503).json({
-            success:false,providerUnavailable:true,
-            networkVerificationRequired:linkTaskRequiresRiskCheck(cfg)&&(!IP_INTELLIGENCE_API_KEY||!ip),
-            error:unavailable
-        });
+    const runtime={ipAvailable:!!ip};
+    const unavailable=linkTaskUnavailableState(cfg,runtime);
+    if(unavailable.message){
+        return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
     }
 
-    let verifiedIp=ip;
-    let risk=null;
-    if(linkTaskRequiresRiskCheck(cfg)){
-        const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});
-        if(!n.ok)return res.status(n.status).json({success:false,...n});
-        verifiedIp=n.ip;
-        risk=n.risk;
-    }else if(linkTaskNeedsRequestIp(cfg)&&!verifiedIp){
-        return res.status(503).json({success:false,providerUnavailable:true,error:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'});
+    if(linkTaskNeedsRequestIp(cfg)&&!ip){
+        return res.status(503).json({success:false,providerUnavailable:true,code:'ip_unavailable',error:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'});
     }
 
-    const ipHash=verifiedIp?hashNetworkValue(verifiedIp,'ip'):'';
+    const ipHash=ip?hashNetworkValue(ip,'ip'):'';
     const deviceHash=hashNetworkValue(deviceId,'device');
     if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash){
-        return res.status(503).json({success:false,providerUnavailable:true,error:'Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.'});
+        return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
     }
 
     const release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),60000);
-    if(!release)return res.status(409).json({success:false,retry:true,error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
+    if(!release)return res.status(409).json({success:false,retry:true,code:'processing',error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
     try{
         const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
         if(active?.short_url)return res.json({success:true,reused:true,shortUrl:active.short_url,expiresAt:active.expires_at,task:linkTaskPublicConfig(cfg)});
 
         const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash});
-        if(quota.remaining<=0)return res.status(429).json({success:false,limitReached:true,error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'});
+        if(quota.remaining<=0)return res.status(429).json({success:false,limitReached:true,code:'quota_reached',error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'});
 
         const nonce=crypto.randomBytes(18).toString('base64url');
         const now=new Date();
@@ -7862,9 +8025,9 @@ app.post('/api/link-task/start',async(req,res)=>{
             nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
             reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
             issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
-            country_code:risk?.countryCode||null,is_vpn:false,
+            country_code:null,is_vpn:false,
             created_at:now.toISOString(),expires_at:expiresAt,
-            metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,requiresRiskCheck:linkTaskRequiresRiskCheck(cfg)}
+            metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0}
         };
         const {data:inserted,error:insertError}=await db.from('link_task_attempts').insert(row).select('*').single();
         if(insertError){
@@ -7884,11 +8047,11 @@ app.post('/api/link-task/start',async(req,res)=>{
         }catch(pe){
             await db.from('link_task_attempts').update({status:'cancelled',metadata:{...row.metadata,providerError:String(pe?.message||pe).slice(0,180)}}).eq('id',inserted.id);
             console.error(`Link provider ${cfg.key}:`,pe?.message||pe);
-            return res.status(503).json({success:false,providerUnavailable:true,error:'Nhiệm vụ hiện đang tạm hết link hoặc provider gặp lỗi. Vui lòng thử lại sau.'});
+            return res.status(503).json({success:false,providerUnavailable:true,code:'provider_error',error:'Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.'});
         }
     }catch(e){
         console.error('Link task start:',e?.message||e);
-        return res.status(500).json({success:false,error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
+        return res.status(500).json({success:false,code:'link_task_start_failed',error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
     }finally{
         try{await release();}catch(_){}
     }
@@ -7908,23 +8071,18 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         }
         if(!isMobileUserAgent(req))return res.status(403).send('<h2>📱 Chỉ hỗ trợ hoàn thành nhiệm vụ trên điện thoại.</h2>');
 
-        let landingIp=requestIp(req);
-        let risk=null;
-        if(linkTaskRequiresRiskCheck(cfg)){
-            const n=await cleanNetworkForReward(req,{vnOnly:cfg.vnOnly});
-            if(!n.ok)return res.status(n.status).send(`<h2>🚫 ${safeHtml(n.error)}</h2>`);
-            landingIp=n.ip;
-            risk=n.risk;
-        }else if(linkTaskNeedsRequestIp(cfg)&&!landingIp){
+        const landingIp=requestIp(req);
+        if(linkTaskNeedsRequestIp(cfg)&&!landingIp){
             return res.status(503).send('<h2>⚠️ Tạm thời chưa xác định được IP kết nối. Vui lòng thử lại sau.</h2>');
         }
-
         const landingIpHash=landingIp?hashNetworkValue(landingIp,'ip'):'';
-        if(linkTaskNeedsRequestIp(cfg)&&!landingIpHash)return res.status(503).send('<h2>⚠️ Hệ thống xác minh nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
+        if((linkTaskNeedsRequestIp(cfg)&&!landingIpHash)||!a.device_hash){
+            return res.status(503).send('<h2>⚠️ Hệ thống xác minh lượt nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
+        }
         const deviceIpHash=a.device_hash&&landingIpHash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
         const {error:ue}=await db.from('link_task_attempts').update({
             status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,
-            country_code:risk?.countryCode||a.country_code||null,is_vpn:false,landed_at:new Date().toISOString()
+            country_code:null,is_vpn:false,landed_at:new Date().toISOString()
         }).eq('id',a.id).in('status',['created','shortened','landed']);
         if(ue)throw ue;
 
@@ -7935,15 +8093,6 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         console.error('Link task landing:',e?.message||e);
         return res.status(500).send('<h2>⚠️ Không thể xác nhận nhiệm vụ lúc này.</h2>');
     }
-});
-app.get('/link-task/bbmkts/:nonce',async(req,res)=>{
-    const nonce=String(req.params.nonce||'');
-    try{
-        if(!BBMKTS_API_TOKEN)return res.status(503).send('<h2>BBMKTS chưa được cấu hình.</h2>');const db=linkTaskDb(),{data:a}=await db.from('link_task_attempts').select('nonce,status,expires_at').eq('nonce',nonce).maybeSingle();
-        if(!a||!['created','shortened','landed'].includes(String(a.status||'')))return res.status(404).send('<h2>Link không hợp lệ.</h2>');if(new Date(a.expires_at).getTime()<=Date.now())return res.status(410).send('<h2>Link đã hết hạn.</h2>');
-        const destination=new URL(`/api/link-task/landing/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString(),publicToken=JSON.stringify(BBMKTS_API_TOKEN).replace(/</g,'\\u003c');
-        res.set('Cache-Control','no-store');return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BBMKTS</title></head><body style="font-family:system-ui;background:#0f172a;color:#fff;text-align:center;padding:40px 20px"><h2>🔗 BBMKTS</h2><p>Nhấn nút bên dưới để bắt đầu nhiệm vụ.</p><a href="${safeHtml(destination)}" style="display:inline-block;background:#2563eb;color:#fff;padding:14px 22px;border-radius:12px;text-decoration:none;font-weight:800">BẮT ĐẦU VƯỢT LINK</a><script>var bb_url='https://bbmkts.com/';var bb_api_token=${publicToken};var bb_exclude_domains=[];</script><script src="https://bbmkts.com/js/fullpageapi.js"></script></body></html>`);
-    }catch(e){console.error('BBMKTS bridge:',e?.message||e);return res.status(500).send('<h2>BBMKTS tạm thời không khả dụng.</h2>');}
 });
 async function handleLinkTaskBotConfirmation(ctx,nonce){
     const userId=String(ctx.from?.id||''),token=String(nonce||'');if(!userId||!token)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');
