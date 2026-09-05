@@ -8297,7 +8297,7 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
 
 
 // ==================== MOBILE ACCESS + LINK TASKS / VƯỢT LINK ====================
-const LINK_TASK_TTL_MS = 25 * 60 * 1000;
+const LINK_TASK_TTL_MS = 10 * 60 * 1000;
 const LINK_TASK_ROLLING_MS = 24 * 60 * 60 * 1000;
 const LINK_TASK_CODE_COOLDOWN_MS = 7 * 1000;
 const LINK_TASK_CONFIG = Object.freeze({
@@ -8801,10 +8801,119 @@ async function linkTaskCountFor(cfg,{ipHash='',deviceHash='',userId='',resetAt=n
     const c=cfg.maxPerDeviceIp>0?Math.max(0,cfg.maxPerDeviceIp-deviceIpCount):Number.MAX_SAFE_INTEGER;
     return {ipCount,deviceCount,deviceIpCount,remaining:Math.min(a,b,c),resetAt:effectiveResetAt||null};
 }
+const LINK_TASK_ACTIVE_STATUSES = Object.freeze(['created','shortened','landed']);
+function linkTaskAttemptIsActive(attempt){
+    return !!attempt && LINK_TASK_ACTIVE_STATUSES.includes(String(attempt.status||''));
+}
+function linkTaskAttemptIsExpired(attempt,nowMs=Date.now()){
+    if(!attempt)return true;
+    const expiresMs=Date.parse(String(attempt.expires_at||''));
+    return !Number.isFinite(expiresMs) || expiresMs<=nowMs;
+}
+async function normalizeLinkTaskAttemptExpiry(attempt,db=linkTaskDb()){
+    if(!attempt||!linkTaskAttemptIsActive(attempt)||!linkTaskAttemptIsExpired(attempt))return attempt;
+    const {data:expired,error}=await db.from('link_task_attempts')
+        .update({status:'expired'})
+        .eq('id',attempt.id)
+        .in('status',LINK_TASK_ACTIVE_STATUSES)
+        .select('*').maybeSingle();
+    if(error)throw error;
+    if(expired)return expired;
+    const {data:fresh,error:freshError}=await db.from('link_task_attempts').select('*').eq('id',attempt.id).maybeSingle();
+    if(freshError)throw freshError;
+    return fresh||null;
+}
 async function getActiveLinkTaskAttempt(userId,taskId){
-    const db=linkTaskDb();const {data,error}=await db.from('link_task_attempts').select('*').eq('user_id',String(userId)).eq('task_id',taskId).in('status',['created','shortened','landed']).order('created_at',{ascending:false}).limit(1).maybeSingle();
-    if(error)throw error;if(!data)return null;
-    if(new Date(data.expires_at).getTime()<=Date.now()){await db.from('link_task_attempts').update({status:'expired'}).eq('id',data.id).neq('status','rewarded');return null;}return data;
+    const db=linkTaskDb();
+    const {data,error}=await db.from('link_task_attempts').select('*')
+        .eq('user_id',String(userId)).eq('task_id',taskId)
+        .in('status',LINK_TASK_ACTIVE_STATUSES)
+        .order('created_at',{ascending:false}).limit(1).maybeSingle();
+    if(error)throw error;
+    if(!data)return null;
+    const normalized=await normalizeLinkTaskAttemptExpiry(data,db);
+    return linkTaskAttemptIsActive(normalized)?normalized:null;
+}
+function linkTaskAttemptClientPayload(cfg,attempt,{reused=false,processing=false}={}){
+    const status=String(attempt?.status||'idle');
+    const shortUrl=(status==='created'||status==='shortened')?String(attempt?.short_url||''):'';
+    const creating=status==='created'&&!shortUrl;
+    return {
+        success:true,reused:!!reused,processing:!!processing,creating,
+        code:creating?'creating':'',
+        taskId:cfg.taskId,status,shortUrl,expiresAt:attempt?.expires_at||null,
+        task:linkTaskPublicConfig(cfg,null,attempt)
+    };
+}
+async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
+    const quotaReset=await readLinkTaskQuotaReset(userId).catch(()=>null);
+    const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''});
+    if(quota.remaining<=0){
+        return {ok:false,httpStatus:429,limitReached:true,code:'quota_reached',error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'};
+    }
+
+    const nonce=crypto.randomBytes(18).toString('base64url');
+    const now=new Date();
+    const expiresAt=new Date(now.getTime()+LINK_TASK_TTL_MS).toISOString();
+    const destination=new URL(`/api/link-task/landing/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString();
+    const db=linkTaskDb();
+    const row={
+        nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
+        reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
+        issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
+        country_code:null,is_vpn:false,
+        created_at:now.toISOString(),expires_at:expiresAt,
+        metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0}
+    };
+    const {data:inserted,error:insertError}=await db.from('link_task_attempts').insert(row).select('*').single();
+    if(insertError){
+        if(insertError.code==='23505'){
+            const existing=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+            if(existing)return {ok:true,attempt:existing,reused:true};
+        }
+        throw insertError;
+    }
+
+    try{
+        const made=await createProviderShortUrl(cfg,destination,nonce);
+        const {data:updated,error:updateError}=await db.from('link_task_attempts')
+            .update({
+                status:'shortened',
+                short_url:made.shortUrl,
+                provider_slug:made.slug||null,
+                provider_view_baseline:Number.isFinite(Number(made.baseline))?Number(made.baseline):null
+            })
+            .eq('id',inserted.id)
+            .eq('status','created')
+            .gt('expires_at',new Date().toISOString())
+            .select('*').maybeSingle();
+        if(updateError)throw updateError;
+        if(updated)return {ok:true,attempt:updated,reused:false};
+
+        const {data:fresh,error:freshError}=await db.from('link_task_attempts').select('*').eq('id',inserted.id).maybeSingle();
+        if(freshError)throw freshError;
+        const normalized=await normalizeLinkTaskAttemptExpiry(fresh,db);
+        if(normalized?.status==='expired'){
+            return {ok:false,httpStatus:410,code:'expired',error:'Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.'};
+        }
+        if(normalized?.status==='cancelled'){
+            return {ok:false,httpStatus:409,code:'cancelled',error:'Nhiệm vụ này đã bị hủy. Vui lòng nhận nhiệm vụ mới.'};
+        }
+        if(linkTaskAttemptIsActive(normalized))return {ok:true,attempt:normalized,reused:true};
+        return {ok:false,httpStatus:409,code:'state_changed',error:'Trạng thái nhiệm vụ đã thay đổi. Vui lòng tải lại nhiệm vụ.'};
+    }catch(pe){
+        const dbState=linkTaskDbErrorState(pe);
+        if(dbState)linkTaskDbReadinessCache=null;
+        try{
+            await db.from('link_task_attempts').update({
+                status:'cancelled',
+                metadata:{...row.metadata,providerError:safeProviderDiagnostic(pe)}
+            }).eq('id',inserted.id).eq('status','created');
+        }catch(_){}
+        console.error(`Link provider ${cfg.key}:`,safeProviderDiagnostic(pe));
+        if(dbState)return {ok:false,httpStatus:503,providerUnavailable:true,code:dbState.code,error:dbState.message};
+        return {ok:false,httpStatus:503,providerUnavailable:true,code:'provider_error',error:'Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.'};
+    }
 }
 async function checkGlobalMiniAppNetworkAccess(req){
     const ip=requestIp(req);
@@ -8872,12 +8981,13 @@ app.get('/api/link-task/status/:id',async(req,res)=>{
                 const [quota,latestResult]=await Promise.all([
                     linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''}),
                     db.from('link_task_attempts')
-                        .select('status,expires_at,rewarded_at,short_url')
+                        .select('id,status,created_at,expires_at,rewarded_at,short_url')
                         .eq('user_id',userId).eq('task_id',cfg.taskId)
                         .order('created_at',{ascending:false}).limit(1).maybeSingle()
                 ]);
                 if(latestResult.error)throw latestResult.error;
-                return linkTaskPublicConfig(cfg,quota.remaining,latestResult.data||null,runtime);
+                const latest=await normalizeLinkTaskAttemptExpiry(latestResult.data||null,db);
+                return linkTaskPublicConfig(cfg,quota.remaining,latest,runtime);
             }catch(e){
                 console.error(`Link task status ${cfg.key}:`,linkTaskDbDiagnosticCode(e));
                 const dbState=linkTaskDbErrorState(e);
@@ -8918,7 +9028,6 @@ app.post('/api/link-task/start',async(req,res)=>{
     if(unavailable.message){
         return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
     }
-
     if(linkTaskNeedsRequestIp(cfg)&&!ip){
         return res.status(503).json({success:false,providerUnavailable:true,code:'ip_unavailable',error:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'});
     }
@@ -8929,76 +9038,163 @@ app.post('/api/link-task/start',async(req,res)=>{
         return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
     }
 
-    // Không phát short URL nếu table/RPC chưa sẵn sàng: user sẽ không thể được ghi nhận/nhận thưởng an toàn.
     const dbReadiness=await checkLinkTaskDatabaseReadiness();
     if(!dbReadiness.ready){
         return res.status(503).json({
-            success:false,
-            providerUnavailable:true,
+            success:false,providerUnavailable:true,
             code:dbReadiness.code||'link_task_db_not_ready',
             error:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'
         });
     }
 
-    const release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),60000);
-    if(!release)return res.status(409).json({success:false,retry:true,code:'processing',error:'Nhiệm vụ đang được tạo trên một phiên khác.'});
     try{
-        const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
-        if(active?.short_url)return res.json({success:true,reused:true,shortUrl:active.short_url,expiresAt:active.expires_at,task:linkTaskPublicConfig(cfg)});
-
-        const quotaReset=await readLinkTaskQuotaReset(userId).catch(()=>null);
-        const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''});
-        if(quota.remaining<=0)return res.status(429).json({success:false,limitReached:true,code:'quota_reached',error:'Bạn đã hết lượt của nhiệm vụ này theo IP/thiết bị.'});
-
-        const nonce=crypto.randomBytes(18).toString('base64url');
-        const now=new Date();
-        const expiresAt=new Date(now.getTime()+LINK_TASK_TTL_MS).toISOString();
-        const destination=new URL(`/api/link-task/landing/${encodeURIComponent(nonce)}`,WEB_APP_URL).toString();
-        const db=linkTaskDb();
-        const row={
-            nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
-            reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
-            issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
-            country_code:null,is_vpn:false,
-            created_at:now.toISOString(),expires_at:expiresAt,
-            metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0}
-        };
-        const {data:inserted,error:insertError}=await db.from('link_task_attempts').insert(row).select('*').single();
-        if(insertError){
-            if(insertError.code==='23505'){
-                const existing=await getActiveLinkTaskAttempt(userId,cfg.taskId);
-                if(existing?.short_url)return res.json({success:true,reused:true,shortUrl:existing.short_url,expiresAt:existing.expires_at,task:linkTaskPublicConfig(cfg)});
-            }
-            throw insertError;
+        const beforeLock=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+        if(beforeLock){
+            const payload=linkTaskAttemptClientPayload(cfg,beforeLock,{reused:true});
+            return res.status(payload.creating?202:200).json(payload);
         }
+
+        const release=await acquirePersistentLeaseLock(
+            persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),
+            60 * 1000
+        );
+        if(!release){
+            const raced=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+            if(raced){
+                const payload=linkTaskAttemptClientPayload(cfg,raced,{reused:true,processing:true});
+                return res.status(payload.creating?202:200).json(payload);
+            }
+            return res.status(202).json({
+                success:true,processing:true,creating:true,code:'processing',taskId,
+                status:'creating',shortUrl:'',expiresAt:null,
+                message:'Hệ thống đang tạo nhiệm vụ. Vui lòng chờ một chút.'
+            });
+        }
+
         try{
-            const made=await createProviderShortUrl(cfg,destination,nonce);
-            const {data:updated,error:updateError}=await db.from('link_task_attempts')
-                .update({status:'shortened',short_url:made.shortUrl,provider_slug:made.slug||null,provider_view_baseline:Number.isFinite(Number(made.baseline))?Number(made.baseline):null})
-                .eq('id',inserted.id).select('*').single();
-            if(updateError)throw updateError;
-            return res.json({success:true,shortUrl:updated.short_url,expiresAt:updated.expires_at,task:linkTaskPublicConfig(cfg)});
-        }catch(pe){
-            const dbState=linkTaskDbErrorState(pe);
-            if(dbState) linkTaskDbReadinessCache=null;
-            try{
-                await db.from('link_task_attempts').update({
-                    status:'cancelled',
-                    metadata:{...row.metadata,providerError:safeProviderDiagnostic(pe)}
-                }).eq('id',inserted.id);
-            }catch(_){}
-            console.error(`Link provider ${cfg.key}:`,safeProviderDiagnostic(pe));
-            if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
-            return res.status(503).json({success:false,providerUnavailable:true,code:'provider_error',error:'Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.'});
+            const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+            if(active){
+                const payload=linkTaskAttemptClientPayload(cfg,active,{reused:true});
+                return res.status(payload.creating?202:200).json(payload);
+            }
+
+            const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
+            if(!created.ok){
+                return res.status(created.httpStatus||503).json({
+                    success:false,
+                    providerUnavailable:!!created.providerUnavailable,
+                    limitReached:!!created.limitReached,
+                    code:created.code||'link_task_error',
+                    error:created.error||'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'
+                });
+            }
+            const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
+            return res.status(payload.creating?202:200).json(payload);
+        }finally{
+            try{await release();}catch(_){}
         }
     }catch(e){
-        console.error('Link task start:',e?.message||e);
+        console.error('Link task start:',linkTaskDbDiagnosticCode(e),e?.message||e);
         const dbState=linkTaskDbErrorState(e);
-        if(dbState) linkTaskDbReadinessCache=null;
+        if(dbState)linkTaskDbReadinessCache=null;
         if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
         return res.status(500).json({success:false,code:'database_error',error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
+    }
+});
+
+app.post('/api/link-task/change',async(req,res)=>{
+    const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+
+    const cfg=LINK_TASK_CONFIG[taskId];
+    if(!cfg)return res.status(400).json({success:false,code:'provider_unsupported',error:'Nhiệm vụ vượt link không hợp lệ.'});
+
+    const ip=requestIp(req);
+    const deviceId=requestDeviceId(req);
+    if(!deviceId)return res.status(400).json({success:false,code:'device_unavailable',error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
+
+    const runtime={ipAvailable:!!ip};
+    const unavailable=linkTaskUnavailableState(cfg,runtime);
+    if(unavailable.message){
+        return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
+    }
+    if(linkTaskNeedsRequestIp(cfg)&&!ip){
+        return res.status(503).json({success:false,providerUnavailable:true,code:'ip_unavailable',error:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'});
+    }
+
+    const ipHash=ip?hashNetworkValue(ip,'ip'):'';
+    const deviceHash=hashNetworkValue(deviceId,'device');
+    if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash){
+        return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
+    }
+
+    const dbReadiness=await checkLinkTaskDatabaseReadiness();
+    if(!dbReadiness.ready){
+        return res.status(503).json({
+            success:false,providerUnavailable:true,
+            code:dbReadiness.code||'link_task_db_not_ready',
+            error:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'
+        });
+    }
+
+    let release=null;
+    try{
+        release=await acquirePersistentLeaseLock(
+            persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),
+            60 * 1000
+        );
+        if(!release){
+            return res.status(202).json({
+                success:true,processing:true,changing:true,creating:true,code:'processing',taskId,
+                status:'changing',shortUrl:'',expiresAt:null,
+                message:'Hệ thống đang đổi nhiệm vụ. Vui lòng chờ một chút.'
+            });
+        }
+
+        const db=linkTaskDb();
+        const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+        if(active){
+            const oldMetadata=(active.metadata&&typeof active.metadata==='object'&&!Array.isArray(active.metadata))?active.metadata:{};
+            const cancelledAt=new Date().toISOString();
+            const {data:cancelled,error:cancelError}=await db.from('link_task_attempts')
+                .update({
+                    status:'cancelled',
+                    metadata:{...oldMetadata,cancelledReason:'user_changed_task',cancelledAt}
+                })
+                .eq('id',active.id)
+                .in('status',LINK_TASK_ACTIVE_STATUSES)
+                .select('id,status').maybeSingle();
+            if(cancelError)throw cancelError;
+            if(!cancelled){
+                const {data:fresh,error:freshError}=await db.from('link_task_attempts').select('status').eq('id',active.id).maybeSingle();
+                if(freshError)throw freshError;
+                if(fresh?.status==='rewarded'){
+                    return res.status(409).json({success:false,code:'already_rewarded',error:'Nhiệm vụ vừa được xác nhận thưởng nên không thể đổi.'});
+                }
+            }
+        }
+
+        const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
+        if(!created.ok){
+            return res.status(created.httpStatus||503).json({
+                success:false,
+                providerUnavailable:!!created.providerUnavailable,
+                limitReached:!!created.limitReached,
+                code:created.code||'link_task_error',
+                error:created.error||'Không thể đổi nhiệm vụ vượt link. Vui lòng thử lại sau.'
+            });
+        }
+        const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
+        return res.status(payload.creating?202:200).json({...payload,changed:true});
+    }catch(e){
+        console.error('Link task change:',linkTaskDbDiagnosticCode(e),e?.message||e);
+        const dbState=linkTaskDbErrorState(e);
+        if(dbState)linkTaskDbReadinessCache=null;
+        if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
+        return res.status(500).json({success:false,code:'database_error',error:'Không thể đổi nhiệm vụ vượt link. Vui lòng thử lại sau.'});
     }finally{
-        try{await release();}catch(_){}
+        if(release){try{await release();}catch(_){}}
     }
 });
 app.get('/api/link-task/provider-fallback/:nonce',async(req,res)=>{
@@ -9007,7 +9203,9 @@ app.get('/api/link-task/provider-fallback/:nonce',async(req,res)=>{
         const db=linkTaskDb();
         const {data:a,error}=await db.from('link_task_attempts').select('id,status,expires_at').eq('nonce',nonce).maybeSingle();
         if(error||!a)return res.status(404).send('<h2>❌ Link nhiệm vụ không hợp lệ.</h2>');
-        if(['created','shortened'].includes(String(a.status||''))){
+        if(['created','shortened','landed'].includes(String(a.status||'')) && (!a.expires_at || new Date(a.expires_at).getTime()<=Date.now())){
+            await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+        }else if(['created','shortened'].includes(String(a.status||''))){
             await db.from('link_task_attempts').update({status:'cancelled'}).eq('id',a.id).in('status',['created','shortened']);
         }
         res.set('Cache-Control','no-store, no-cache, must-revalidate');
@@ -9021,17 +9219,48 @@ app.get('/api/link-task/provider-fallback/:nonce',async(req,res)=>{
 });
 app.get('/api/link-task/landing/:nonce',async(req,res)=>{
     const nonce=String(req.params.nonce||'');
+    let release=null;
     try{
         const db=linkTaskDb();
-        const {data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',nonce).maybeSingle();
+        let {data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',nonce).maybeSingle();
         if(error||!a)return res.status(404).send('<h2>❌ Link xác nhận không hợp lệ.</h2>');
         const cfg=LINK_TASK_CONFIG[String(a.task_id||'')];
         if(!cfg)return res.status(400).send('<h2>❌ Nhiệm vụ không hợp lệ.</h2>');
         if(a.status==='rewarded')return res.send('<h2>ℹ️ Nhiệm vụ này đã được xác nhận trước đó.</h2>');
-        if(new Date(a.expires_at).getTime()<=Date.now()){
-            await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).neq('status','rewarded');
-            return res.status(410).send('<h2>❌ Link xác nhận đã hết hạn.</h2>');
+        if(a.status==='cancelled')return res.status(410).send('<h2>❌ Nhiệm vụ này đã bị hủy. Vui lòng nhận nhiệm vụ mới.</h2>');
+        if(a.status==='expired'||linkTaskAttemptIsExpired(a)){
+            if(linkTaskAttemptIsActive(a)){
+                await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+            }
+            return res.status(410).send('<h2>⌛ NHIỆM VỤ ĐÃ HẾT HẠN</h2><p>Bạn đã vượt quá thời gian 10 phút. Vui lòng quay lại Mini App và nhận nhiệm vụ mới.</p>');
         }
+        if(!linkTaskAttemptIsActive(a))return res.status(409).send('<h2>❌ Nhiệm vụ không còn ở trạng thái có thể xác nhận.</h2>');
+
+        release=await acquirePersistentLeaseLock(
+            persistentEventKey('link-task-start-lock',`${String(a.user_id)}:${String(a.task_id)}`),
+            60 * 1000
+        );
+        if(!release){
+            const {data:fresh,error:freshError}=await db.from('link_task_attempts').select('status,expires_at').eq('id',a.id).maybeSingle();
+            if(freshError)throw freshError;
+            if(fresh?.status==='cancelled')return res.status(410).send('<h2>❌ Nhiệm vụ này đã bị hủy. Vui lòng nhận nhiệm vụ mới.</h2>');
+            if(fresh?.status==='expired'||!fresh?.expires_at||new Date(fresh.expires_at).getTime()<=Date.now()){
+                return res.status(410).send('<h2>⌛ NHIỆM VỤ ĐÃ HẾT HẠN</h2><p>Bạn đã vượt quá thời gian 10 phút. Vui lòng quay lại Mini App và nhận nhiệm vụ mới.</p>');
+            }
+            return res.status(409).send('<h2>⏳ Nhiệm vụ đang được cập nhật. Vui lòng thử lại sau vài giây.</h2>');
+        }
+
+        ({data:a,error}=await db.from('link_task_attempts').select('*').eq('nonce',nonce).maybeSingle());
+        if(error||!a)return res.status(404).send('<h2>❌ Link xác nhận không hợp lệ.</h2>');
+        if(a.status==='rewarded')return res.send('<h2>ℹ️ Nhiệm vụ này đã được xác nhận trước đó.</h2>');
+        if(a.status==='cancelled')return res.status(410).send('<h2>❌ Nhiệm vụ này đã bị hủy. Vui lòng nhận nhiệm vụ mới.</h2>');
+        if(a.status==='expired'||linkTaskAttemptIsExpired(a)){
+            if(linkTaskAttemptIsActive(a)){
+                await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+            }
+            return res.status(410).send('<h2>⌛ NHIỆM VỤ ĐÃ HẾT HẠN</h2><p>Bạn đã vượt quá thời gian 10 phút. Vui lòng quay lại Mini App và nhận nhiệm vụ mới.</p>');
+        }
+        if(!linkTaskAttemptIsActive(a))return res.status(409).send('<h2>❌ Nhiệm vụ không còn ở trạng thái có thể xác nhận.</h2>');
         if(!isMobileUserAgent(req))return res.status(403).send('<h2>📱 Chỉ hỗ trợ hoàn thành nhiệm vụ trên điện thoại.</h2>');
 
         const landingIp=requestIp(req);
@@ -9043,19 +9272,36 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
             return res.status(503).send('<h2>⚠️ Hệ thống xác minh lượt nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
         }
         const deviceIpHash=a.device_hash&&landingIpHash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
-        const {error:ue}=await db.from('link_task_attempts').update({
+        const nowIso=new Date().toISOString();
+        const {data:landed,error:ue}=await db.from('link_task_attempts').update({
             status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,
-            country_code:null,is_vpn:false,landed_at:new Date().toISOString()
-        }).eq('id',a.id).in('status',['created','shortened','landed']);
+            country_code:null,is_vpn:false,landed_at:nowIso
+        })
+            .eq('id',a.id)
+            .in('status',LINK_TASK_ACTIVE_STATUSES)
+            .gt('expires_at',nowIso)
+            .select('*').maybeSingle();
         if(ue)throw ue;
+        if(!landed){
+            const {data:fresh,error:freshError}=await db.from('link_task_attempts').select('status,expires_at').eq('id',a.id).maybeSingle();
+            if(freshError)throw freshError;
+            if(fresh?.status==='cancelled')return res.status(410).send('<h2>❌ Nhiệm vụ này đã bị hủy. Vui lòng nhận nhiệm vụ mới.</h2>');
+            if(fresh?.status==='expired'||!fresh?.expires_at||new Date(fresh.expires_at).getTime()<=Date.now()){
+                if(fresh?.status!=='rewarded')await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+                return res.status(410).send('<h2>⌛ NHIỆM VỤ ĐÃ HẾT HẠN</h2><p>Bạn đã vượt quá thời gian 10 phút. Vui lòng quay lại Mini App và nhận nhiệm vụ mới.</p>');
+            }
+            return res.status(409).send('<h2>❌ Nhiệm vụ đã thay đổi trạng thái. Vui lòng quay lại Mini App kiểm tra.</h2>');
+        }
 
-        const verificationCode=linkTaskVerificationCode(a);
+        const verificationCode=linkTaskVerificationCode(landed);
         if(!verificationCode)return res.status(503).send('<h2>⚠️ Hệ thống mã xác nhận chưa sẵn sàng.</h2>');
         res.set('Cache-Control','no-store, no-cache, must-revalidate');
-        return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mã xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:linear-gradient(180deg,#07111f,#0f172a);color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{width:min(420px,100%);box-sizing:border-box;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:24px;padding:24px;box-shadow:0 18px 50px rgba(0,0,0,.35)}.code{font-size:40px;letter-spacing:10px;font-weight:900;color:#fbbf24;background:#0f172a;border:1px solid #475569;border-radius:16px;padding:14px 8px;margin:14px 0}.b{display:block;width:100%;box-sizing:border-box;border:0;margin-top:12px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900;font-size:14px}.b2{background:#0f766e}.s{color:#cbd5e1;font-size:13px;line-height:1.55}.ok{color:#86efac}.hint{color:#94a3b8;font-size:12px;margin-top:14px}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2 class="ok">VƯỢT LINK THÀNH CÔNG</h2><p class="s">🔐 MÃ XÁC NHẬN CỦA BẠN</p><div id="code" class="code">${safeHtml(verificationCode)}</div><button class="b" onclick="copyCode()">📋 SAO CHÉP MÃ</button><a class="b b2" href="${safeHtml(telegramMiniAppDeepLink('linktask'))}">🚀 QUAY LẠI MINI APP</a><a class="b" href="${safeHtml(telegramBotDeepLink())}" style="background:#334155">🤖 MỞ BOT TELEGRAM</a><p class="hint">Quay lại Mini App → Nhiệm vụ → nhập mã này vào đúng nhiệm vụ vừa làm để nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p></div><script>function copyCode(){var c=document.getElementById('code').textContent.trim();if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(function(){alert('✅ Đã sao chép mã: '+c);}).catch(function(){fallback(c);});}else{fallback(c);}}function fallback(c){var t=document.createElement('textarea');t.value=c;document.body.appendChild(t);t.select();try{document.execCommand('copy');alert('✅ Đã sao chép mã: '+c);}catch(e){alert('Mã của bạn: '+c);}document.body.removeChild(t);}</script></body></html>`);
+        return res.send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mã xác nhận nhiệm vụ</title><style>body{font-family:system-ui;background:linear-gradient(180deg,#07111f,#0f172a);color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{width:min(420px,100%);box-sizing:border-box;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:24px;padding:24px;box-shadow:0 18px 50px rgba(0,0,0,.35)}.code{font-size:40px;letter-spacing:10px;font-weight:900;color:#fbbf24;background:#0f172a;border:1px solid #475569;border-radius:16px;padding:14px 8px;margin:14px 0}.b{display:block;width:100%;box-sizing:border-box;border:0;margin-top:12px;padding:14px 18px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:900;font-size:14px}.b2{background:#0f766e}.s{color:#cbd5e1;font-size:13px;line-height:1.55}.ok{color:#86efac}.hint{color:#94a3b8;font-size:12px;margin-top:14px}</style></head><body><div class="c"><div style="font-size:48px">✅</div><h2 class="ok">VƯỢT LINK THÀNH CÔNG</h2><p class="s">🔐 MÃ XÁC NHẬN CỦA BẠN</p><div id="code" class="code">${safeHtml(verificationCode)}</div><button class="b" onclick="copyCode()">📋 SAO CHÉP MÃ</button><a class="b b2" href="${safeHtml(telegramMiniAppDeepLink('linktask'))}">🚀 QUAY LẠI MINI APP</a><a class="b" href="${safeHtml(telegramBotDeepLink())}" style="background:#334155">🤖 MỞ BOT TELEGRAM</a><p class="hint">Quay lại Mini App → Nhiệm vụ → nhập mã này vào đúng nhiệm vụ vừa làm trước khi hết 10 phút để nhận <b>${Number(cfg.rewardOrders).toLocaleString('vi-VN')} Đơn Hàng</b>.</p></div><script>function copyCode(){var c=document.getElementById('code').textContent.trim();if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(c).then(function(){alert('✅ Đã sao chép mã: '+c);}).catch(function(){fallback(c);});}else{fallback(c);}}function fallback(c){var t=document.createElement('textarea');t.value=c;document.body.appendChild(t);t.select();try{document.execCommand('copy');alert('✅ Đã sao chép mã: '+c);}catch(e){alert('Mã của bạn: '+c);}document.body.removeChild(t);}</script></body></html>`);
     }catch(e){
         console.error('Link task landing:',e?.message||e);
         return res.status(500).send('<h2>⚠️ Không thể xác nhận nhiệm vụ lúc này.</h2>');
+    }finally{
+        if(release){try{await release();}catch(_){}}
     }
 });
 app.post('/api/link-task/verify-code',async(req,res)=>{
@@ -9077,9 +9323,14 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             .order('created_at',{ascending:false}).limit(1).maybeSingle();
         if(attemptError)throw attemptError;
         if(!attempt)return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
-        if(attempt.status!=='rewarded' && (!attempt.expires_at || new Date(attempt.expires_at).getTime()<=Date.now())){
-            await db.from('link_task_attempts').update({status:'expired'}).eq('id',attempt.id).neq('status','rewarded');
-            return res.status(410).json({success:false,code:'expired',error:'Phiên vượt link đã hết hạn. Vui lòng nhận nhiệm vụ mới.'});
+        if(attempt.status==='cancelled'){
+            return res.status(410).json({success:false,code:'cancelled',error:'Nhiệm vụ này đã bị hủy. Mã/link cũ không còn được tính.'});
+        }
+        if(attempt.status==='expired'||(attempt.status!=='rewarded' && (!attempt.expires_at || new Date(attempt.expires_at).getTime()<=Date.now()))){
+            if(attempt.status!=='expired'){
+                await db.from('link_task_attempts').update({status:'expired'}).eq('id',attempt.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+            }
+            return res.status(410).json({success:false,code:'expired',error:'Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.'});
         }
         if(attempt.status!=='landed' && attempt.status!=='rewarded'){
             return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
@@ -9097,7 +9348,7 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             const code=String(result?.code||'verify_failed');
             if(code==='code_cooldown')return res.status(429).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.'});
             if(code==='invalid_code')return res.status(400).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Mã xác nhận không đúng.'});
-            if(code==='expired')return res.status(410).json({success:false,code,error:'Phiên vượt link đã hết hạn. Vui lòng nhận nhiệm vụ mới.'});
+            if(code==='expired')return res.status(410).json({success:false,code,error:'Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.'});
             if(code==='not_landed'||code==='not_found')return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
             if(code==='wrong_user')return res.status(403).json({success:false,code,error:'Mã xác nhận không thuộc tài khoản này.'});
             if(code==='ip_limit')return res.status(429).json({success:false,code,error:'IP này đã hết lượt nhận thưởng cho nhiệm vụ.'});
@@ -9132,7 +9383,8 @@ async function handleLinkTaskBotConfirmation(ctx,nonce){
         if(error||!a)return ctx.reply('❌ Link xác nhận không hợp lệ hoặc đã hết hạn.');
         if(String(a.user_id)!==userId)return ctx.reply('❌ Link xác nhận này thuộc về tài khoản Telegram khác.');
         if(a.status==='rewarded')return ctx.reply('ℹ️ Nhiệm vụ này đã được xác nhận trước đó. Không có phần thưởng nào được cộng thêm.');
-        if(!a.expires_at||new Date(a.expires_at).getTime()<=Date.now())return ctx.reply('❌ Link xác nhận đã hết hạn. Vui lòng nhận nhiệm vụ mới.');
+        if(a.status==='cancelled')return ctx.reply('❌ Nhiệm vụ này đã bị hủy. Mã/link cũ không còn được tính.');
+        if(a.status==='expired'||!a.expires_at||new Date(a.expires_at).getTime()<=Date.now())return ctx.reply('❌ Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.');
         if(a.status!=='landed'||!a.landed_at)return ctx.reply('❌ Chưa xác nhận hoàn thành quá trình vượt link.');
         return ctx.reply('✅ Link của bạn đã được ghi nhận.\n\n🔐 Flow xác nhận hiện tại: quay lại Mini App → Nhiệm vụ → nhập mã 6 số đã hiển thị ở trang sau khi vượt link để nhận thưởng.');
     }catch(e){console.error('Link task bot confirm legacy:',e?.message||e);return ctx.reply('⚠️ Không thể kiểm tra nhiệm vụ lúc này. Vui lòng thử lại sau.');}
