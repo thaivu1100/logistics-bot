@@ -1226,7 +1226,7 @@
 
                 <div class="glass p-3 rounded-[25px] space-y-3 card-padding border border-cyan-500/20">
                     <div class="flex items-center justify-between gap-2">
-                        <div><h3 class="text-sm font-black uppercase text-cyan-300">🔗 NHIỆM VỤ VƯỢT LINK</h3><p class="text-[8px] text-slate-400 mt-1">Vượt link → trang xác nhận → mở Bot Telegram để nhận thưởng.</p></div>
+                        <div><h3 class="text-sm font-black uppercase text-cyan-300">🔗 NHIỆM VỤ VƯỢT LINK</h3><p class="text-[8px] text-slate-400 mt-1">Vượt link → nhận mã xác nhận → quay lại nhập mã để nhận thưởng.</p></div>
                         <button @click="syncLinkTasks()" :disabled="_linkTaskStarting" class="px-2.5 py-1.5 rounded-xl bg-slate-800 text-[8px] font-black disabled:opacity-40">↻ LÀM MỚI</button>
                     </div>
                     <template x-for="task in linkTasks" :key="task.id">
@@ -1235,7 +1235,20 @@
                                 <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' Đơn Hàng'"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+task.rule"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+task.unavailableReason"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p></div>
                                 <div class="text-right flex-shrink-0"><p class="text-[9px] font-black text-cyan-300" x-text="'Còn '+Math.max(0,Number(task.remaining||0))+' lượt'"></p></div>
                             </div>
-                            <button @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':(task.status==='landed'?'🤖 MỞ BOT ĐỂ XÁC NHẬN':'BẮT ĐẦU')"></span></button>
+                            <button x-show="task.status!=='landed'" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':'BẮT ĐẦU'"></span></button>
+                            <div x-show="task.status==='landed'" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-cyan-500/20 space-y-2">
+                                <p class="text-[9px] font-black text-cyan-300">🔐 NHẬP MÃ XÁC NHẬN</p>
+                                <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
+                                    x-model="linkTaskCodeInputs[task.id]"
+                                    @input="$event.target.value=$event.target.value.replace(/\D/g,'').slice(0,6); linkTaskCodeInputs[task.id]=$event.target.value"
+                                    class="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2.5 text-center text-lg font-black tracking-[0.35em] text-yellow-300"
+                                    placeholder="______" />
+                                <button @click="verifyLinkTaskCode(task)"
+                                    :disabled="!!_linkCodeVerifying[task.id] || linkTaskCodeCooldownSeconds(task.id)>0 || String(linkTaskCodeInputs[task.id]||'').length!==6"
+                                    class="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase disabled:opacity-40"
+                                    x-text="_linkCodeVerifying[task.id]?'⏳ ĐANG XÁC NHẬN...':(linkTaskCodeCooldownSeconds(task.id)>0?'⏳ CHỜ '+linkTaskCodeCooldownSeconds(task.id)+' GIÂY':'XÁC NHẬN MÃ')"></button>
+                                <p x-show="linkTaskCodeCooldownSeconds(task.id)>0" class="text-[8px] text-amber-300 text-center" x-text="'Vui lòng chờ '+linkTaskCodeCooldownSeconds(task.id)+' giây trước khi thử mã tiếp theo.'"></p>
+                            </div>
                         </div>
                     </template>
                     <p x-show="linkTaskStatusError" class="text-[9px] text-amber-300 text-center" x-text="'⚠️ ' + linkTaskStatusError"></p>
@@ -2259,7 +2272,7 @@
                 .replace('! Xe: ','! Truck: ')
                 .replace('Không thể nhận phần thưởng Hộp Coin lúc này.','Could not claim the Coin Box reward right now.')
                 .replace('Bạn không còn lượt mở rương miễn phí!','You have no free chest spins left!')
-                .replace('CHÚC MỪNG! JACKPOT 75.000 Đơn Hàng!','CONGRATULATIONS! JACKPOT 75,000 Orders!')
+                .replace('CHÚC MỪNG! JACKPOT 30.000 Đơn Hàng!','CONGRATULATIONS! JACKPOT 30,000 Orders!')
                 .replace('Không thể mở rương lúc này, vui lòng thử lại.','Could not open the chest right now. Please try again.')
                 .replace('Bạn đã xem đủ QC hôm nay (tối đa ','You have watched enough ads today (max ')
                 .replace('+1 Lượt Mở Rương!','+1 Chest Spin!')
@@ -2379,7 +2392,7 @@
                 ],
                 allTasksClaimed:false, deliveryCount:0, extraDeliveryAdsToday:0, extraDeliveryCount:0, rewardedAdsToday:0, deliveryServerLimit:5,
                 accessBlocked:false, accessBlockIcon:'📱', accessBlockTitle:'', accessBlockMessage:'',
-                linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0, linkTaskStatusError:'',
+                linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0, linkTaskStatusError:'', linkTaskCodeInputs:{}, linkTaskCodeCooldownUntil:{}, linkTaskCodeNow:Date.now(), _linkTaskCodeTicker:null, _linkCodeVerifying:{},
                 _taskClaimInFlight:false, _taskClaimingId:'',
                 smartlinkCount:0, lastSmartlinkTime:0,
                 groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
@@ -3941,12 +3954,12 @@
                             this.chestOpensToday = Number(result.chestOpensToday ?? this.chestOpensToday);
                             const chosen = result.reward || {type:'none',value:0,label:'❌'};
                             let rewardText = chosen.type === 'coin' ? this.formatNumber(chosen.value) + ' Coin' : chosen.type === 'order' ? this.formatNumber(chosen.value) + ' Đơn Hàng' : chosen.type === 'spin' ? this.formatNumber(chosen.value) + ' Lượt Mở Rương Miễn Phí' : 'Chúc bạn may mắn lần sau';
-                            if (chosen.type === 'order' && Number(chosen.value) === 75000) rewardText = '💎 JACKPOT 75.000 Đơn Hàng!';
+                            if (chosen.type === 'order' && Number(chosen.value) === 30000) rewardText = '💎 JACKPOT 30.000 Đơn Hàng!';
                             const displayName = this.user.name ? this.user.name.substring(0,2) + '******' : 'User******';
                             const logText = chosen.type === 'none' ? '❌ ' + displayName + ' chúc bạn may mắn lần sau' : displayName + ' nhận ' + rewardText;
                             this.spinHistory.unshift({id:Date.now(),text:logText,time:'vừa xong'});
                             if (this.spinHistory.length > 50) this.spinHistory.pop();
-                            if (chosen.type === 'order' && Number(chosen.value) === 75000) this.showNotification('💎 CHÚC MỪNG! JACKPOT 75.000 Đơn Hàng!');
+                            if (chosen.type === 'order' && Number(chosen.value) === 30000) this.showNotification('💎 CHÚC MỪNG! JACKPOT 30.000 Đơn Hàng!');
                             else if (chosen.type !== 'none') this.showNotification('🎁 ' + rewardText);
                             else this.showNotification('❌ ' + rewardText);
                             await this.syncDailyTasksFromServer();
@@ -4066,7 +4079,7 @@
                 linkTaskStatusText(task) {
                     if(!task)return ''; if(!task.available)return 'Tạm chưa khả dụng'; if(Number(task.remaining||0)<=0)return '✅ Đã dùng hết lượt hiện tại';
                     if(task.status==='rewarded')return '✅ Đã nhận thưởng — có thể làm lại khi quota cho phép';
-                    if(task.status==='landed')return '🔄 Đã vượt link — mở Bot Telegram để xác nhận';
+                    if(task.status==='landed')return '🔐 Đã vượt link — nhập mã xác nhận bên dưới';
                     if(task.status==='shortened'||task.status==='created')return '⏳ Nhiệm vụ đang chờ hoàn thành';
                     if(task.status==='expired')return '⌛ Phiên trước đã hết hạn'; return 'Sẵn sàng';
                 },
@@ -4093,10 +4106,60 @@
                             await this.syncLinkTasks();
                             return false;
                         }
-                        this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link rồi mở Bot Telegram để xác nhận.');
+                        this.linkTaskStatusError='';const url=String(data.shortUrl);this.showNotification('🔗 Đã tạo nhiệm vụ. Hoàn thành link để nhận mã xác nhận rồi quay lại nhập mã.');
                         try{if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink(url);else window.open(url,'_blank','noopener,noreferrer');}catch(_){window.location.href=url;}
                         setTimeout(()=>this.syncLinkTasks(),2500);return true;
                     }catch(_){this.linkTaskStatusError='Tạm thời chưa tạo được nhiệm vụ vượt link. Vui lòng thử lại sau.';this.showNotification('⚠️ Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.');return false;}finally{this._linkTaskStarting='';}
+                },
+                linkTaskCodeCooldownSeconds(taskId) {
+                    // linkTaskCodeNow là reactive tick chỉ để render countdown; server mới là source-of-truth cooldown.
+                    void this.linkTaskCodeNow;
+                    return Math.max(0,Math.ceil((Number(this.linkTaskCodeCooldownUntil?.[taskId]||0)-Date.now())/1000));
+                },
+                setLinkTaskCodeCooldown(taskId,retryAfterMs=7000) {
+                    const ms=Math.max(0,Number(retryAfterMs||0));
+                    this.linkTaskCodeCooldownUntil={...this.linkTaskCodeCooldownUntil,[taskId]:Date.now()+ms};
+                    this.linkTaskCodeNow=Date.now();
+                    if(!this._linkTaskCodeTicker){
+                        this._linkTaskCodeTicker=setInterval(()=>{
+                            this.linkTaskCodeNow=Date.now();
+                            const active=Object.values(this.linkTaskCodeCooldownUntil||{}).some(v=>Number(v||0)>Date.now());
+                            if(!active&&this._linkTaskCodeTicker){clearInterval(this._linkTaskCodeTicker);this._linkTaskCodeTicker=null;}
+                        },250);
+                    }
+                },
+                async verifyLinkTaskCode(task) {
+                    const taskId=String(task?.id||'');
+                    const code=String(this.linkTaskCodeInputs?.[taskId]||'').replace(/\D/g,'').slice(0,6);
+                    if(!taskId||!this.user?.id||this._linkCodeVerifying?.[taskId])return false;
+                    if(this.linkTaskCodeCooldownSeconds(taskId)>0){this.showNotification('⏳ Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.');return false;}
+                    if(!/^\d{6}$/.test(code)){this.showNotification('⚠️ Mã xác nhận phải gồm đúng 6 chữ số.');return false;}
+                    this._linkCodeVerifying={...this._linkCodeVerifying,[taskId]:true};
+                    try{
+                        const res=await fetch(`${API_URL}/api/link-task/verify-code`,{
+                            method:'POST',headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id,taskId,code})
+                        });
+                        const data=await res.json().catch(()=>({}));
+                        if(!res.ok||!data.success){
+                            if(Number(data.retryAfterMs||0)>0)this.setLinkTaskCodeCooldown(taskId,Number(data.retryAfterMs));
+                            this.showNotification('⚠️ '+(data.error||'Không thể xác nhận mã lúc này.'));
+                            if(['expired','not_landed'].includes(String(data.code||'')))await this.syncLinkTasks();
+                            return false;
+                        }
+                        if(typeof data.orders==='number')this.orders=Number(data.orders);
+                        if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;
+                        this.linkTaskCodeInputs={...this.linkTaskCodeInputs,[taskId]:''};
+                        this.linkTaskCodeCooldownUntil={...this.linkTaskCodeCooldownUntil,[taskId]:0};
+                        this.showNotification(`✅ XÁC NHẬN THÀNH CÔNG +${this.formatNumber(Number(data.rewardOrders||task.rewardOrders||0))} Đơn Hàng`);
+                        await this.syncLinkTasks();
+                        return true;
+                    }catch(_){
+                        this.showNotification('⚠️ Không thể kết nối máy chủ để xác nhận mã. Vui lòng thử lại.');
+                        return false;
+                    }finally{
+                        this._linkCodeVerifying={...this._linkCodeVerifying,[taskId]:false};
+                    }
                 },
                 // Dùng chung cho cả xem QC và bấm smartlink: báo server tự kiểm tra lại điều kiện mời bạn
                 // (đủ nhóm + đủ QC + đủ smartlink) mỗi khi 1 trong các điều kiện đó có thay đổi.
