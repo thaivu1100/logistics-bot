@@ -8,9 +8,6 @@ const path = require('path');
 const crypto = require('crypto');
 
 const app = express();
-// Render/hosting sits behind a reverse proxy. Trust exactly one proxy hop so Express derives req.ip
-// from the proxy-owned hop instead of trusting an arbitrary client-supplied X-Forwarded-For chain.
-app.set('trust proxy', 1);
 app.use(cors());
 app.use(bodyParser.json({ limit: '5mb' })); // Không giới hạn số Gmail theo nghiệp vụ; tăng trần payload để batch lớn không bị chặn ở 100KB mặc định.
 // FIX LỖI "1 SỐ USER BỊ KẸT PHIÊN BẢN CŨ/DEMO": trước đây express.static dùng cache mặc định của trình
@@ -710,8 +707,8 @@ Chờ kho sản xuất đầy hàng → bấm *GIAO HÀNG* → hoàn thành qu�
 Cấp xe càng cao → sản xuất càng nhanh và được nhiều hàng hơn.
 
 ⚡ *2. Tăng tốc sản xuất*
-Khi kho đang sản xuất, bấm *XEM QC TĂNG TỐC* → hoàn thành quảng cáo → máy chủ giảm ngẫu nhiên *10–20 phút*.
-_Mỗi mẻ chỉ dùng tăng tốc 1 lần._
+Khi kho đang sản xuất, bấm *TĂNG TỐC X2* → xem quảng cáo → giảm *1/2 thời gian còn lại*.
+_Mỗi mẻ chỉ dùng X2 1 lần._
 
 ⬆️ *3. Nâng cấp xe*
 Đủ Coin → bấm *Nâng Cấp Xe* → xem quảng cáo → tăng cấp xe.
@@ -732,7 +729,7 @@ Vào Nhiệm vụ → *Điểm danh mỗi ngày* để duy trì chuỗi.
 Bỏ lỡ có thể dùng quảng cáo để khôi phục.
 
 📺 *7. Kiếm thêm thưởng*
-• Rewarded: sau mỗi lượt hợp lệ nhận ngẫu nhiên *10–25 Coin +10–25 Đơn Hàng*, tối đa 15 lượt/ngày.
+• Rewarded: *+50 Coin +25 Đơn Hàng/lượt*, tối đa 15 lượt/ngày.
 • SmartLink: *+25 Coin +25 Đơn Hàng/lượt*, tối đa 20 lượt/ngày.
 
 👥 *8. Mời bạn*
@@ -780,8 +777,8 @@ const BOT_GUIDE_EN = `📦 *LOGISTICS WAREHOUSE GUIDE*
 Wait until your warehouse finishes production → tap *DELIVER* → complete the ad → receive *Orders*. 🚚
 Higher truck levels produce faster and carry more goods.
 
-⚡ *2. Production Speed-Up*
-While production is running, tap *WATCH AD TO SPEED UP* → complete the ad → the server removes a random *10–20 minutes*.
+⚡ *2. X2 Production Speed-Up*
+While production is running, tap *X2 SPEED-UP* → watch the ad → reduce the remaining production time by *50%*.
 _Only once per production batch._
 
 ⬆️ *3. Upgrade Truck*
@@ -803,7 +800,7 @@ Check in every day in Tasks to maintain your streak.
 A missed streak may be recovered by watching an ad.
 
 📺 *7. Earn More Rewards*
-• Rewarded Ads: each verified completion gives a random *10–25 Coins +10–25 Orders*, maximum 15/day.
+• Rewarded Ads: *+50 Coins +25 Orders each*, maximum 15/day.
 • SmartLink: *+25 Coins +25 Orders each*, maximum 20/day.
 
 👥 *8. Invite Friends*
@@ -846,41 +843,37 @@ Change language, toggle music, or use *FIX LAG* on slower devices.
 *Produce → Deliver → Complete Tasks → Upgrade Truck → Repeat.* 🚚📦💰`;
 
 // ==================== HỆ THỐNG CẤP ĐỘ VÀ CÔNG THỨC (LEVEL 1-500) ====================
-// Giữ nguyên truckLevel hiện hữu của mọi user. Chỉ tính lại STATS theo công thức mới.
+/**
+ * Tính toán tất cả thống kê xe theo cấp độ (công thức LOCKED)
+ * Level 1-500 tuân theo công thức chính xác:
+ * - Thời gian: 30 phút ở cấp 1, giảm đều xuống đúng 2 phút ở cấp 500
+ * - Sản phẩm/lần: tăng đều từ 100, tối đa đúng 5.000 đơn ở cấp 500
+ * - Kho max: bằng đúng 1 mẻ hàng
+ * - Chi phí nâng cấp: 300 + (level-1)*300 coin (tổng ~37,4 triệu coin để đạt cấp 500)
+ * - Lần giao/ngày: floor(1440 / thời gian)
+ * - Đơn hàng/ngày: lần_giao * sản_phẩm
+ */
 const MAX_TRUCK_LEVEL = 500;
-function vndToOrders(vnd) {
-    return Math.round(Number(vnd) * 10);
-}
 function calculateLevelStats(level) {
     level = Math.max(1, Math.min(MAX_TRUCK_LEVEL, parseInt(level) || 1));
 
-    const productionMinutes = level <= 99
-        ? 240 - ((level - 1) * 60 / 98)
-        : 180 - ((level - 100) * 60 / 400);
-
-    const productsPerDelivery = Math.round(
-        50 + (level - 1) * (2450 / 499)
-    );
-    const maxWarehouse = productsPerDelivery;
-
-    let upgradeCost = 0;
-    if (level < 100) {
-        upgradeCost = level * 300;
-    } else if (level < MAX_TRUCK_LEVEL) {
-        upgradeCost = Math.round(
-            30000 * Math.pow(1.012, level - 100)
-        );
-    }
-
-    const productionMs = Math.round(productionMinutes * 60 * 1000);
-    const deliveriesPerDay = 5;
-    const ordersPerDay = productsPerDelivery * deliveriesPerDay;
-
+    // Thời gian sản xuất giảm đều từ 30 phút (cấp 1) xuống ĐÚNG 2 phút ở cấp 500, không thấp hơn 2 phút.
+    const productionMinutes = level >= MAX_TRUCK_LEVEL
+        ? 2
+        : Math.max(2, 30 * Math.pow(2 / 30, (level - 1) / (MAX_TRUCK_LEVEL - 1)));
+    const productsPerDelivery = Math.round(100 + (level - 1) * (4900 / (MAX_TRUCK_LEVEL - 1))); // Cấp 500: đúng 5.000 đơn
+    const maxWarehouse = productsPerDelivery;             // Kho chứa đúng 1 mẻ hàng
+    // Chi phí nâng cấp tăng đều: cấp 1->2 hết 300 coin, cấp 499->500 hết 149.700 coin
+    // (tổng ~37 triệu coin) -> lên cấp 500 khá khó, phải chơi lâu dài chứ không đạt trong vài ngày.
+    const upgradeCost = level < MAX_TRUCK_LEVEL ? 300 + (level - 1) * 300 : 0;
+    const deliveriesPerDay = Math.floor(1440 / productionMinutes);
+    const ordersPerDay = deliveriesPerDay * productsPerDelivery;
+    
     return {
         level,
         maxLevel: MAX_TRUCK_LEVEL,
         productionTime: Math.round(productionMinutes * 100) / 100,
-        productionMs,
+        productionMs: Math.round(productionMinutes * 60 * 1000),
         productsPerDelivery,
         maxWarehouse,
         upgradeCost,
@@ -1169,8 +1162,9 @@ let antiFraudDeviceIndexCache = null;
 const antiFraudAlertLocks = new Set();
 
 function requestIp(req) {
-    const value = String(req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '').trim();
-    return value.startsWith('::ffff:') ? value.slice(7) : value;
+    const forwarded = req.headers?.['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.trim()) return forwarded.split(',')[0].trim();
+    return req.ip || req.connection?.remoteAddress || '';
 }
 
 function hashDeviceFingerprint(signals = {}) {
@@ -2987,9 +2981,7 @@ function fullResetFields() {
         truckLevel: 1, // Cấp xe thấp nhất hệ thống hỗ trợ (không có cấp 0)
         currentProducts: 0,
         lastProducedAt: Date.now(),
-        productionInterval: 4 * 60 * 60 * 1000,
-        productionAmount: 50,
-        maxProducts: 50,
+        productionInterval: 30 * 60 * 1000,
         adsToday: 0,
         smartlinksToday: 0,
         smartlinkCount: 0,
@@ -4598,25 +4590,7 @@ app.get('/api/user/:id', async (req, res) => {
         data.groupTaskCampaignClaims = groupTaskCampaignClaims;
 
         const levelStats = calculateLevelStats(data.truckLevel || 1);
-        // Đồng bộ STATS theo công thức level mới ngay khi user tải app, nhưng tuyệt đối không đổi truckLevel/Coin/Orders.
-        // currentProducts đang có được giữ nguyên để không làm mất hàng tồn của mẻ cũ; các mẻ kế tiếp dùng capacity/amount mới.
-        const statsOutdated = Number(data.productionInterval || 0) !== Number(levelStats.productionMs)
-            || Number(data.productionAmount || 0) !== Number(levelStats.productsPerDelivery)
-            || Number(data.maxProducts || 0) !== Number(levelStats.maxWarehouse);
-        if (statsOutdated) {
-            const sync = await atomicWalletMutation(requestedUserId, {
-                setFields:{
-                    productionInterval:levelStats.productionMs,
-                    productionAmount:levelStats.productsPerDelivery,
-                    maxProducts:levelStats.maxWarehouse
-                }
-            });
-            if (sync.error) return res.status(409).json({error:sync.error.message,retry:true});
-            if (!(await flushUserExtra())) return res.status(503).json({error:'Không thể persist level stats an toàn lúc này.',retry:true});
-            const refreshed = await readUserRow(requestedUserId);
-            if (refreshed.data) data = refreshed.data;
-        }
-        res.json({...data,levelStats,deliveryLimit:DELIVERY_DAILY_LIMIT});
+        res.json({...data,levelStats});
     } catch(e) {
         console.error('Lỗi API lấy user:',e);
         res.status(500).json({error:e.message || 'Failed to fetch user data'});
@@ -4635,8 +4609,15 @@ app.get('/api/user/:id', async (req, res) => {
 // phép dữ liệu game trên client (vốn chỉ lưu snapshot cục bộ, có thể cũ) ghi đè mất thay đổi của admin.
 // Lấy trực tiếp từ fullResetFields() để danh sách này LUÔN khớp với những gì các lệnh reset thực sự đổi,
 // tránh trường hợp thêm field mới vào fullResetFields() mà quên thêm vào đây.
-// speedUpUsed thuộc nhóm state server-authoritative và phải đồng bộ cùng lastProducedAt/productionInterval
-// để snapshot client cũ không ghi đè kết quả tăng tốc đã commit.
+// FIX LỖI "XEM QC TĂNG TỐC X2 THÀNH CÔNG NHƯNG THỜI GIAN KHÔNG GIẢM": 'speedUpUsed' trước đây KHÔNG nằm
+// trong danh sách WALLET_FIELDS (vì fullResetFields() không có field này), nên khi walletOverridden=true
+// (server phát hiện dữ liệu ví trên DB mới hơn mốc client đã đồng bộ), 'lastProducedAt'/'productionInterval'
+// bị loại khỏi bản lưu (đúng, để không mất thay đổi mới hơn) NHƯNG 'speedUpUsed' vẫn được lưu bình thường
+// -> kết quả: speedUpUsed=true được ghi nhận (đã dùng X2) trong khi lastProducedAt/productionInterval bị
+// hoàn tác về giá trị cũ (thời gian KHÔNG giảm) -> user thấy "xem QC xong nhưng thời gian không đổi" và
+// còn bị khoá không cho dùng X2 lần nữa cho mẻ đó. Thêm 'speedUpUsed' vào WALLET_FIELDS để nó LUÔN được
+// hoàn tác/giữ nguyên ĐỒNG BỘ cùng lastProducedAt/productionInterval trong cùng 1 lần ghi đè, đảm bảo
+// trạng thái X2 và thời gian sản xuất không bao giờ bị lệch nhau.
 const WALLET_FIELDS = [...new Set([...Object.keys(fullResetFields()), 'isBanned', 'speedUpUsed', 'maxProducts', 'productionAmount', 'dailyTasks', 'allTasksClaimed'])];
 app.post('/api/user/:id', async (req, res) => {
     const requestedUserId = String(req.params.id || '');
@@ -5418,6 +5399,9 @@ app.post('/api/referral/milestone-claim', async (req,res) => {
 // ==================== SERVER-AUTHORITATIVE DAILY TASK / QUIZ REWARDS ====================
 const TASK_REWARDS = {
     deliver5: { coins: 50, orders: 50, spins: 0 },
+    deliver10: { coins: 100, orders: 100, spins: 0 },
+    deliver15: { coins: 200, orders: 200, spins: 0 },
+    deliver20: { coins: 250, orders: 300, spins: 0 },
     x2Once: { coins: 50, orders: 25, spins: 0 },
     upgradeOnce: { coins: 100, orders: 50, spins: 0 },
     watch3rewarded: { coins: 150, orders: 50, spins: 0 },
@@ -5448,7 +5432,10 @@ function dailyTaskDefinitions(user = {}, claims = {}, actionFlags = {}) {
     const invites = Number(user.dailyValidInvites || 0);
     const defs = [
         { id:'deliver5', name:'🚚 Giao hàng 5 lần', icon:'🚚', max:5, progress:Math.min(delivery,5), eligible:delivery>=5 },
-        { id:'x2Once', name:'⚡ Dùng tăng tốc một lần', icon:'⚡', max:1, progress:actionFlags.x2 ? 1 : 0, eligible:actionFlags.x2 === true },
+        { id:'deliver10', name:'🚚 Giao hàng 10 lần', icon:'🚚', max:10, progress:Math.min(delivery,10), eligible:delivery>=10 },
+        { id:'deliver15', name:'🚚 Giao hàng 12 lần', icon:'🚚', max:12, progress:Math.min(delivery,12), eligible:delivery>=12 },
+        { id:'deliver20', name:'🚚 Giao hàng 13 lần', icon:'🚚', max:13, progress:Math.min(delivery,13), eligible:delivery>=13 },
+        { id:'x2Once', name:'⚡ Dùng X2 một lần', icon:'⚡', max:1, progress:actionFlags.x2 ? 1 : 0, eligible:actionFlags.x2 === true },
         { id:'upgradeOnce', name:'⬆️ Nâng cấp xe một lần', icon:'⬆️', max:1, progress:actionFlags.upgrade ? 1 : 0, eligible:actionFlags.upgrade === true },
         { id:'watch3rewarded', name:'📺 Xem 3 QC (chỉ tính QC Rewarded Interstitial)', icon:'📺', max:3, progress:Math.min(rewardedAds,3), eligible:rewardedAds>=3 },
         { id:'smartlink5', name:'🔗 Hoàn thành 5 SmartLink', icon:'🔗', max:5, progress:Math.min(smartlinks,5), eligible:smartlinks>=5 },
@@ -5516,7 +5503,7 @@ app.get('/api/daily-tasks/status/:id', async (req,res) => {
         const today = vietnamDayKey();
         const allTasksClaimed = claims.__all === today;
         const allDone = tasks.every(t => t.done);
-        res.json({ success:true, today, lastResetDate:user.lastResetDate||today, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:DELIVERY_DAILY_LIMIT, extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), smartlinkCount:Number(user.smartlinkCount||0), smartlinksToday:Number(user.smartlinksToday||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
+        res.json({ success:true, today, lastResetDate:user.lastResetDate||today, tasks, allDone, allTasksClaimed, rewardedAdsToday:Number(user.rewardedAdsToday||0), deliveryCount:Number(user.deliveryCount||0), deliveryLimit:DELIVERY_DAILY_LIMIT+Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0))), extraDeliveryAdsToday:Number(user.extraDeliveryAdsToday||0), extraDeliveryCount:Number(user.extraDeliveryCount||0), smartlinkCount:Number(user.smartlinkCount||0), smartlinksToday:Number(user.smartlinksToday||0), coins:Number(user.coins||0), orders:Number(user.orders||0), spins:Number(user.spins||0), walletUpdatedAt:user.walletUpdatedAt||null });
     } catch(e) { res.status(500).json({success:false,error:e.message}); }
 });
 
@@ -6192,69 +6179,79 @@ app.post('/api/truck/upgrade', async (req, res) => {
     }
 });
 
-// ==================== TĂNG TỐC SẢN XUẤT — REWARDED SERVER-AUTHORITATIVE ====================
-// Mỗi mẻ chỉ dùng một lần. Số phút giảm do server random bằng crypto.randomInt(10, 21) và được
-// persist vào completed ad event TRƯỚC khi commit, vì vậy retry cùng adToken không thể reroll.
+// ==================== TĂNG TỐC X2 SẢN XUẤT (XEM QC GIẢM 1/2 THỜI GIAN CHỜ) ====================
+// FIX TRIỆT ĐỂ LỖI X2: trước đây kết quả X2 chỉ được TÍNH VÀ LƯU HOÀN TOÀN Ở CLIENT (trong index.txt),
+// rồi được gửi lên server qua route đồng bộ chung "/api/user/:id" giống mọi field giao diện khác ->
+// KHÔNG có 1 nguồn sự thật (source of truth) atomic cho riêng hành động X2 trên server, nên mới xảy ra:
+// bấm X2 xong báo "đã giảm 1/2 thời gian" nhưng đồng hồ thực tế không giảm (do 1 lần saveState() khác
+// đang chạy gửi snapshot CŨ ghi đè ngay sau đó, hoặc do 2 request X2/2 tab chạy song song), hoặc
+// speedUpUsed=true trong khi lastProducedAt/productionInterval vẫn là giá trị trước X2 (2 field vốn được
+// client set ở 2 dòng riêng biệt, không cùng 1 giao dịch). Nay chuyển hẳn việc ÁP DỤNG X2 sang 1 API
+// riêng dưới đây, atomic, dùng ĐÚNG cơ chế khoá + xác minh adToken đã có sẵn cho "/api/truck/upgrade":
+//  - Khoá theo userId (speedupProcessing) để 2 request X2 chạy song song / double click chỉ 1 cái được xử lý.
+//  - Bắt buộc đúng 1 adToken hợp lệ, CHƯA dùng, từ /api/ad/session/complete (completedAdEvents) -> 1 lượt
+//    xem QC chỉ áp dụng X2 được đúng 1 lần, không thể replay/gửi trùng request để X2 lần 2.
+//  - Đọc currentProducts/maxProducts/lastProducedAt/productionInterval/speedUpUsed MỚI NHẤT trực tiếp từ
+//    Supabase (readUserRow) NGAY TẠI THỜI ĐIỂM XỬ LÝ - không tin bất kỳ giá trị nào client gửi lên - rồi
+//    tính remainingReal bằng thời gian THỰC vừa trôi qua (kể cả thời gian xem QC), không dùng lại snapshot
+//    "remaining" cũ mà client tính trước khi xem QC.
+//  - Ghi speedUpUsed=true CÙNG LÚC với lastProducedAt/productionInterval trong đúng 1 lần gọi
+//    saveUserFields() (1 giao dịch), nên không bao giờ có tình huống speedUpUsed=true nhưng thời gian
+//    chưa giảm, hay ngược lại. walletUpdatedAt cũng được làm mới trong lần ghi này nên cơ chế
+//    walletOverridden của "/api/user/:id" (đã có sẵn WALLET_FIELDS gồm cả speedUpUsed) sẽ tự động chặn
+//    mọi snapshot cũ hơn (kể cả saveState() đang chạy song song) ghi đè lại kết quả X2 vừa lưu.
+// Client (index.txt) CHỈ được cập nhật đồng hồ + hiển thị "X2 thành công" SAU KHI nhận success=true từ
+// đúng API này, không còn tự tính/tự trừ thời gian ở phía client nữa.
 const speedupProcessing = new Set();
 app.post('/api/production/speedup', async (req, res) => {
     const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({ success:false, error:'Telegram session không hợp lệ.' });
+    if (!assertTelegramUser(req, userId)) return res.status(401).json({ success: false, error: 'Telegram session không hợp lệ.' });
     const adToken = String(req.body?.adToken || '');
-    if (!userId || !adToken) return res.status(400).json({ success:false, error:'Thiếu userId/adToken.' });
+    if (!userId || !adToken) return res.status(400).json({ success: false, error: 'Thiếu userId/adToken.' });
 
     if (speedupProcessing.has(userId)) {
-        return res.status(409).json({ success:false, retry:true, error:'Yêu cầu tăng tốc đang được xử lý.' });
+        return res.status(409).json({ success: false, retry: true, error: 'Yêu cầu Tăng Tốc X2 đang được xử lý.' });
     }
     speedupProcessing.add(userId);
     const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
-    let releasePersistentSpeedupLock = null;
     try {
-        releasePersistentSpeedupLock = await acquirePersistentLeaseLock(
-            persistentEventKey('speedup-token-lock', adToken),
-            2 * 60 * 1000
-        );
-        if (!releasePersistentSpeedupLock) {
-            return res.status(409).json({ success:false, retry:true, error:'Yêu cầu tăng tốc đang được xử lý trên máy chủ khác.' });
-        }
-
         const event = await loadCompletedAdEvent(adToken);
-        if (!event || event.userId !== userId || !['speedup','x2'].includes(event.purpose)) {
-            return res.status(400).json({ success:false, error:'Rewarded tăng tốc không hợp lệ hoặc đã hết hạn.' });
+        if (!event || event.userId !== userId || event.purpose !== 'x2') {
+            return res.status(400).json({ success: false, error: 'Rewarded Tăng Tốc X2 không hợp lệ hoặc đã hết hạn.' });
         }
         if (event.used && event.speedupResult) {
             return res.json({ success:true, ...event.speedupResult, idempotent:true });
         }
         if (event.used) {
-            return res.status(400).json({ success:false, error:'Lượt Rewarded tăng tốc này đã được sử dụng.' });
+            return res.status(400).json({ success:false, error:'Lượt Rewarded X2 này đã được sử dụng.' });
         }
 
         const fraudGate = await antiFraudRewardGate(userId);
-        if (!fraudGate.allowed) return res.status(fraudGate.status).json({ success:false, ...fraudGate, verificationRequired:true });
+        if (!fraudGate.allowed) return res.status(fraudGate.status).json({ success: false, ...fraudGate, verificationRequired: true });
 
         const { data: current, error: readError } = await readUserRow(userId);
-        if (readError || !current) return res.status(404).json({ success:false, error:'Không tìm thấy user.' });
-        if (current.isBanned) return res.status(403).json({ success:false, isBanned:true, error:'Tài khoản đã bị khóa.' });
+        if (readError || !current) return res.status(404).json({ success: false, error: 'Không tìm thấy user.' });
+        if (current.isBanned) return res.status(403).json({ success: false, isBanned: true, error: 'Tài khoản đã bị khóa.' });
 
         const pending = event.speedupAttempt;
         const currentLastProducedAt = Number(current.lastProducedAt || 0);
         if (pending?.status === 'processing') {
             const target = Number(pending.targetLastProducedAt || 0);
-            const committed = !!current.speedUpUsed && target > 0 && currentLastProducedAt === target;
+            const committed = (
+                (!!current.speedUpUsed && target > 0 && currentLastProducedAt === target) ||
+                (Number(pending.startedAt || 0) > 0 && currentLastProducedAt > Number(pending.startedAt))
+            );
             if (committed) {
-                const flags = await getDailyActionFlags(userId);
-                await saveUserExtra(userId, { dailyActionFlags:{ ...flags, __date:vietnamDayKey(), x2:true } });
+                const currentFlags = await getDailyActionFlags(userId);
+                await saveUserExtra(userId, { dailyActionFlags: { ...currentFlags, __date: vietnamDayKey(), x2: true } });
                 await flushUserExtra();
                 const recoveredPayload = {
-                    speedupMinutes:Number(pending.speedupMinutes || 0),
-                    reductionMs:Number(pending.reductionMs || 0),
-                    remainingBeforeMs:Number(pending.remainingBeforeMs || 0),
-                    remainingAfterMs:Math.max(0, Number(pending.remainingAfterMs || 0)),
-                    lastProducedAt:currentLastProducedAt,
-                    productionInterval:Number(current.productionInterval || pending.productionInterval || 0),
-                    speedUpUsed:!!current.speedUpUsed,
-                    currentProducts:Number(current.currentProducts || 0),
-                    maxProducts:Number(current.maxProducts || 0),
-                    walletUpdatedAt:current.walletUpdatedAt || null
+                    lastProducedAt: currentLastProducedAt,
+                    productionInterval: Number(current.productionInterval || pending.productionInterval || 0),
+                    speedUpUsed: !!current.speedUpUsed,
+                    currentProducts: Number(current.currentProducts || 0),
+                    maxProducts: Number(current.maxProducts || 0),
+                    walletUpdatedAt: current.walletUpdatedAt || null
                 };
                 event.used = true;
                 event.speedupResult = recoveredPayload;
@@ -6265,103 +6262,79 @@ app.post('/api/production/speedup', async (req, res) => {
         }
 
         const currentProducts = Number(current.currentProducts || 0);
-        const levelStats = calculateLevelStats(current.truckLevel || 1);
-        const maxProducts = Math.max(1, Number(current.maxProducts || levelStats.maxWarehouse));
-        const productionInterval = Math.max(1, Number(current.productionInterval || levelStats.productionMs));
+        const maxProducts = Number(current.maxProducts || 0);
+        const productionInterval = Number(current.productionInterval || 0);
         const lastProducedAt = Number(current.lastProducedAt || Date.now());
+        const speedUpUsed = !!current.speedUpUsed;
 
-        if (currentProducts >= maxProducts) {
-            return res.status(400).json({ success:false, alreadyReady:true, error:'Mẻ hàng đã sẵn sàng, không cần tăng tốc.' });
+        if (maxProducts > 0 && currentProducts >= maxProducts) {
+            return res.status(400).json({ success: false, alreadyReady: true, error: 'Mẻ hàng đã sẵn sàng, không cần tăng tốc.' });
         }
-        if (current.speedUpUsed) {
-            return res.status(400).json({ success:false, alreadyUsed:true, error:'Mẻ hàng này đã dùng tăng tốc rồi.' });
+        if (speedUpUsed) {
+            return res.status(400).json({ success: false, alreadyUsed: true, error: 'Mẻ hàng này đã dùng Tăng Tốc X2 rồi.' });
         }
 
         const now = Date.now();
         const remainingReal = productionInterval - (now - lastProducedAt);
         if (remainingReal <= 0) {
-            return res.status(400).json({ success:false, alreadyReady:true, error:'Mẻ hàng đã sẵn sàng trong lúc bạn xem quảng cáo.' });
+            return res.status(400).json({ success: false, alreadyReady: true, error: 'Mẻ hàng đã sẵn sàng trong lúc bạn xem quảng cáo.' });
         }
-
-        const speedupMinutes = Number(event.speedupAttempt?.speedupMinutes || crypto.randomInt(10, 21));
-        const reductionMs = speedupMinutes * 60 * 1000;
-        const remainingAfterMs = Math.max(0, remainingReal - reductionMs);
-        const effectiveReductionMs = remainingReal - remainingAfterMs;
-        const newLastProducedAt = lastProducedAt - effectiveReductionMs;
-
+        const newLastProducedAt = lastProducedAt - Math.floor(remainingReal / 2);
         event.speedupAttempt = {
             status:'processing',
             startedAt:now,
-            speedupMinutes,
-            reductionMs,
-            effectiveReductionMs,
-            remainingBeforeMs:remainingReal,
-            remainingAfterMs,
             targetLastProducedAt:newLastProducedAt,
             productionInterval
         };
         if (!(await persistCompletedAdEvent(adToken, event))) {
-            return res.status(503).json({
-                success:false, retry:true, adVerified:true,
-                error:'Rewarded tăng tốc đã hợp lệ nhưng máy chủ chưa persist được kết quả random. Vui lòng thử lại, không cần xem lại QC.'
-            });
+            return res.status(503).json({ success:false, retry:true, adVerified:true, error:'Rewarded X2 đã hợp lệ nhưng máy chủ chưa lưu được trạng thái. Vui lòng thử lại, không cần xem lại QC.' });
         }
 
-        const readyImmediately = remainingAfterMs <= 0;
         const mutation = await atomicWalletMutationUnlocked(userId, {
-            setFields:{
-                lastProducedAt:newLastProducedAt,
+            setFields: {
+                lastProducedAt: newLastProducedAt,
                 productionInterval,
-                speedUpUsed:true,
-                ...(readyImmediately ? { currentProducts:maxProducts } : {})
+                speedUpUsed: true
             }
         });
         if (mutation.error) {
-            return res.status(409).json({ success:false, retry:true, error:mutation.error.message || 'Không lưu được kết quả tăng tốc.' });
+            console.error('Lỗi lưu Tăng Tốc X2:', mutation.error.message || mutation.error);
+            return res.status(409).json({ success: false, retry:true, error: mutation.error.message || 'Không lưu được kết quả Tăng Tốc X2.' });
         }
         await flushUserExtra();
 
-        const flags = await getDailyActionFlags(userId);
-        await saveUserExtra(userId, { dailyActionFlags:{ ...flags, __date:vietnamDayKey(), x2:true } });
+        const { data: fresh } = await readUserRow(userId);
+        const currentFlags = await getDailyActionFlags(userId);
+        await saveUserExtra(userId, { dailyActionFlags: { ...currentFlags, __date: vietnamDayKey(), x2: true } });
         await flushUserExtra();
 
-        const { data:fresh } = await readUserRow(userId);
         const payload = {
-            speedupMinutes,
-            reductionMs,
-            remainingBeforeMs:remainingReal,
-            remainingAfterMs,
-            lastProducedAt:Number(fresh?.lastProducedAt ?? newLastProducedAt),
-            productionInterval:Number(fresh?.productionInterval ?? productionInterval),
-            speedUpUsed:!!(fresh?.speedUpUsed ?? true),
-            currentProducts:Number(fresh?.currentProducts ?? currentProducts),
-            maxProducts:Number(fresh?.maxProducts ?? maxProducts),
-            walletUpdatedAt:fresh?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null
+            lastProducedAt: Number(fresh?.lastProducedAt ?? newLastProducedAt),
+            productionInterval: Number(fresh?.productionInterval ?? productionInterval),
+            speedUpUsed: !!(fresh?.speedUpUsed ?? true),
+            currentProducts: Number(fresh?.currentProducts ?? currentProducts),
+            maxProducts: Number(fresh?.maxProducts ?? maxProducts),
+            walletUpdatedAt: fresh?.walletUpdatedAt || mutation.data?.walletUpdatedAt || null
         };
-
         event.used = true;
         event.speedupResult = payload;
-        event.speedupAttempt = { ...event.speedupAttempt, status:'committed', committedAt:Date.now() };
+        event.speedupAttempt = { ...(event.speedupAttempt || {}), status:'committed', committedAt:Date.now() };
         if (!(await persistCompletedAdEvent(adToken, event))) {
-            console.error('Không persist được idempotency result tăng tốc cho token đã commit.');
+            console.error('Không lưu được idempotency result X2 cho token', adToken);
         }
         res.json({ success:true, ...payload });
     } catch (e) {
-        console.error('Lỗi tăng tốc server:', e?.message || e);
-        res.status(500).json({ success:false, error:'Không xử lý được tăng tốc lúc này.' });
+        console.error('Lỗi Tăng Tốc X2 server:', e);
+        res.status(500).json({ success: false, error: e.message });
     } finally {
-        if (releasePersistentSpeedupLock) {
-            try { await releasePersistentSpeedupLock(); } catch (_) {}
-        }
         releaseUserStateWrite();
         speedupProcessing.delete(userId);
     }
 });
 
-// ==================== GIAO HÀNG: CỐ ĐỊNH 5 LƯỢT/NGÀY ====================
-const DELIVERY_DAILY_LIMIT = 5;
-// Legacy fields extraDeliveryCount/extraDeliveryAdsToday remain in storage/history but are no longer active.
-const DELIVERY_MAX_BONUS = 0;
+// ==================== GIAO HÀNG: 10 CƠ BẢN + TỐI ĐA 3 BONUS/NGÀY ====================
+const DELIVERY_DAILY_LIMIT = 10;
+const DELIVERY_MAX_BONUS = 3;
 const DELIVERY_CAPTCHA_MIN_AFTER = 3;
 const DELIVERY_CAPTCHA_MAX_AFTER = 5;
 const DELIVERY_CAPTCHA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
@@ -6581,15 +6554,15 @@ app.post('/api/delivery/claim', async (req,res)=>{
                 }
 
                 if (ordersCommitted && stateCommitted) {
-                    const extra = 0;
-                    const limit = DELIVERY_DAILY_LIMIT;
+                    const extra = Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(recoveredUser.extraDeliveryCount||0)));
+                    const limit = DELIVERY_DAILY_LIMIT + extra;
                     const recoveredBaseOrders=Number(pendingClaim.baseOrders ?? pendingClaim.deliveredProducts ?? 0);
                     const recoveredRewardedOrders=Number(pendingClaim.rewardedOrders ?? recoveredBaseOrders);
                     const recoveredMultiplier=Number(pendingClaim.goldenHourMultiplier || 1);
                     const recoveredResult = {
                         deliveryCount:Number(recoveredUser.deliveryCount || targetDeliveryCount || 0),
                         remaining:Math.max(0, limit - Number(recoveredUser.deliveryCount || 0)),
-                        limit, bonusLimit:0, extraDeliveryCount:0,
+                        limit, bonusLimit:DELIVERY_MAX_BONUS, extraDeliveryCount:extra,
                         deliveredProducts:Number(pendingClaim.deliveredProducts || recoveredBaseOrders),
                         baseOrders:recoveredBaseOrders,rewardedOrders:recoveredRewardedOrders,
                         goldenHourActive:!!pendingClaim.goldenHourActive,goldenHourMultiplier:recoveredMultiplier,
@@ -6636,8 +6609,8 @@ app.post('/api/delivery/claim', async (req,res)=>{
         }
 
         const current=Math.max(0,Number(user.deliveryCount||0));
-        const extra=0;
-        const limit=DELIVERY_DAILY_LIMIT;
+        const extra=Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0)));
+        const limit=DELIVERY_DAILY_LIMIT+extra;
         if(current>=limit) return res.status(429).json({success:false,limitReached:true,deliveryCount:current,limit,error:'Bạn đã dùng hết lượt giao hàng hiện có hôm nay.'});
 
         const deliveredProducts=Math.max(0,Number(user.currentProducts||0));
@@ -6753,7 +6726,7 @@ app.post('/api/delivery/claim', async (req,res)=>{
         const result={
             deliveryCount:Number(fresh.data.deliveryCount),
             remaining:Math.max(0,limit-Number(fresh.data.deliveryCount)),
-            limit,bonusLimit:0,extraDeliveryCount:0,
+            limit,bonusLimit:DELIVERY_MAX_BONUS,extraDeliveryCount:extra,
             deliveredProducts,baseOrders,rewardedOrders,
             goldenHourActive:!!goldenHour.active,goldenHourMultiplier,goldenHourEventId:goldenHour.eventId||null,
             currentProducts:Number(fresh.data.currentProducts),
@@ -6799,8 +6772,8 @@ app.post('/api/delivery/check-captcha', async (req, res) => {
         if (!user) return res.status(404).json({success:false,error:'User không tồn tại'});
         if (user.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.'});
         const current = Math.max(0, Number(user.deliveryCount || 0));
-        const bonus = 0;
-        const limit = DELIVERY_DAILY_LIMIT;
+        const bonus = Math.min(DELIVERY_MAX_BONUS, Math.max(0, Number(user.extraDeliveryCount || 0)));
+        const limit = DELIVERY_DAILY_LIMIT + bonus;
         if (current >= limit) {
             return res.status(429).json({success:false,error:'Hôm nay bạn đã dùng hết lượt giao hàng.',deliveryCount:current,limit});
         }
@@ -7136,898 +7109,6 @@ async function acquirePersistentLeaseLock(lockKey, leaseMs = 60 * 1000) {
     }
     return null;
 }
-
-
-// ==================== LINK TASKS — SERVER AUTHORITATIVE / PERSISTENT ====================
-// Token/API secrets never leave this process. Frontend receives only public task metadata and shortUrl.
-const LINK_PROVIDER_TOKENS = Object.freeze({
-    shrinkpe: String(process.env.SHRINKPE_API_TOKEN || '').trim(),
-    cuty: String(process.env.CUTY_API_TOKEN || '').trim(),
-    bbmkts: String(process.env.BBMKTS_API_TOKEN || '').trim(),
-    layma: String(process.env.LAYMA_API_TOKEN || '').trim(),
-    uptolink: String(process.env.UPTOLINK_API_TOKEN || '').trim(),
-    site2s: String(process.env.SITE2S_API_TOKEN || '').trim()
-});
-const LINK_TASK_SIGNING_SECRET = String(process.env.LINK_TASK_SIGNING_SECRET || '').trim();
-const IP_INTEL_API_URL = String(process.env.IP_INTEL_API_URL || '').trim();
-const IP_INTEL_API_KEY = String(process.env.IP_INTEL_API_KEY || '').trim();
-const LINK_TASK_ATTEMPT_TTL_MS = 2 * 60 * 60 * 1000;
-const LINK_TASK_ROLLING_24H_MS = 24 * 60 * 60 * 1000;
-const LINK_TASK_RESERVATION_MS = 10 * 60 * 1000;
-
-const LINK_TASKS = Object.freeze({
-    shrinkpe: Object.freeze({
-        id:'shrinkpe', provider:'shrinkpe', name:'SHRINK.PE',
-        rewardVnd:40, rewardOrders:vndToOrders(40),
-        limitKind:'rolling24h', ipLimit:1, verification:'signed_callback',
-        tokenKey:'shrinkpe', available:true
-    }),
-    cuty: Object.freeze({
-        id:'cuty', provider:'cuty', name:'CUTY',
-        rewardVnd:20, rewardOrders:vndToOrders(20),
-        limitKind:'rolling24h', ipLimit:1, verification:'signed_callback',
-        tokenKey:'cuty', available:true
-    }),
-    bbmkts: Object.freeze({
-        id:'bbmkts', provider:'bbmkts', name:'BBMKTS',
-        rewardVnd:350, rewardOrders:vndToOrders(350),
-        limitKind:'rolling24h', ipLimit:1, verification:'provider_verification_unavailable',
-        tokenKey:'bbmkts', available:false
-    }),
-    layma: Object.freeze({
-        id:'layma', provider:'layma', name:'LAYMA',
-        rewardVnd:400, rewardOrders:vndToOrders(400),
-        limitKind:'vietnam_day', ipLimit:2, verification:'signed_callback',
-        tokenKey:'layma', available:true, vnOnly:true
-    }),
-    uptolink2: Object.freeze({
-        id:'uptolink2', provider:'uptolink', name:'UPTOLINK 2 STEP · Google 2 Step', providerType:4,
-        rewardVnd:300, rewardOrders:vndToOrders(300),
-        limitKind:'lifetime_task', userLimit:3, deviceLimit:3, ipLimit:3,
-        verification:'provider_verification_unavailable', tokenKey:'uptolink', available:false
-    }),
-    uptolink3: Object.freeze({
-        id:'uptolink3', provider:'uptolink', name:'UPTOLINK 3 STEP · Google 3 Step', providerType:3,
-        rewardVnd:300, rewardOrders:vndToOrders(300),
-        limitKind:'lifetime_task', userLimit:3, deviceLimit:3, ipLimit:3,
-        verification:'provider_verification_unavailable', tokenKey:'uptolink', available:false
-    }),
-    uptolink4: Object.freeze({
-        id:'uptolink4', provider:'uptolink', name:'UPTOLINK 4 STEP · Google 4 Step', providerType:5,
-        rewardVnd:300, rewardOrders:vndToOrders(300),
-        limitKind:'lifetime_task', userLimit:3, deviceLimit:3, ipLimit:3,
-        verification:'provider_verification_unavailable', tokenKey:'uptolink', available:false
-    }),
-    site2s: Object.freeze({
-        id:'site2s', provider:'site2s', name:'SITE2S',
-        rewardVnd:300, rewardOrders:vndToOrders(300),
-        limitKind:'rolling24h', ipLimit:2, deviceLimit:2, verification:'provider_view_plus_callback',
-        tokenKey:'site2s', available:true
-    })
-});
-
-function linkTaskAttemptKey(attemptId) {
-    return persistentEventKey('link-attempt', String(attemptId || ''));
-}
-function linkTaskHash(kind, value) {
-    if (!LINK_TASK_SIGNING_SECRET) return '';
-    return crypto.createHmac('sha256', LINK_TASK_SIGNING_SECRET)
-        .update(`${String(kind)}:${String(value || '')}`)
-        .digest('hex');
-}
-function normalizeLinkTaskDeviceId(value) {
-    const id = String(value || '').trim();
-    if (id.length < 16 || id.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(id)) return '';
-    return id;
-}
-function linkTaskPlatform(req) {
-    return String(req.body?.platform || req.get('x-telegram-platform') || '').trim().toLowerCase();
-}
-function isLinkTaskMobileRequest(req) {
-    const platform = linkTaskPlatform(req);
-    if (!['android','ios'].includes(platform)) return false;
-    const ua = String(req.get('user-agent') || '');
-    if (platform === 'android') return /Android/i.test(ua);
-    return /(iPhone|iPad|iPod)/i.test(ua);
-}
-function linkTaskSafeUrlBase() {
-    try {
-        const url = new URL(WEB_APP_URL);
-        return `${url.protocol}//${url.host}`;
-    } catch (_) {
-        return '';
-    }
-}
-function makeLinkTaskAttemptId() {
-    return crypto.randomBytes(24).toString('hex');
-}
-function makeLinkTaskNonce() {
-    return crypto.randomBytes(18).toString('hex');
-}
-function linkTaskCallbackSignature(attemptId, expiresAt, nonce) {
-    if (!LINK_TASK_SIGNING_SECRET) return '';
-    return crypto.createHmac('sha256', LINK_TASK_SIGNING_SECRET)
-        .update(`${String(attemptId)}.${String(expiresAt)}.${String(nonce)}`)
-        .digest('hex');
-}
-function safeEqualHex(a, b) {
-    try {
-        const ba = Buffer.from(String(a || ''), 'hex');
-        const bb = Buffer.from(String(b || ''), 'hex');
-        return ba.length > 0 && ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
-    } catch (_) {
-        return false;
-    }
-}
-function buildLinkTaskCallbackUrl(attemptId, expiresAt, nonce) {
-    const base = linkTaskSafeUrlBase();
-    if (!base) return '';
-    const sig = linkTaskCallbackSignature(attemptId, expiresAt, nonce);
-    const u = new URL('/api/link-task/callback', base);
-    u.searchParams.set('attemptId', attemptId);
-    u.searchParams.set('expires', String(expiresAt));
-    u.searchParams.set('nonce', nonce);
-    u.searchParams.set('sig', sig);
-    return u.toString();
-}
-function publicLinkTaskConfig(task) {
-    const tokenReady = !!LINK_PROVIDER_TOKENS[task.tokenKey];
-    const signingReady = !!LINK_TASK_SIGNING_SECRET;
-    let status = 'available';
-    if (!task.available) status = 'provider_verification_unavailable';
-    else if (!signingReady || !tokenReady) status = 'provider_config_missing';
-    return {
-        id:task.id,
-        provider:task.provider,
-        name:task.name,
-        providerType:task.providerType || null,
-        rewardVnd:task.rewardVnd,
-        rewardOrders:task.rewardOrders,
-        limitKind:task.limitKind,
-        ipLimit:Number(task.ipLimit || 0),
-        deviceLimit:Number(task.deviceLimit || 0),
-        userLimit:Number(task.userLimit || 0),
-        verification:task.verification,
-        status
-    };
-}
-
-async function fetchWithProviderTimeout(url, options = {}, {
-    timeoutMs = 10000,
-    retries = 2,
-    retryStatuses = [500,502,503,504]
-} = {}) {
-    let lastError = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const response = await fetch(url, { ...options, signal:controller.signal });
-            clearTimeout(timer);
-            if (retryStatuses.includes(response.status) && attempt < retries) {
-                await response.text().catch(() => '');
-                await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
-                continue;
-            }
-            return response;
-        } catch (e) {
-            clearTimeout(timer);
-            lastError = e;
-            if (attempt >= retries) throw e;
-            await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
-        }
-    }
-    throw lastError || new Error('Provider unavailable');
-}
-async function readProviderPayload(response) {
-    const text = await response.text();
-    if (!text) return { raw:'', json:null };
-    try { return { raw:text, json:JSON.parse(text) }; }
-    catch (_) { return { raw:text, json:null }; }
-}
-function findShortUrl(payload) {
-    const j = payload?.json;
-    const candidates = [
-        j?.shortenedUrl, j?.shortened_url, j?.short_url, j?.url,
-        j?.data?.short_url, j?.data?.shortenedUrl, j?.data?.url,
-        j?.result?.short_url, j?.result?.shortenedUrl, j?.result?.url
-    ];
-    for (const value of candidates) {
-        if (typeof value === 'string' && /^https?:\/\//i.test(value.trim())) return value.trim();
-    }
-    const raw = String(payload?.raw || '').trim();
-    return /^https?:\/\//i.test(raw) ? raw : '';
-}
-async function createProviderShortUrl(task, destinationUrl) {
-    const token = LINK_PROVIDER_TOKENS[task.tokenKey];
-    if (!token) {
-        const e = new Error('Provider chưa được cấu hình API token trên server.');
-        e.code = 'PROVIDER_CONFIG_MISSING';
-        throw e;
-    }
-    if (!task.available) {
-        const e = new Error('Provider hiện chưa có API xác minh/tạo link server-side đủ tin cậy.');
-        e.code = 'PROVIDER_VERIFICATION_UNAVAILABLE';
-        throw e;
-    }
-
-    if (task.provider === 'shrinkpe') {
-        const u = new URL('https://shrink.pe/api');
-        u.searchParams.set('api', token);
-        u.searchParams.set('url', destinationUrl);
-        u.searchParams.set('format', 'json');
-        const response = await fetchWithProviderTimeout(u, { method:'GET' });
-        const payload = await readProviderPayload(response);
-        if (!response.ok) {
-            const e = new Error(response.status === 429 ? 'SHRINK.PE đang giới hạn request.' : 'SHRINK.PE không khả dụng.');
-            e.status = response.status;
-            throw e;
-        }
-        const shortUrl = findShortUrl(payload);
-        if (!shortUrl) throw new Error('SHRINK.PE trả về dữ liệu shortlink không hợp lệ.');
-        return { shortUrl };
-    }
-
-    if (task.provider === 'cuty') {
-        const body = new URLSearchParams();
-        body.set('token', token);
-        body.set('url', destinationUrl);
-        const response = await fetchWithProviderTimeout('https://api.cuty.io/full', {
-            method:'POST',
-            headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
-            body
-        }, { timeoutMs:10000, retries:2 });
-        const payload = await readProviderPayload(response);
-        if (response.status === 422) {
-            const e = new Error('CUTY từ chối dữ liệu shortlink (422).');
-            e.status = 422;
-            throw e;
-        }
-        if (response.status === 429) {
-            const e = new Error('CUTY đang giới hạn request (429).');
-            e.status = 429;
-            throw e;
-        }
-        if (response.status !== 201) {
-            const e = new Error(response.status >= 500 ? 'CUTY tạm thời lỗi provider.' : 'CUTY không tạo được shortlink.');
-            e.status = response.status;
-            throw e;
-        }
-        const shortUrl = findShortUrl(payload);
-        if (!shortUrl) throw new Error('CUTY không trả data.short_url hợp lệ.');
-        return { shortUrl };
-    }
-
-    if (task.provider === 'layma') {
-        const u = new URL('https://api.layma.net/api/admin/shortlink/quicklink');
-        u.searchParams.set('tokenUser', token);
-        u.searchParams.set('format', 'json');
-        u.searchParams.set('url', destinationUrl);
-        const response = await fetchWithProviderTimeout(u, { method:'GET' });
-        const payload = await readProviderPayload(response);
-        if (!response.ok) {
-            const e = new Error(response.status === 429 ? 'LAYMA đang giới hạn request.' : 'LAYMA không khả dụng.');
-            e.status = response.status;
-            throw e;
-        }
-        const shortUrl = payload?.json?.success === true && typeof payload?.json?.html === 'string'
-            ? payload.json.html.trim()
-            : '';
-        if (!/^https?:\/\//i.test(shortUrl)) throw new Error('LAYMA không trả shortlink hợp lệ.');
-        return { shortUrl };
-    }
-
-    if (task.provider === 'site2s') {
-        const u = new URL('https://site2s.com/api');
-        u.searchParams.set('api', token);
-        u.searchParams.set('url', destinationUrl);
-        u.searchParams.set('format', 'json');
-        u.searchParams.set('type', '1');
-        const response = await fetchWithProviderTimeout(u, { method:'GET' });
-        const payload = await readProviderPayload(response);
-        if (!response.ok) {
-            const e = new Error(response.status === 429 ? 'SITE2S đang giới hạn request.' : 'SITE2S không khả dụng.');
-            e.status = response.status;
-            throw e;
-        }
-        const shortUrl = payload?.json?.status === 'success' ? String(payload?.json?.shortenedUrl || '').trim() : '';
-        if (!/^https?:\/\//i.test(shortUrl)) throw new Error('SITE2S không trả shortenedUrl hợp lệ.');
-        let providerSlug = '';
-        try {
-            providerSlug = new URL(shortUrl).pathname.split('/').filter(Boolean).pop() || '';
-        } catch (_) {}
-        if (!providerSlug) throw new Error('Không lấy được SITE2S slug để xác minh view.');
-        const baselineViews = await getSite2sViews(providerSlug);
-        if (baselineViews === null) throw new Error('SITE2S đã tạo link nhưng chưa đọc được baseline view.');
-        return { shortUrl, providerSlug, baselineViews };
-    }
-
-    const e = new Error('Provider chưa có server API được hỗ trợ.');
-    e.code = 'PROVIDER_VERIFICATION_UNAVAILABLE';
-    throw e;
-}
-async function getSite2sViews(slug) {
-    const safeSlug = String(slug || '').trim();
-    if (!safeSlug || !/^[A-Za-z0-9_-]+$/.test(safeSlug)) return null;
-    try {
-        const response = await fetchWithProviderTimeout(
-            `https://site2s.com/${encodeURIComponent(safeSlug)}/info/json`,
-            { method:'GET' },
-            { timeoutMs:9000, retries:2 }
-        );
-        if (!response.ok) return null;
-        const payload = await readProviderPayload(response);
-        const value = Number(payload?.json?.view);
-        return Number.isFinite(value) && value >= 0 ? value : null;
-    } catch (_) {
-        return null;
-    }
-}
-
-async function queryIpIntelligence(ip) {
-    if (!IP_INTEL_API_URL || !IP_INTEL_API_KEY) {
-        return { configured:false, trusted:false, countryCode:null, vpn:null, proxy:null };
-    }
-    try {
-        let urlText = IP_INTEL_API_URL.includes('{ip}')
-            ? IP_INTEL_API_URL.replaceAll('{ip}', encodeURIComponent(ip))
-            : IP_INTEL_API_URL;
-        const u = new URL(urlText);
-        if (!IP_INTEL_API_URL.includes('{ip}')) u.searchParams.set('ip', ip);
-        const response = await fetchWithProviderTimeout(u, {
-            method:'GET',
-            headers:{
-                'Authorization':`Bearer ${IP_INTEL_API_KEY}`,
-                'X-API-Key':IP_INTEL_API_KEY,
-                'Accept':'application/json'
-            }
-        }, { timeoutMs:8000, retries:1 });
-        if (!response.ok) return { configured:true, trusted:false, countryCode:null, vpn:null, proxy:null };
-        const payload = await readProviderPayload(response);
-        const j = payload?.json || {};
-        const countryRaw = j.countryCode ?? j.country_code ?? j.country?.code ?? j.location?.country_code ?? null;
-        const countryCode = countryRaw ? String(countryRaw).trim().toUpperCase() : null;
-        const boolOrNull = value => typeof value === 'boolean' ? value : null;
-        const vpn = boolOrNull(j.vpn ?? j.is_vpn ?? j.security?.vpn);
-        const proxy = boolOrNull(j.proxy ?? j.is_proxy ?? j.security?.proxy);
-        const trusted = !!countryCode || vpn !== null || proxy !== null;
-        return { configured:true, trusted, countryCode, vpn, proxy };
-    } catch (_) {
-        return { configured:true, trusted:false, countryCode:null, vpn:null, proxy:null };
-    }
-}
-
-function linkTaskQuotaSpecs(task, attempt) {
-    const specs = [];
-    const taskScope = task.provider === 'uptolink' ? task.id : task.provider;
-    const mk = (dimension, identityHash, limit, mode) => {
-        if (!identityHash || !limit) return;
-        specs.push({
-            dimension,
-            key:persistentEventKey('link-quota', `${taskScope}:${dimension}:${identityHash}`),
-            limit:Number(limit),
-            mode
-        });
-    };
-    mk('ip', attempt.ipHash, task.ipLimit, task.limitKind);
-    mk('device', attempt.deviceHash, task.deviceLimit, task.limitKind);
-    mk('user', attempt.userHash, task.userLimit, task.limitKind);
-    return specs.sort((a,b) => a.key.localeCompare(b.key));
-}
-function cleanLinkQuotaEntries(state, spec, now = Date.now()) {
-    const entries = Array.isArray(state?.entries) ? state.entries : [];
-    const dayKey = vietnamDayKey(new Date(now));
-    return entries.filter(entry => {
-        if (!entry || !entry.attemptId) return false;
-        if (entry.status === 'reserved') return Number(entry.reservedUntil || 0) > now;
-        if (entry.status !== 'credited') return false;
-        if (spec.mode === 'rolling24h') return Number(entry.creditedAt || 0) > now - LINK_TASK_ROLLING_24H_MS;
-        if (spec.mode === 'vietnam_day') return String(entry.dayKey || '') === dayKey;
-        return true; // lifetime_task
-    });
-}
-async function inspectLinkQuota(task, attempt) {
-    const now = Date.now();
-    const rows = [];
-    for (const spec of linkTaskQuotaSpecs(task, attempt)) {
-        const state = await readPersistentEvent(spec.key);
-        const entries = cleanLinkQuotaEntries(state, spec, now);
-        const active = entries.filter(e => String(e.attemptId) !== String(attempt.attemptId)).length;
-        let nextAllowedAt = null;
-        if (active >= spec.limit && spec.mode === 'rolling24h') {
-            const credits = entries.filter(e => e.status === 'credited').sort((a,b) => Number(a.creditedAt)-Number(b.creditedAt));
-            if (credits.length) nextAllowedAt = Number(credits[0].creditedAt) + LINK_TASK_ROLLING_24H_MS;
-        } else if (active >= spec.limit && spec.mode === 'vietnam_day') {
-            const tomorrow = new Date(`${addVietnamDays(vietnamDayKey(), 1)}T00:00:00+07:00`).getTime();
-            nextAllowedAt = tomorrow;
-        }
-        rows.push({ dimension:spec.dimension, limit:spec.limit, used:active, remaining:Math.max(0,spec.limit-active), nextAllowedAt });
-    }
-    return rows;
-}
-async function reserveLinkQuotas(task, attempt) {
-    const specs = linkTaskQuotaSpecs(task, attempt);
-    const releases = [];
-    const reservedStates = [];
-    try {
-        for (const spec of specs) {
-            const release = await acquirePersistentLeaseLock(`${spec.key}:lock`, 2 * 60 * 1000);
-            if (!release) return { ok:false, status:409, error:'Quota đang được xử lý trên máy chủ khác.', releases };
-            releases.push(release);
-        }
-        const now = Date.now();
-        for (const spec of specs) {
-            const state = await readPersistentEvent(spec.key) || { entries:[] };
-            let entries = cleanLinkQuotaEntries(state, spec, now);
-            const others = entries.filter(e => String(e.attemptId) !== String(attempt.attemptId));
-            if (others.length >= spec.limit) {
-                return { ok:false, status:429, error:'Đã hết quota cho nhiệm vụ này.', dimension:spec.dimension, releases };
-            }
-            const existing = entries.find(e => String(e.attemptId) === String(attempt.attemptId));
-            if (!existing || existing.status !== 'credited') {
-                entries = others.concat([{
-                    attemptId:String(attempt.attemptId),
-                    status:'reserved',
-                    reservedAt:now,
-                    reservedUntil:now + LINK_TASK_RESERVATION_MS,
-                    dayKey:vietnamDayKey()
-                }]);
-            }
-            const ok = await writePersistentEvent(spec.key, { entries, updatedAt:now }, 3);
-            if (!ok) return { ok:false, status:503, error:'Không persist được quota reservation.', releases };
-            reservedStates.push({ spec, entries });
-        }
-        return { ok:true, releases, reservedStates };
-    } catch (e) {
-        return { ok:false, status:500, error:'Không xử lý được quota.', releases };
-    }
-}
-async function finalizeLinkQuotas(task, attempt, creditedAt = Date.now()) {
-    const specs = linkTaskQuotaSpecs(task, attempt);
-    for (const spec of specs) {
-        const state = await readPersistentEvent(spec.key) || { entries:[] };
-        let entries = cleanLinkQuotaEntries(state, spec, creditedAt)
-            .filter(e => String(e.attemptId) !== String(attempt.attemptId));
-        entries.push({
-            attemptId:String(attempt.attemptId),
-            status:'credited',
-            creditedAt,
-            dayKey:vietnamDayKey(new Date(creditedAt))
-        });
-        if (!(await writePersistentEvent(spec.key, { entries, updatedAt:creditedAt }, 4))) return false;
-    }
-    return true;
-}
-async function releaseLinkQuotaLocks(releases = []) {
-    for (const release of [...releases].reverse()) {
-        try { await release(); } catch (_) {}
-    }
-}
-async function verifyReturnedLinkAttempt(attempt) {
-    if (!attempt || !attempt.returnedAt) return attempt;
-    if (['verified','credited'].includes(String(attempt.status || ''))) return attempt;
-    const task = LINK_TASKS[attempt.taskId];
-    if (!task) return attempt;
-
-    if (task.provider === 'site2s') {
-        const currentViews = await getSite2sViews(attempt.providerSlug);
-        if (currentViews !== null && currentViews > Number(attempt.baselineViews || 0)) {
-            return {
-                ...attempt,
-                status:'verified',
-                providerViews:currentViews,
-                verifiedAt:attempt.verifiedAt || Date.now(),
-                verification:'provider_view_plus_callback'
-            };
-        }
-        return { ...attempt, status:'returned', providerViews:currentViews };
-    }
-
-    if (['shrinkpe','cuty','layma'].includes(task.provider)) {
-        return {
-            ...attempt,
-            status:'verified',
-            verifiedAt:attempt.verifiedAt || Date.now(),
-            verification:'signed_callback'
-        };
-    }
-    return attempt;
-}
-
-app.post('/api/link-task/catalog', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    if (!isLinkTaskMobileRequest(req)) return res.status(403).json({success:false,mobileOnly:true,error:'Link Tasks chỉ hỗ trợ Telegram Android/iOS.'});
-    if (!LINK_TASK_SIGNING_SECRET) {
-        return res.status(503).json({success:false,error:'Link Tasks chưa cấu hình LINK_TASK_SIGNING_SECRET.'});
-    }
-    const deviceId = normalizeLinkTaskDeviceId(req.body?.deviceId);
-    if (!deviceId) return res.status(400).json({success:false,error:'Device installation ID không hợp lệ.'});
-    const ip = requestIp(req);
-    if (!ip) return res.status(400).json({success:false,error:'Không xác định được IP server-side.'});
-    const baseAttempt = {
-        attemptId:'catalog',
-        ipHash:linkTaskHash('ip', ip),
-        deviceHash:linkTaskHash('device', deviceId),
-        userHash:linkTaskHash('user', userId)
-    };
-    const tasks = [];
-    for (const task of Object.values(LINK_TASKS)) {
-        const quota = await inspectLinkQuota(task, baseAttempt);
-        tasks.push({ ...publicLinkTaskConfig(task), quota });
-    }
-    res.json({success:true,tasks,vpnCheckConfigured:!!(IP_INTEL_API_URL && IP_INTEL_API_KEY)});
-});
-
-app.post('/api/link-task/start', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    if (!isLinkTaskMobileRequest(req)) return res.status(403).json({success:false,mobileOnly:true,error:'Link Tasks chỉ hỗ trợ Telegram Android/iOS.'});
-    if (!LINK_TASK_SIGNING_SECRET) return res.status(503).json({success:false,error:'Link Tasks chưa cấu hình signing secret.'});
-
-    const taskId = String(req.body?.taskId || '').trim();
-    const task = LINK_TASKS[taskId];
-    if (!task) return res.status(404).json({success:false,error:'Link Task không tồn tại.'});
-    if (!task.available) {
-        return res.status(503).json({
-            success:false,
-            providerStatus:'provider_verification_unavailable',
-            error:task.provider === 'bbmkts'
-                ? 'BBMKTS hiện chỉ có Full Page Script, chưa có server API/callback đủ để xác minh completion.'
-                : 'UPTOLINK chưa có endpoint server-side được cung cấp để tạo/xác minh task này.'
-        });
-    }
-    if (!LINK_PROVIDER_TOKENS[task.tokenKey]) return res.status(503).json({success:false,providerStatus:'provider_config_missing',error:'Provider chưa cấu hình API token trên server.'});
-
-    const deviceId = normalizeLinkTaskDeviceId(req.body?.deviceId);
-    if (!deviceId) return res.status(400).json({success:false,error:'Device installation ID không hợp lệ.'});
-    const ip = requestIp(req);
-    if (!ip) return res.status(400).json({success:false,error:'Không xác định được IP server-side.'});
-
-    const userRead = await readUserRow(userId);
-    if (!userRead.data) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-    if (userRead.data.isBanned) return res.status(403).json({success:false,error:'Tài khoản đã bị khóa.',isBanned:true});
-
-    const intel = await queryIpIntelligence(ip);
-    if (intel.trusted && (intel.vpn === true || intel.proxy === true)) {
-        return res.status(403).json({success:false,vpnBlocked:true,error:'VPN/proxy không được sử dụng cho Link Tasks.'});
-    }
-    if (task.vnOnly) {
-        if (!intel.trusted || !intel.countryCode) {
-            return res.status(503).json({success:false,countryVerificationUnavailable:true,error:'LAYMA yêu cầu xác minh IP Việt Nam nhưng IP-intelligence chưa trả country đáng tin cậy.'});
-        }
-        if (intel.countryCode !== 'VN') {
-            return res.status(403).json({success:false,countryBlocked:true,error:'LAYMA chỉ ghi nhận traffic Việt Nam.'});
-        }
-    }
-
-    const attemptId = makeLinkTaskAttemptId();
-    const createdAt = Date.now();
-    const expiresAt = createdAt + LINK_TASK_ATTEMPT_TTL_MS;
-    const callbackNonce = makeLinkTaskNonce();
-    const callbackUrl = buildLinkTaskCallbackUrl(attemptId, expiresAt, callbackNonce);
-    if (!callbackUrl) return res.status(503).json({success:false,error:'WEB_APP_URL không hợp lệ để tạo callback.'});
-
-    let attempt = {
-        attemptId,
-        taskId:task.id,
-        provider:task.provider,
-        providerType:task.providerType || null,
-        userId,
-        userHash:linkTaskHash('user', userId),
-        ipHash:linkTaskHash('ip', ip),
-        deviceHash:linkTaskHash('device', deviceId),
-        dayKey:vietnamDayKey(),
-        createdAt,
-        expiresAt,
-        status:'created',
-        shortUrl:'',
-        providerSlug:null,
-        baselineViews:null,
-        providerViews:null,
-        returnedAt:null,
-        verifiedAt:null,
-        creditedAt:null,
-        rewardOrders:task.rewardOrders,
-        rewardVnd:task.rewardVnd,
-        callbackNonce,
-        callbackExpiresAt:expiresAt,
-        callbackUsedAt:null,
-        verification:task.verification,
-        claimAttempt:null
-    };
-
-    const quota = await inspectLinkQuota(task, attempt);
-    const blockedQuota = quota.find(q => q.remaining <= 0);
-    if (blockedQuota) {
-        return res.status(429).json({success:false,limitReached:true,quota,nextAllowedAt:blockedQuota.nextAllowedAt || null,error:'Đã hết quota cho nhiệm vụ này.'});
-    }
-
-    const created = await createPersistentEventOnce(linkTaskAttemptKey(attemptId), attempt);
-    if (created.error || !created.created) return res.status(503).json({success:false,retry:true,error:'Không persist được Link Task attempt.'});
-
-    try {
-        const provider = await createProviderShortUrl(task, callbackUrl);
-        attempt = {
-            ...attempt,
-            shortUrl:provider.shortUrl,
-            providerSlug:provider.providerSlug || null,
-            baselineViews:Number.isFinite(Number(provider.baselineViews)) ? Number(provider.baselineViews) : null
-        };
-        if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 4))) {
-            return res.status(503).json({success:false,retry:true,error:'Provider đã tạo link nhưng máy chủ chưa persist xong attempt.'});
-        }
-        return res.json({
-            success:true,
-            attemptId,
-            task:publicLinkTaskConfig(task),
-            shortUrl:attempt.shortUrl,
-            status:attempt.status,
-            expiresAt,
-            quota,
-            vpnCheck:(intel.vpn !== null || intel.proxy !== null) ? 'checked' : 'unavailable'
-        });
-    } catch (e) {
-        attempt = { ...attempt, status:'failed', failedAt:Date.now(), failureCode:e?.code || `HTTP_${e?.status || 0}` };
-        await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 2);
-        const status = e?.status === 422 ? 422 : e?.status === 429 ? 429 : 502;
-        return res.status(status).json({success:false,providerStatus:e?.code || 'provider_error',error:e?.message || 'Provider unavailable.'});
-    }
-});
-
-app.get('/api/link-task/callback', async (req, res) => {
-    const attemptId = String(req.query?.attemptId || '');
-    const expires = Number(req.query?.expires || 0);
-    const nonce = String(req.query?.nonce || '');
-    const sig = String(req.query?.sig || '');
-    if (!attemptId || !expires || !nonce || !sig || !LINK_TASK_SIGNING_SECRET) {
-        return res.status(400).send('Invalid callback.');
-    }
-    if (Date.now() > expires) return res.status(410).send('Callback expired.');
-    const expected = linkTaskCallbackSignature(attemptId, expires, nonce);
-    if (!safeEqualHex(sig, expected)) return res.status(403).send('Invalid callback signature.');
-
-    let release = null;
-    try {
-        release = await acquirePersistentLeaseLock(persistentEventKey('link-callback-lock', attemptId), 60 * 1000);
-        if (!release) return res.status(409).send('Callback is being processed.');
-        let attempt = await readPersistentEvent(linkTaskAttemptKey(attemptId));
-        if (!attempt) return res.status(404).send('Attempt not found.');
-        if (Date.now() > Number(attempt.expiresAt || 0)) {
-            attempt = { ...attempt, status:'expired', expiredAt:Date.now() };
-            await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 2);
-            return res.status(410).send('Attempt expired.');
-        }
-        if (String(attempt.callbackNonce || '') !== nonce || Number(attempt.callbackExpiresAt || 0) !== expires) {
-            return res.status(403).send('Callback metadata mismatch.');
-        }
-        if (!attempt.callbackUsedAt) {
-            attempt = {
-                ...attempt,
-                status:'returned',
-                returnedAt:attempt.returnedAt || Date.now(),
-                callbackUsedAt:Date.now()
-            };
-            attempt = await verifyReturnedLinkAttempt(attempt);
-            if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 4))) {
-                return res.status(503).send('Callback state persistence failed.');
-            }
-        }
-        const redirect = new URL(WEB_APP_URL);
-        redirect.searchParams.set('linkTaskAttempt', attemptId);
-        return res.redirect(302, redirect.toString());
-    } catch (_) {
-        return res.status(500).send('Callback processing failed.');
-    } finally {
-        if (release) { try { await release(); } catch (_) {} }
-    }
-});
-
-app.post('/api/link-task/opened', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    if (!isLinkTaskMobileRequest(req)) return res.status(403).json({success:false,mobileOnly:true,error:'Link Tasks chỉ hỗ trợ Telegram Android/iOS.'});
-    const attemptId = String(req.body?.attemptId || '');
-    if (!attemptId) return res.status(400).json({success:false,error:'Thiếu attemptId.'});
-    let release = null;
-    try {
-        release = await acquirePersistentLeaseLock(persistentEventKey('link-opened-lock', attemptId), 30 * 1000);
-        if (!release) return res.status(409).json({success:false,retry:true,error:'Attempt đang được cập nhật.'});
-        let attempt = await readPersistentEvent(linkTaskAttemptKey(attemptId));
-        if (!attempt || String(attempt.userId || '') !== userId) return res.status(404).json({success:false,error:'Attempt không tồn tại.'});
-        if (attempt.status === 'created') {
-            attempt = { ...attempt, status:'opened', openedAt:attempt.openedAt || Date.now() };
-            if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 3))) {
-                return res.status(503).json({success:false,retry:true,error:'Không persist được trạng thái opened.'});
-            }
-        }
-        return res.json({success:true,attemptId,status:attempt.status});
-    } finally {
-        if (release) { try { await release(); } catch (_) {} }
-    }
-});
-
-app.post('/api/link-task/status', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    if (!isLinkTaskMobileRequest(req)) return res.status(403).json({success:false,mobileOnly:true,error:'Link Tasks chỉ hỗ trợ Telegram Android/iOS.'});
-    const attemptId = String(req.body?.attemptId || '');
-    let attempt = await readPersistentEvent(linkTaskAttemptKey(attemptId));
-    if (!attempt || String(attempt.userId || '') !== userId) return res.status(404).json({success:false,error:'Attempt không tồn tại.'});
-    if (Date.now() > Number(attempt.expiresAt || 0) && !['credited'].includes(String(attempt.status || ''))) {
-        attempt = { ...attempt, status:'expired', expiredAt:attempt.expiredAt || Date.now() };
-        await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 2);
-    } else if (attempt.status === 'returned') {
-        const verified = await verifyReturnedLinkAttempt(attempt);
-        if (verified.status !== attempt.status || verified.providerViews !== attempt.providerViews) {
-            attempt = verified;
-            await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 3);
-        }
-    }
-    const task = LINK_TASKS[attempt.taskId];
-    const quota = task ? await inspectLinkQuota(task, attempt) : [];
-    return res.json({
-        success:true,
-        attemptId,
-        taskId:attempt.taskId,
-        status:attempt.status,
-        returnedAt:attempt.returnedAt || null,
-        verifiedAt:attempt.verifiedAt || null,
-        creditedAt:attempt.creditedAt || null,
-        rewardVnd:task?.rewardVnd || 0,
-        rewardOrders:task?.rewardOrders || 0,
-        verification:attempt.verification,
-        quota
-    });
-});
-
-app.post('/api/link-task/claim', async (req, res) => {
-    const userId = String(req.body?.userId || '');
-    if (!assertTelegramUser(req, userId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
-    if (!isLinkTaskMobileRequest(req)) return res.status(403).json({success:false,mobileOnly:true,error:'Link Tasks chỉ hỗ trợ Telegram Android/iOS.'});
-    const deviceId = normalizeLinkTaskDeviceId(req.body?.deviceId);
-    if (!deviceId) return res.status(400).json({success:false,error:'Device installation ID không hợp lệ.'});
-    const attemptId = String(req.body?.attemptId || '');
-    if (!attemptId) return res.status(400).json({success:false,error:'Thiếu attemptId.'});
-
-    let releaseAttempt = null;
-    let quotaReservation = null;
-    const releaseUserStateWrite = await acquireUserStateWriteLock(userId);
-    try {
-        releaseAttempt = await acquirePersistentLeaseLock(persistentEventKey('link-claim-lock', attemptId), 2 * 60 * 1000);
-        if (!releaseAttempt) return res.status(409).json({success:false,retry:true,error:'Claim đang được xử lý trên máy chủ khác.'});
-
-        let attempt = await readPersistentEvent(linkTaskAttemptKey(attemptId));
-        if (!attempt || String(attempt.userId || '') !== userId) return res.status(404).json({success:false,error:'Attempt không tồn tại.'});
-        const task = LINK_TASKS[attempt.taskId];
-        if (!task) return res.status(400).json({success:false,error:'Task config không tồn tại.'});
-        if (linkTaskHash('device', deviceId) !== String(attempt.deviceHash || '')) {
-            return res.status(403).json({success:false,error:'Device installation không khớp attempt đã tạo.'});
-        }
-        if (attempt.status === 'credited' && attempt.creditResult) {
-            return res.json({success:true,...attempt.creditResult,idempotent:true});
-        }
-        if (Date.now() > Number(attempt.expiresAt || 0)) {
-            attempt = { ...attempt, status:'expired', expiredAt:Date.now() };
-            await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 2);
-            return res.status(410).json({success:false,error:'Attempt đã hết hạn.'});
-        }
-        if (attempt.status === 'returned') {
-            attempt = await verifyReturnedLinkAttempt(attempt);
-            await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 3);
-        }
-        if (attempt.status !== 'verified') {
-            return res.status(409).json({success:false,notVerified:true,status:attempt.status,error:'Task chưa được server xác minh completion.'});
-        }
-
-        const fraudGate = await antiFraudRewardGate(userId);
-        if (!fraudGate.allowed) return res.status(fraudGate.status).json({success:false,...fraudGate,verificationRequired:true});
-
-        quotaReservation = await reserveLinkQuotas(task, attempt);
-        if (!quotaReservation.ok) {
-            return res.status(quotaReservation.status || 429).json({
-                success:false,
-                limitReached:(quotaReservation.status === 429),
-                error:quotaReservation.error,
-                dimension:quotaReservation.dimension || null
-            });
-        }
-
-        let current = (await readUserRow(userId)).data;
-        if (!current) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-        if (current.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-
-        const pending = attempt.claimAttempt;
-        if (pending?.status === 'processing') {
-            const targetOrders = Number(pending.targetOrders || 0);
-            if (targetOrders > 0 && Number(current.orders || 0) >= targetOrders) {
-                const creditedAt = Number(pending.creditedAt || Date.now());
-                if (!(await finalizeLinkQuotas(task, attempt, creditedAt))) {
-                    return res.status(503).json({success:false,retry:true,error:'Reward có thể đã commit nhưng quota marker đang đồng bộ.'});
-                }
-                const recoveredResult = {
-                    attemptId,
-                    taskId:task.id,
-                    rewardOrders:task.rewardOrders,
-                    rewardVnd:task.rewardVnd,
-                    orders:Number(current.orders || 0),
-                    walletUpdatedAt:current.walletUpdatedAt || null
-                };
-                attempt = {
-                    ...attempt,
-                    status:'credited',
-                    creditedAt,
-                    creditResult:recoveredResult,
-                    claimAttempt:{ ...pending, status:'committed', recoveredAt:Date.now() }
-                };
-                if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 4))) {
-                    return res.status(503).json({success:false,retry:true,error:'Reward đã commit nhưng attempt marker đang đồng bộ.'});
-                }
-                return res.json({success:true,...recoveredResult,idempotent:true,recovered:true});
-            }
-        }
-
-        const claimAttempt = {
-            status:'processing',
-            startedAt:Date.now(),
-            preOrders:Number(current.orders || 0),
-            targetOrders:Number(current.orders || 0) + task.rewardOrders,
-            rewardOrders:task.rewardOrders,
-            rewardVnd:task.rewardVnd
-        };
-        attempt = { ...attempt, claimAttempt };
-        if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 4))) {
-            return res.status(503).json({success:false,retry:true,error:'Không persist được claim reservation.'});
-        }
-
-        const mutation = await atomicWalletMutationUnlocked(userId, { deltaOrders:task.rewardOrders });
-        if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
-        if (!(await flushUserExtra())) {
-            return res.status(503).json({success:false,retry:true,error:'Orders đã commit nhưng state đang đồng bộ.'});
-        }
-        current = (await readUserRow(userId)).data;
-        if (!current || Number(current.orders || 0) < claimAttempt.targetOrders) {
-            return res.status(503).json({success:false,retry:true,error:'Orders chưa commit hoàn toàn.'});
-        }
-
-        const creditedAt = Date.now();
-        if (!(await finalizeLinkQuotas(task, attempt, creditedAt))) {
-            attempt = { ...attempt, claimAttempt:{ ...claimAttempt, creditedAt } };
-            await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 2);
-            return res.status(503).json({success:false,retry:true,error:'Orders đã commit nhưng quota marker đang đồng bộ.'});
-        }
-
-        const result = {
-            attemptId,
-            taskId:task.id,
-            rewardOrders:task.rewardOrders,
-            rewardVnd:task.rewardVnd,
-            orders:Number(current.orders || 0),
-            walletUpdatedAt:current.walletUpdatedAt || mutation.data?.walletUpdatedAt || null
-        };
-        attempt = {
-            ...attempt,
-            status:'credited',
-            creditedAt,
-            creditResult:result,
-            claimAttempt:{ ...claimAttempt, status:'committed', committedAt:creditedAt }
-        };
-        if (!(await writePersistentEvent(linkTaskAttemptKey(attemptId), attempt, 4))) {
-            return res.status(503).json({success:false,retry:true,error:'Orders đã commit nhưng attempt marker đang đồng bộ.'});
-        }
-        logTransaction(userId, 'orders', task.rewardOrders, `Link Task ${task.name}`).catch?.(() => {});
-        await recordAntiFraudEvent(userId, 'task', { rewardEvent:true, orders:task.rewardOrders, ip:requestIp(req), linkTask:task.id });
-        return res.json({success:true,...result});
-    } catch (e) {
-        console.error('Link Task claim error:', e?.message || e);
-        return res.status(500).json({success:false,error:'Không xử lý được Link Task claim lúc này.'});
-    } finally {
-        if (quotaReservation?.releases) await releaseLinkQuotaLocks(quotaReservation.releases);
-        if (releaseAttempt) { try { await releaseAttempt(); } catch (_) {} }
-        releaseUserStateWrite();
-    }
-});
-
 
 // ==================== GIỜ VÀNG X2 DELIVERY (SERVER AUTHORITATIVE) ====================
 const GOLDEN_HOUR_DURATION_MS = 15 * 60 * 1000;
@@ -8478,7 +7559,7 @@ async function startPromoPostScheduler() {
     promoWatchdogTimer=setInterval(()=>queuePromoReconcile(),PROMO_WATCHDOG_MS);
 }
 
-const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','speedup','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive']);
+const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','extra-delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive']);
 
 function completedAdEventKey(token) {
     return persistentEventKey('ad-completed', token);
@@ -8552,7 +7633,7 @@ app.post('/api/ad/session/start', async (req, res) => {
     try {
         const { userId, adType, purpose, sessionId, actionId, deliveryCaptchaToken } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
-        const allowedPurposes = ['generic','delivery','speedup','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
+        const allowedPurposes = ['generic','delivery','extra-delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const normalizedUserId = String(userId);
         const normalizedActionId = String(actionId || '');
@@ -8578,12 +7659,6 @@ app.post('/api/ad/session/start', async (req, res) => {
             const deliveryUser = await loadCurrentDailyUser(normalizedUserId);
             if (!deliveryUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
             if (deliveryUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-            if (Number(deliveryUser.deliveryCount || 0) >= DELIVERY_DAILY_LIMIT) {
-                return res.status(429).json({
-                    success:false,limitReached:true,deliveryCount:Number(deliveryUser.deliveryCount || 0),deliveryLimit:DELIVERY_DAILY_LIMIT,
-                    error:'Bạn đã dùng đủ 5 lượt giao hàng hôm nay.'
-                });
-            }
             const captchaState = await normalizeDeliveryCaptchaState(normalizedUserId, deliveryUser);
             const permitActive = !!captchaState.deliveryCaptchaPermitToken && captchaState.deliveryCaptchaPermitExpiresAt > Date.now();
             const suppliedCaptchaToken = String(deliveryCaptchaToken || '');
@@ -8671,12 +7746,27 @@ app.post('/api/ad/session/start', async (req, res) => {
             }
         }
 
-        if (sessionPurpose === 'chest-spin') {
+        if (sessionPurpose === 'chest-spin' || sessionPurpose === 'extra-delivery') {
             const limitedUser = await loadCurrentDailyUser(normalizedUserId);
             if (!limitedUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
             if (limitedUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-            if (Number(limitedUser.spinAdCount || 0) >= 5) {
+            if (sessionPurpose === 'chest-spin' && Number(limitedUser.spinAdCount || 0) >= 5) {
                 return res.status(429).json({success:false,limitReached:true,spinAdCount:Number(limitedUser.spinAdCount||0),error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 5).'});
+            }
+            if (sessionPurpose === 'extra-delivery') {
+                const currentExtra = Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(limitedUser.extraDeliveryCount || 0)));
+                const currentEffectiveLimit = DELIVERY_DAILY_LIMIT + currentExtra;
+                if (Number(limitedUser.deliveryCount || 0) < DELIVERY_DAILY_LIMIT) {
+                    return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 10 lượt cơ bản hôm nay.'});
+                }
+                // Legacy counters > new effective cap are preserved, but cannot unlock any more delivery attempts today.
+                if (Number(limitedUser.deliveryCount || 0) > currentEffectiveLimit) {
+                    return res.status(429).json({success:false,limitReached:true,error:'Bạn đã vượt giới hạn giao hàng mới của hôm nay, không thể nhận thêm lượt.'});
+                }
+                if (Number(limitedUser.extraDeliveryAdsToday || 0) >= DELIVERY_MAX_BONUS
+                    || Number(limitedUser.extraDeliveryCount || 0) >= DELIVERY_MAX_BONUS) {
+                    return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 3 quảng cáo nhận thêm lượt giao hôm nay.'});
+                }
             }
         }
 
@@ -9032,36 +8122,16 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'delivery',error:'Đã xác minh Rewarded giao hàng nhưng chưa lưu được trạng thái. Vui lòng thử lại, không cần xem lại quảng cáo.'});
             }
         }
+        if (purpose==='extra-delivery') {
+            const currentExtra=Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(user.extraDeliveryCount||0)));
+            const currentEffectiveLimit=DELIVERY_DAILY_LIMIT+currentExtra;
+            if (Number(user.deliveryCount||0)<DELIVERY_DAILY_LIMIT) return res.status(400).json({success:false,error:'Chỉ có thể nhận thêm lượt sau khi đã giao đủ 10 lượt cơ bản hôm nay.'});
+            if (Number(user.deliveryCount||0)>currentEffectiveLimit) return res.status(429).json({success:false,limitReached:true,error:'Bạn đã vượt giới hạn giao hàng mới của hôm nay, không thể nhận thêm lượt.'});
+            if (Number(user.extraDeliveryAdsToday||0)>=DELIVERY_MAX_BONUS || Number(user.extraDeliveryCount||0)>=DELIVERY_MAX_BONUS) return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 3 quảng cáo nhận thêm lượt giao hôm nay.'});
+        }
         if (purpose==='chest-spin' && Number(user.spinAdCount||0)>=5) return res.status(429).json({success:false,error:'Bạn đã xem đủ QC Rương hôm nay (tối đa 5).'});
         if (purpose==='bonus-task' && Number(user.bonusAdsToday||0)>=15) {
             return res.status(429).json({success:false,limitReached:true,bonusAdsToday:Number(user.bonusAdsToday||0),error:'Đã hết 15 lượt QC Rewarded hôm nay.'});
-        }
-
-        // Rewarded bonus random is decided by SERVER and persisted before any wallet mutation.
-        // Retry/restart with the same adToken reuses the exact same pair and cannot reroll.
-        let bonusRewardCoins = 0;
-        let bonusRewardOrders = 0;
-        if (purpose === 'bonus-task') {
-            const bonusMarkerKey = completedAdEventKey(String(token));
-            let bonusMarker = await readPersistentEvent(bonusMarkerKey);
-            if (!bonusMarker || !Number.isInteger(Number(bonusMarker.rewardCoins)) || !Number.isInteger(Number(bonusMarker.rewardOrders))) {
-                const randomized = {
-                    userId:String(userId), adType, purpose,
-                    status:'bonus-randomized', completedAt:Date.now(), used:false,
-                    rewardCoins:crypto.randomInt(10, 26),
-                    rewardOrders:crypto.randomInt(10, 26),
-                    rewardSpins:0,
-                    completionResult:null,
-                    expiresAt:Date.now()+30*60*1000
-                };
-                const once = await createPersistentEventOnce(bonusMarkerKey, randomized);
-                if (once.error) {
-                    return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'QC đã xác minh nhưng chưa persist được phần thưởng random. Không cần xem lại quảng cáo.'});
-                }
-                bonusMarker = once.value || randomized;
-            }
-            bonusRewardCoins = Math.max(10, Math.min(25, Number(bonusMarker.rewardCoins)));
-            bonusRewardOrders = Math.max(10, Math.min(25, Number(bonusMarker.rewardOrders)));
         }
 
         // Nếu process trước đã commit bonus nhưng chết trước completed marker, không cộng ví/counter lần hai.
@@ -9074,12 +8144,12 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 lifetimeAdsWatched:Number(recoveredUser.lifetimeAdsWatched||0),bonusAdsToday:Number(recoveredUser.bonusAdsToday||0),
                 bonusAdNextAllowedAt:Number(recoveredUser.bonusAdNextAllowedAt||0),
                 extraDeliveryAdsToday:Number(recoveredUser.extraDeliveryAdsToday||0),extraDeliveryCount:Number(recoveredUser.extraDeliveryCount||0),
-                rewardCoins:bonusRewardCoins,rewardOrders:bonusRewardOrders,rewardSpins:0,
+                rewardCoins:50,rewardOrders:25,rewardSpins:0,
                 coins:Number(recoveredUser.coins||0),orders:Number(recoveredUser.orders||0),spins:Number(recoveredUser.spins||0),
                 spinAdCount:Number(recoveredUser.spinAdCount||0),walletUpdatedAt:recoveredUser.walletUpdatedAt||null,elapsed,
                 riskScore:(await getAntiFraudState(String(userId))).stats.score
             };
-            const recoveredCompleted={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,rewardCoins:bonusRewardCoins,rewardOrders:bonusRewardOrders,rewardSpins:0,completionResult:recoveredResponse};
+            const recoveredCompleted={userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,completionResult:recoveredResponse};
             completedAdEvents.set(String(token), recoveredCompleted);
             await persistCompletedAdEvent(String(token), recoveredCompleted);
             const released = await releasePersistentAdSession(String(userId), String(token), 'completed');
@@ -9087,7 +8157,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
             return res.json({...recoveredResponse,idempotent:true,recovered:true});
         }
 
-        const rewardCoins=purpose==='bonus-task'?bonusRewardCoins:0, rewardOrders=purpose==='bonus-task'?bonusRewardOrders:0, rewardSpins=purpose==='chest-spin'?1:0;
+        const rewardCoins=purpose==='bonus-task'?50:0, rewardOrders=purpose==='bonus-task'?25:0, rewardSpins=purpose==='chest-spin'?1:0;
         const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,lastManualRewardedCompletedAt:Date.now(),lastResetDate:vietnamDayKey()};
         if(purpose==='bonus-task') {
             updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
@@ -9095,20 +8165,21 @@ app.post('/api/ad/session/complete', async (req, res) => {
             updateFields.lastBonusAdToken=String(token);
         }
         if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
+        if(purpose==='extra-delivery'){
+            updateFields.extraDeliveryAdsToday=Number(user.extraDeliveryAdsToday||0)+1;
+            updateFields.extraDeliveryCount=Math.min(DELIVERY_MAX_BONUS,Number(user.extraDeliveryCount||0)+1);
+        }
         const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
         if (purpose==='bonus-task' && !(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Phần thưởng đã commit nhưng cooldown đang đồng bộ.'});
         const fresh=await readUserRow(String(userId));
         const completed={
-            userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,
-            rewardCoins,rewardOrders,rewardSpins,
-            deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null,
+            userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null,
             deliveryCaptchaProtected:purpose==='delivery'&&!!s.deliveryCaptchaProtected,
             deliveryCaptchaToken:purpose==='delivery'?String(s.deliveryCaptchaToken || ''):''
         };
         await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,spins:rewardSpins,sessionId,purpose});
-        if(rewardCoins) logTransaction(String(userId),'coin',rewardCoins,'Rewarded hợp lệ');
-        if(rewardOrders) logTransaction(String(userId),'orders',rewardOrders,'Rewarded hợp lệ');
+        if(rewardCoins) logTransaction(String(userId),'coin',rewardCoins,'Xem 1 QC hợp lệ'); if(rewardOrders) logTransaction(String(userId),'orders',rewardOrders,'Xem 1 QC hợp lệ');
         try{await tryFinalizeReferral(String(userId));}catch(_){}
         let tutorial = null;
         try { tutorial = await maybeCompleteNewUserTutorial(String(userId)); } catch (e) { console.error('Tutorial after Rewarded:', e.message); }
@@ -9116,7 +8187,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const responseUser = freshAfterTutorial.data || fresh.data || {};
         insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose,ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
         completedAdEvents.set(String(token),completed);
-        const response={success:true,adToken:String(token),purpose,adsToday:Number(responseUser.adsToday||0),rewardedAdsToday:Number(responseUser.rewardedAdsToday||0),lifetimeAdsWatched:Number(responseUser.lifetimeAdsWatched||0),bonusAdsToday:Number(responseUser.bonusAdsToday||0),bonusAdNextAllowedAt:Number(responseUser.bonusAdNextAllowedAt||0),extraDeliveryAdsToday:Number(responseUser.extraDeliveryAdsToday||0),extraDeliveryCount:Number(responseUser.extraDeliveryCount||0),deliveryLimit:DELIVERY_DAILY_LIMIT,rewardCoins,rewardOrders,rewardSpins,coins:Number(responseUser.coins||0),orders:Number(responseUser.orders||0),spins:Number(responseUser.spins||0),spinAdCount:Number(responseUser.spinAdCount||0),walletUpdatedAt:responseUser.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,tutorial,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
+        const response={success:true,adToken:String(token),purpose,adsToday:Number(responseUser.adsToday||0),rewardedAdsToday:Number(responseUser.rewardedAdsToday||0),lifetimeAdsWatched:Number(responseUser.lifetimeAdsWatched||0),bonusAdsToday:Number(responseUser.bonusAdsToday||0),bonusAdNextAllowedAt:Number(responseUser.bonusAdNextAllowedAt||0),extraDeliveryAdsToday:Number(responseUser.extraDeliveryAdsToday||0),extraDeliveryCount:Number(responseUser.extraDeliveryCount||0),deliveryLimit:DELIVERY_DAILY_LIMIT+Math.min(DELIVERY_MAX_BONUS,Math.max(0,Number(responseUser.extraDeliveryCount||0))),rewardCoins,rewardOrders,rewardSpins,coins:Number(responseUser.coins||0),orders:Number(responseUser.orders||0),spins:Number(responseUser.spins||0),spinAdCount:Number(responseUser.spinAdCount||0),walletUpdatedAt:responseUser.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,tutorial,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
         completed.completionResult=response;
         const completedPersisted = await persistCompletedAdEvent(String(token), completed);
         if (!completedPersisted && PERSISTENT_AD_ACTION_PURPOSES.has(purpose)) {
