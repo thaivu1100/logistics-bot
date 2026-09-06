@@ -1267,8 +1267,10 @@
                                     <button @click="openLinkTaskUrl(task)" :disabled="linkTaskSecondsRemaining(task)<=0 || _linkTaskStarting===task.id" class="py-2 rounded-xl bg-blue-600 text-white font-black text-[9px] disabled:opacity-40">🌐 MỞ LINK</button>
                                 </div>
                             </div>
-                            <div x-show="task.status==='landed'" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-cyan-500/20 space-y-2">
+                            <div x-show="linkTaskCanEnterCode(task)" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-cyan-500/20 space-y-2">
                                 <p class="text-[9px] font-black text-cyan-300">🔐 NHẬP MÃ XÁC NHẬN</p>
+                                <p class="text-[8px] leading-relaxed text-slate-300">Sau khi vượt link thành công, hãy sao chép mã 6 số ở trang xác nhận rồi quay lại nhập tại đây.</p>
+                                <p x-show="task.status==='shortened'" class="text-[8px] leading-relaxed text-amber-300">⏳ Hệ thống chưa ghi nhận bạn tới trang xác nhận. Nếu bạn vừa hoàn thành link, hãy quay lại ứng dụng hoặc bấm LÀM MỚI.</p>
                                 <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
                                     x-model="linkTaskCodeInputs[task.id]"
                                     @input="$event.target.value=$event.target.value.replace(/\D/g,'').slice(0,6); linkTaskCodeInputs[task.id]=$event.target.value"
@@ -4058,6 +4060,12 @@
                 linkTaskIsActive(task) {
                     return !!task && ['created','shortened','landed'].includes(String(task.status||''));
                 },
+                linkTaskCanEnterCode(task) {
+                    if(!task || this.linkTaskSecondsRemaining(task)<=0)return false;
+                    const status=String(task.status||'');
+                    if(status==='landed')return true;
+                    return status==='shortened' && !!String(task.shortUrl||'').trim();
+                },
                 linkTaskSecondsRemaining(task) {
                     const _=this.tick;
                     if(!this.linkTaskIsActive(task))return 0;
@@ -4092,7 +4100,19 @@
                             this.linkTaskStatusError=data.error||'Tạm thời chưa tải được nhiệm vụ vượt link.';
                             return false;
                         }
-                        this.linkTaskStatusError='';this.linkTasks=Array.isArray(data.tasks)?data.tasks:[];if(typeof data.orders==='number')this.orders=data.orders;if(typeof data.coins==='number')this.coins=data.coins;if(typeof data.spins==='number')this.spinFree=data.spins;if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;this.linkTaskLastSync=Date.now();return true;
+                        this.linkTaskStatusError='';
+                        this.linkTasks=Array.isArray(data.tasks)?data.tasks:[];
+                        let codeInputsChanged=false,cooldownsChanged=false;
+                        const nextCodeInputs={...this.linkTaskCodeInputs},nextCooldowns={...this.linkTaskCodeCooldownUntil};
+                        for(const task of this.linkTasks){
+                            if(['expired','cancelled','rewarded'].includes(String(task?.status||''))){
+                                if(String(nextCodeInputs[task.id]||'')){nextCodeInputs[task.id]='';codeInputsChanged=true;}
+                                if(Number(nextCooldowns[task.id]||0)!==0){nextCooldowns[task.id]=0;cooldownsChanged=true;}
+                            }
+                        }
+                        if(codeInputsChanged)this.linkTaskCodeInputs=nextCodeInputs;
+                        if(cooldownsChanged)this.linkTaskCodeCooldownUntil=nextCooldowns;
+                        if(typeof data.orders==='number')this.orders=data.orders;if(typeof data.coins==='number')this.coins=data.coins;if(typeof data.spins==='number')this.spinFree=data.spins;if(data.walletUpdatedAt)this.walletSyncedAt=data.walletUpdatedAt;this.linkTaskLastSync=Date.now();return true;
                     }catch(_){this.linkTaskStatusError='Tạm thời chưa tải được nhiệm vụ vượt link. Vui lòng thử lại sau.';return false;}
                 },
                 async pollLinkTaskUntilReady(taskId,{expectNew=false,oldShortUrl='',oldExpiresAt='',attempts=18}={}) {
