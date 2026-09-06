@@ -1312,8 +1312,8 @@ for (const [provider, envName, configured] of [
 }
 console.log(`${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} LINK TASK DB: ${SUPABASE_SERVICE_ROLE_KEY ? 'service role configured' : 'missing SUPABASE_SERVICE_ROLE_KEY'}`);
 console.log(`${IP_HASH_SECRET ? '✅' : '❌'} LINK TASK HASH: ${IP_HASH_SECRET ? 'IP hash secret configured' : 'missing IP_HASH_SECRET'}`);
-console.log(`${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE: ${IP_INTELLIGENCE_API_KEY ? 'configured' : 'missing IP_INTELLIGENCE_API_KEY'}`);
-console.log(`🌐 TRUST PROXY: ${TRUST_PROXY_SETTING === false ? 'direct/no proxy' : `${TRUST_PROXY_SETTING} hop(s)`}${TRUST_CF_CONNECTING_IP ? ' + trusted CF-Connecting-IP' : ''}`);
+console.log(`ℹ️ IP INTELLIGENCE: ${IP_INTELLIGENCE_API_KEY ? 'configured' : 'not configured'} (OPTIONAL / NOT REQUIRED by NO1SHARE)`);
+console.log(`🌐 TRUST PROXY: ${TRUST_PROXY_SETTING === false ? 'direct/no proxy' : `${TRUST_PROXY_SETTING} hop(s)`}; raw CF-Connecting-IP is never used as canonical IP`);
 console.log(`${ADMIN_WEB_USERNAME && ADMIN_WEB_PASSWORD && ADMIN_SESSION_SECRET ? '✅' : '❌'} ADMIN WEB: ${ADMIN_WEB_USERNAME && ADMIN_WEB_PASSWORD && ADMIN_SESSION_SECRET ? 'credentials/session secret configured' : 'missing ADMIN_WEB_USERNAME / ADMIN_WEB_PASSWORD / ADMIN_SESSION_SECRET'}`);
 if (!IS_RENDER_RUNTIME && TRUST_PROXY_SETTING === false) console.log('ℹ️ VPS proxy note: nếu HTTPS đi qua đúng 1 Nginx/Caddy hop, hãy đặt TRUST_PROXY_HOPS=1 trong EnvironmentFile rồi restart service.');
 
@@ -1873,40 +1873,39 @@ function normalizePublicRequestIp(value) {
     const ip = normalizeRequestIp(value);
     return isPublicRoutableIp(ip) ? ip : '';
 }
+function canonicalRequestIp(req) {
+    // ONE source of truth for web business logic:
+    // Express computes req.ip only after applying the configured trust-proxy boundary. We intentionally
+    // do NOT parse req.body.ip, raw X-Forwarded-For, X-Real-IP or CF-Connecting-IP here.
+    // If the first address outside the trusted proxy boundary is private/non-routable, fail closed for
+    // IP-dependent quota rather than skipping deeper into a potentially spoofable forwarded chain.
+    return normalizePublicRequestIp(req?.ip || '');
+}
 function requestIp(req) {
-    // Never trust an IP sent in JSON/body. Candidate headers are only considered when the deployment itself
-    // says a reverse proxy is trusted. Private proxy addresses (10.x/172.16-31/192.168/CGNAT/etc.) are rejected.
-    const candidates = [];
-    if (TRUST_CF_CONNECTING_IP) candidates.push(req.get('cf-connecting-ip'));
-    candidates.push(req.ip);
-    if (Array.isArray(req.ips)) candidates.push(...req.ips);
-    // Do not parse raw X-Forwarded-For/X-Real-IP here. Express has already applied the configured
-    // trust-proxy boundary to req.ip/req.ips; parsing the raw header again would re-introduce spoofable hops.
-    candidates.push(req.socket?.remoteAddress, req.connection?.remoteAddress);
-    for (const candidate of candidates) {
-        const ip = normalizePublicRequestIp(candidate);
-        if (ip) return ip;
-    }
-    return '';
+    // Backward-compatible alias so every existing route converges on the same canonical helper.
+    return canonicalRequestIp(req);
 }
 
 function requestNetworkDiagnostic(req) {
-    const resolved=requestIp(req);
+    const resolved=canonicalRequestIp(req);
     const reqIpRaw=normalizeRequestIp(req?.ip||'');
     const socketRaw=normalizeRequestIp(req?.socket?.remoteAddress||req?.connection?.remoteAddress||'');
     const forwarded=String(req?.get?.('x-forwarded-for')||'').trim();
+    const cfHeader=String(req?.get?.('cf-connecting-ip')||'').trim();
     return {
         trustProxy:TRUST_PROXY_SETTING===false?'direct/no proxy':`${TRUST_PROXY_SETTING} hop(s)`,
         trustProxyHops:TRUST_PROXY_SETTING===false?0:Number(TRUST_PROXY_SETTING||0),
         renderRuntime:IS_RENDER_RUNTIME,
-        cfConnectingIpTrusted:TRUST_CF_CONNECTING_IP,
-        reqIpPresent:!!reqIpRaw,
+        remoteAddress:socketRaw||'',
+        reqIp:reqIpRaw||'',
         reqIpPublic:!!normalizePublicRequestIp(reqIpRaw),
-        socketIpPresent:!!socketRaw,
-        socketIpPublic:!!normalizePublicRequestIp(socketRaw),
         forwardedForPresent:!!forwarded,
         forwardedHopCount:forwarded?forwarded.split(',').map(v=>v.trim()).filter(Boolean).length:0,
+        cfConnectingIpPresent:!!cfHeader,
+        cfConnectingIpConfigured:TRUST_CF_CONNECTING_IP,
+        cfConnectingIpUsedForCanonical:false,
         publicIpAvailable:!!resolved,
+        canonicalPublicIp:resolved||'',
         resolvedPublicIp:resolved||''
     };
 }
@@ -1938,65 +1937,8 @@ function requireTelegramMobile(req, res) {
     res.status(403).json({success:false,desktopBlocked:true,error:'Mini App chỉ hỗ trợ Telegram trên Android hoặc iPhone.'});
     return false;
 }
-const ipRiskCache = new Map();
-let ipIntelligenceConfigWarned = false;
-async function checkIpRisk(ip) {
-    const normalized = normalizeRequestIp(ip);
-    if (!normalized) return {available:false,reason:'IP_UNAVAILABLE',error:'Không xác định được IP.'};
-    if (!IP_INTELLIGENCE_API_KEY) {
-        if (!ipIntelligenceConfigWarned) {
-            console.warn('⚠️ IP Intelligence chưa được cấu hình. Global Mini App access vẫn được phép; các reward task cần IP verification sẽ bị khóa.');
-            ipIntelligenceConfigWarned = true;
-        }
-        return {available:false,reason:'IP_INTELLIGENCE_NOT_CONFIGURED',error:'Dịch vụ xác minh mạng chưa được cấu hình.'};
-    }
-    const cached = ipRiskCache.get(normalized);
-    if (cached && Date.now() - cached.cachedAt < 10 * 60 * 1000) return cached.value;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-    try {
-        const url = new URL('https://api.ipapi.is/');
-        url.searchParams.set('q', normalized);
-        url.searchParams.set('key', IP_INTELLIGENCE_API_KEY);
-        const response = await fetch(url, {headers:{accept:'application/json','user-agent':'logistics-app/1.0'},signal:controller.signal});
-        if (!response.ok) {
-            console.warn(`⚠️ IP Intelligence tạm lỗi HTTP ${response.status}.`);
-            return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
-        }
-        const data = await response.json().catch(() => null);
-        if (!data || typeof data !== 'object') {
-            console.warn('⚠️ IP Intelligence trả dữ liệu không hợp lệ.');
-            return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
-        }
-        const value = {
-            available:true,
-            reason:null,
-            countryCode:String(data.location?.country_code || data.country_code || '').toUpperCase(),
-            isVpn:data.is_vpn === true,
-            isProxy:data.is_proxy === true,
-            isTor:data.is_tor === true,
-            isHosting:data.is_datacenter === true || data.is_hosting === true,
-            checkedAt:Date.now()
-        };
-        ipRiskCache.set(normalized,{cachedAt:Date.now(),value});
-        return value;
-    } catch (e) {
-        console.warn(`⚠️ IP Intelligence tạm thời không khả dụng: ${e?.name === 'AbortError' ? 'timeout' : 'network/provider error'}.`);
-        return {available:false,reason:'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE',error:'Dịch vụ xác minh mạng đang tạm thời chưa khả dụng.'};
-    } finally { clearTimeout(timer); }
-}
-function networkRiskBlocked(risk) {
-    return risk?.isVpn === true || risk?.isProxy === true || risk?.isTor === true || risk?.isHosting === true;
-}
-async function checkLinkTaskStrictNetwork(cfg, ip) {
-    if (!cfg?.requiresStrictNetwork) return {ok:true,risk:null};
-    const canonical = normalizePublicRequestIp(ip);
-    if (!canonical) return {ok:false,status:503,code:'ip_unavailable',error:'Tạm thời chưa xác định được IP công khai cho nhiệm vụ này.'};
-    const risk = await checkIpRisk(canonical);
-    if (!risk?.available) return {ok:false,status:503,code:'ip_intelligence_unavailable',error:'Tạm thời chưa xác minh được VPN/Proxy. Vui lòng thử lại sau.'};
-    if (networkRiskBlocked(risk)) return {ok:false,status:403,code:'network_not_allowed',error:'NO1SHARE không hỗ trợ VPN/Proxy/Tor/Datacenter. Vui lòng dùng mạng thật.'};
-    return {ok:true,risk};
-}
+// IP_INTELLIGENCE_API_KEY is intentionally OPTIONAL. The Mini App never performs a VPN/Proxy
+// lookup to block NO1SHARE or global access. Provider-side network policy remains the provider's job.
 
 function hashDeviceFingerprint(signals = {}) {
     const canonical = {
@@ -2380,7 +2322,12 @@ async function recordAntiFraudEvent(userId, eventType, meta = {}) {
         }
 
         const canonicalEventIp = normalizePublicRequestIp(meta.ip);
-        if (canonicalEventIp) state.ip = canonicalEventIp;
+        if (canonicalEventIp) {
+            state.ip = canonicalEventIp; // event/risk history snapshot
+            // users.ip is the ONE user-level "latest canonical IP". This update never touches wallet fields.
+            const currentIpWrite = await saveUserFields(id,{ip:canonicalEventIp});
+            if (currentIpWrite?.error) console.error(`Không cập nhật được IP gần nhất cho ${id}:`, currentIpWrite.error.message);
+        }
 
         const payload = meta.device || {};
         if (payload.platform || payload.webView || payload.browser || payload.language || payload.timezone) {
@@ -4000,7 +3947,7 @@ bot.command('linkconfig', async (ctx) => {
         `🔗 LINK TASK CONFIG\n\n${sections.join('\n\n')}\n\n` +
         `${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} SUPABASE SERVICE ROLE\n` +
         `${IP_HASH_SECRET ? '✅' : '❌'} IP HASH SECRET\n` +
-        `${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE\n` +
+        `ℹ️ IP INTELLIGENCE: ${IP_INTELLIGENCE_API_KEY ? '✅ CONFIGURED' : '❌ NOT CONFIGURED'} (OPTIONAL / NOT REQUIRED)\n` +
         `🌐 WEB_APP_URL: ${webAppUrlState}\n\n` +
         `🌐 NETWORK / PROXY\nTrust Proxy: ${TRUST_PROXY_SETTING === false ? '❌ direct/no proxy' : `✅ ${TRUST_PROXY_SETTING} hop(s)`}\n` +
         `Request public IP: xem trực tiếp tại /admin → Vượt link (lệnh Telegram không mang IP WebView của người dùng).\n\n` +
@@ -4262,7 +4209,7 @@ bot.command('checkID', async (ctx) => {
         const totalWithdrawn = withdrawals.filter(w => successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
         const totalCancelled = withdrawals.filter(w => cancelledStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
         const fraudState = antiFraud.state || {};
-        const activeIp = normalizeIpForDuplicateCheck(user.ip) || normalizeIpForDuplicateCheck(fraudState.ip) || '';
+        const activeIp = normalizeIpForDuplicateCheck(user.ip) || '';
         const jobMailIp = normalizeIpForDuplicateCheck(lastMailResult) || '';
         const latestWithdrawal = [...withdrawals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0))[0] || null;
         const withdrawalIp = latestWithdrawal ? await getStoredWithdrawalSourceIp(latestWithdrawal) : '';
@@ -8256,7 +8203,7 @@ const LINK_TASK_CONFIG = Object.freeze({
     uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'3'}),
     uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'5'}),
     site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:2500,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0}),
-    no1share:Object.freeze({key:'no1share',provider:'NO1SHARE',taskId:'no1share',rewardOrders:2000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,requiresStrictNetwork:true,ruleText:'2 View/IP/24h',warning:'Nghiêm cấm VPN, Proxy, Tool Auto hoặc bất kỳ hình thức gian lận nào.'})
+    no1share:Object.freeze({key:'no1share',provider:'NO1SHARE',taskId:'no1share',rewardOrders:2000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,ruleText:'2 View/IP/24h',warning:'Nghiêm cấm VPN, Proxy, Tool Auto hoặc bất kỳ hình thức gian lận nào.'})
 });
 function linkTaskDb(){ return jobMailDb(); }
 const LINK_TASK_ADMIN_LOCK_PREFIX='link_task_admin_lock:';
@@ -8357,7 +8304,6 @@ function linkTaskUnavailableState(cfg,runtime={}){
     // device_hash trong schema hiện tại cũng dùng cùng secret HMAC, vì vậy Link Task cần secret này ngay cả
     // khi provider chỉ giới hạn theo thiết bị.
     if(!IP_HASH_SECRET) return {code:'missing_ip_hash_secret',message:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
-    if(cfg.requiresStrictNetwork && !IP_INTELLIGENCE_API_KEY) return {code:'missing_ip_intelligence',message:'Nhiệm vụ này đang chờ cấu hình hệ thống xác minh VPN/Proxy. Vui lòng thử lại sau.'};
     if(linkTaskNeedsRequestIp(cfg) && runtime.ipAvailable === false) return {code:'ip_unavailable',message:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'};
     return {code:'',message:''};
 }
@@ -8889,7 +8835,7 @@ function linkTaskAttemptClientPayload(cfg,attempt,{reused=false,processing=false
         task:linkTaskPublicConfig(cfg,null,attempt)
     };
 }
-async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk=null}){
+async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
     const quotaReset=await readLinkTaskQuotaReset(userId).catch(()=>null);
     const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''});
     if(quota.remaining<=0){
@@ -8905,7 +8851,7 @@ async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkR
         nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
         reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
         issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
-        country_code:networkRisk?.countryCode||null,is_vpn:networkRisk?networkRiskBlocked(networkRisk):false,
+        country_code:null,is_vpn:null,
         created_at:now.toISOString(),expires_at:expiresAt,
         metadata:{
             quotaType:cfg.quotaType,
@@ -8971,11 +8917,9 @@ async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkR
 }
 async function checkGlobalMiniAppNetworkAccess(req){
     const ip=requestIp(req);
-    if(!ip)return {ok:true,ip:'',risk:null,networkVerificationAvailable:false,networkVerificationReason:'IP_UNAVAILABLE'};
-    const risk=await checkIpRisk(ip);
-    if(!risk.available)return {ok:true,ip,risk:null,networkVerificationAvailable:false,networkVerificationReason:risk.reason||'IP_INTELLIGENCE_TEMPORARILY_UNAVAILABLE'};
-    if(networkRiskBlocked(risk))return {ok:false,status:403,vpnBlocked:true,error:'Phát hiện VPN/Proxy/Tor/Datacenter. Vui lòng tắt VPN/Proxy để tiếp tục.'};
-    return {ok:true,ip,risk,networkVerificationAvailable:true,networkVerificationReason:null};
+    // Canonical public IP is still captured for current-user state and quotas, but no IP Intelligence
+    // lookup is performed here. VPN/Proxy policy for NO1SHARE is enforced by the provider, not Mini App.
+    return {ok:true,ip,risk:null,networkVerificationAvailable:false,networkVerificationReason:'NOT_REQUIRED'};
 }
 app.post('/api/access-check',async(req,res)=>{
     const userId=String(req.body?.userId||'');
@@ -8986,9 +8930,8 @@ app.post('/api/access-check',async(req,res)=>{
         if(current.error)throw current.error;
         if(current.data?.isBanned)return res.status(403).json({success:false,allowed:false,accountBlocked:true,error:'Tài khoản hiện đang bị khóa.'});
         const n=await checkGlobalMiniAppNetworkAccess(req);
-        if(!n.ok)return res.status(n.status).json({success:false,allowed:false,vpnBlocked:true,error:n.error});
         if(current.data&&n.ip&&String(current.data.ip||'')!==n.ip)await saveUserFields(userId,{ip:n.ip});
-        return res.json({success:true,allowed:true,networkVerificationAvailable:n.networkVerificationAvailable,networkVerificationReason:n.networkVerificationReason,countryCode:n.risk?.countryCode||''});
+        return res.json({success:true,allowed:true,networkVerificationAvailable:false,networkVerificationReason:'NOT_REQUIRED',countryCode:''});
     }catch(e){
         console.error('Access check failed:',e?.message||e);
         return res.status(503).json({success:false,allowed:false,serverUnavailable:true,error:'Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.'});
@@ -9114,8 +9057,6 @@ app.post('/api/link-task/start',async(req,res)=>{
     const runtime={ipAvailable:!!ip,adminLocked:false,activeAttempt:false};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
-    const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
-    if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,providerUnavailable:true,code:strictNetwork.code,error:strictNetwork.error});
     const ipHash=ip?hashNetworkValue(ip,'ip'):'',deviceHash=hashNetworkValue(deviceId,'device');
     if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash)return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
 
@@ -9133,7 +9074,7 @@ app.post('/api/link-task/start',async(req,res)=>{
             const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
             if(active){const payload=linkTaskAttemptClientPayload(cfg,active,{reused:true});return res.status(payload.creating?202:200).json(payload);}
             if((await readLinkTaskAdminLock(taskId)).locked)return linkTaskAdminLockedResponse(res);
-            const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk:strictNetwork.risk});
+            const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
             if(!created.ok)return res.status(created.httpStatus||503).json({success:false,providerUnavailable:!!created.providerUnavailable,limitReached:!!created.limitReached,code:created.code||'link_task_error',error:created.error||'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
             const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
             return res.status(payload.creating?202:200).json(payload);
@@ -9163,8 +9104,6 @@ app.post('/api/link-task/change',async(req,res)=>{
     const runtime={ipAvailable:!!ip,adminLocked:false,activeAttempt:false};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
-    const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
-    if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,providerUnavailable:true,code:strictNetwork.code,error:strictNetwork.error});
     const ipHash=ip?hashNetworkValue(ip,'ip'):'',deviceHash=hashNetworkValue(deviceId,'device');
     if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash)return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
     const dbReadiness=await checkLinkTaskDatabaseReadiness();
@@ -9192,7 +9131,7 @@ app.post('/api/link-task/change',async(req,res)=>{
                 if(fresh?.status==='rewarded')return res.status(409).json({success:false,code:'already_rewarded',error:'Nhiệm vụ vừa được xác nhận thưởng nên không thể đổi.'});
             }
         }
-        const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk:strictNetwork.risk});
+        const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
         if(!created.ok)return res.status(created.httpStatus||503).json({success:false,providerUnavailable:!!created.providerUnavailable,limitReached:!!created.limitReached,code:created.code||'link_task_error',error:created.error||'Không thể đổi nhiệm vụ vượt link. Vui lòng thử lại sau.'});
         const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
         return res.status(payload.creating?202:200).json({...payload,changed:true});
@@ -9304,16 +9243,10 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         if((linkTaskNeedsRequestIp(cfg)&&!landingIpHash)||!a.device_hash){
             return res.status(503).send('<h2>⚠️ Hệ thống xác minh lượt nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
         }
-        const strictNetwork=await checkLinkTaskStrictNetwork(cfg,landingIp);
-        if(!strictNetwork.ok){
-            const status=strictNetwork.status||503;
-            return res.status(status).send(`<h2>🚫 MẠNG KHÔNG ĐỦ ĐIỀU KIỆN</h2><p>${safeHtml(strictNetwork.error)}</p>`);
-        }
         const deviceIpHash=a.device_hash&&landingIpHash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
         const nowIso=new Date().toISOString();
         const {data:landed,error:ue}=await db.from('link_task_attempts').update({
-            status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,
-            country_code:strictNetwork.risk?.countryCode||null,is_vpn:strictNetwork.risk?networkRiskBlocked(strictNetwork.risk):false,landed_at:nowIso
+            status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,landed_at:nowIso
         })
             .eq('id',a.id)
             .in('status',LINK_TASK_ACTIVE_STATUSES)
@@ -9374,8 +9307,6 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             return res.status(409).json({success:false,code:'not_landed',error:'Chưa ghi nhận hoàn thành quá trình vượt link. Nếu bạn vừa hoàn thành, vui lòng quay lại Mini App và bấm LÀM MỚI.'});
         }
         const verifyRequestIp=requestIp(req);
-        const strictNetwork=await checkLinkTaskStrictNetwork(cfg,verifyRequestIp);
-        if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,code:strictNetwork.code,error:strictNetwork.error});
         const expectedCode=linkTaskVerificationCode(attempt);
         const codeValid=submittedCodeFormatValid && /^\d{6}$/.test(expectedCode) && timingSafeEqualDigits(submittedCode,expectedCode);
         const {data:rpc,error:rpcError}=await db.rpc('link_task_verify_code_atomic',{
@@ -9891,7 +9822,7 @@ async function startPromoPostScheduler() {
     promoWatchdogTimer=setInterval(()=>queuePromoReconcile(),PROMO_WATCHDOG_MS);
 }
 
-const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin']);
+const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','auto-ad']);
 
 function completedAdEventKey(token) {
     return persistentEventKey('ad-completed', token);
@@ -9959,37 +9890,94 @@ async function releasePersistentAdSession(userId, token, terminalStatus = 'relea
 
 
 // ==================== ADSGRAM — SERVER-AUTHORITATIVE ONE-TIME SESSIONS ====================
-// Blocks are public placement IDs, not secrets. Rewards reuse the existing XEM QC NHẬN THƯỞNG economy:
-// one shared pool (15/day), one shared 5-minute cooldown, random 10–25 Coin + 10–25 Orders.
+// Blocks are public placement IDs, not secrets.
+// - int-46420: manual "XEM QC ADSGRAM", dedicated persistent 10-minute cooldown.
+// - 46075: rewarded format. Manual Reward task keeps the existing shared 15/day + 5-minute bonus pool.
+//   Automatic scheduler may use this block only as purpose=auto-ad, and a successful official SDK completion
+//   receives the same existing AdsGram reward through the server-authoritative atomic wallet path.
 const ADSGRAM_INTERSTITIAL_BLOCK_ID = 'int-46420';
 const ADSGRAM_REWARD_BLOCK_ID = '46075';
 const ADSGRAM_SESSION_TTL_MS = 8 * 60 * 1000;
 const ADSGRAM_BONUS_DAILY_LIMIT = 15;
-const ADSGRAM_BONUS_COOLDOWN_MS = 5 * 60 * 1000;
+const BONUS_AD_COOLDOWN_MS = 5 * 60 * 1000;
+const ADSGRAM_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
+const AUTO_AD_MIN_COOLDOWN_MS = 3 * 60 * 1000;
 function adsgramSessionKey(token){return persistentEventKey('adsgram-session',String(token||''));}
 function adsgramCompletedKey(token){return persistentEventKey('adsgram-completed',String(token||''));}
 function adsgramActiveKey(userId){return persistentEventKey('adsgram-active-user',String(userId||''));}
+function adsgramManualCooldownKey(userId){return persistentEventKey('adsgram-manual-next',String(userId||''));}
+function autoAdCooldownKey(userId){return persistentEventKey('auto-ad-next',String(userId||''));}
 function adsgramBlockForFormat(format){return String(format||'')==='reward'?ADSGRAM_REWARD_BLOCK_ID:ADSGRAM_INTERSTITIAL_BLOCK_ID;}
+function adsgramPurpose(format,requestedPurpose){
+    if(String(format||'')==='interstitial')return 'adsgram-manual';
+    return String(requestedPurpose||'')==='auto-ad'?'auto-ad':'bonus-task';
+}
+async function readAdsgramManualNextAllowedAt(userId){
+    const marker=await readPersistentEvent(adsgramManualCooldownKey(userId));
+    return Math.max(0,Number(marker?.nextAllowedAt||0));
+}
+async function writeAdsgramManualCooldown(userId,token,completedAt=Date.now()){
+    const nextAllowedAt=Number(completedAt)+ADSGRAM_MANUAL_COOLDOWN_MS;
+    const ok=await writePersistentEvent(adsgramManualCooldownKey(userId),{
+        status:'cooldown',userId:String(userId),token:String(token||''),completedAt:Number(completedAt),nextAllowedAt
+    },3);
+    return ok?nextAllowedAt:0;
+}
+async function readAutoAdNextAllowedAt(userId){
+    const marker=await readPersistentEvent(autoAdCooldownKey(userId));
+    return Math.max(0,Number(marker?.nextAllowedAt||0));
+}
+async function writeAutoAdCooldown(userId,provider,token,completedAt=Date.now()){
+    const nextAllowedAt=Number(completedAt)+AUTO_AD_MIN_COOLDOWN_MS;
+    const ok=await writePersistentEvent(autoAdCooldownKey(userId),{
+        status:'cooldown',userId:String(userId),provider:String(provider||''),token:String(token||''),completedAt:Number(completedAt),nextAllowedAt
+    },3);
+    return ok?nextAllowedAt:0;
+}
 async function releaseAdsgramActive(userId,token,status='released'){
     const active=await readPersistentEvent(adsgramActiveKey(userId));
     if(String(active?.token||'')===String(token||'')){
         await writePersistentEvent(adsgramActiveKey(userId),{...active,status,releasedAt:Date.now(),expiresAt:Date.now()-1},2).catch(()=>false);
     }
 }
-function adsgramBonusResponseFromUser(user,token,rewardCoins,rewardOrders,format){
+function adsgramBonusResponseFromUser(user,token,rewardCoins,rewardOrders,format,purpose,extra={}){
     return {
-        success:true,provider:'adsgram',format:String(format||''),adToken:String(token||''),purpose:'bonus-task',
+        success:true,provider:'adsgram',format:String(format||''),adToken:String(token||''),purpose:String(purpose||'bonus-task'),
         adsToday:Number(user?.adsToday||0),rewardedAdsToday:Number(user?.rewardedAdsToday||0),
         lifetimeAdsWatched:Number(user?.lifetimeAdsWatched||0),bonusAdsToday:Number(user?.bonusAdsToday||0),
-        bonusAdNextAllowedAt:Number(user?.bonusAdNextAllowedAt||0),rewardCoins:Number(rewardCoins||0),rewardOrders:Number(rewardOrders||0),
+        bonusAdNextAllowedAt:Number(user?.bonusAdNextAllowedAt||0),
+        adsgramManualNextAllowedAt:Number(extra.adsgramManualNextAllowedAt||0),
+        autoAdNextAllowedAt:Number(extra.autoAdNextAllowedAt||0),
+        rewardCoins:Number(rewardCoins||0),rewardOrders:Number(rewardOrders||0),
         coins:Number(user?.coins||0),orders:Number(user?.orders||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||null
     };
 }
+app.post('/api/adsgram/manual/state',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    try{
+        const [user,nextAllowedAt]=await Promise.all([loadCurrentDailyUser(userId),readAdsgramManualNextAllowedAt(userId)]);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const now=Date.now();
+        return res.json({
+            success:true,bonusAdsToday:Number(user.bonusAdsToday||0),
+            nextAllowedAt,retryAfterMs:Math.max(0,nextAllowedAt-now),
+            cooldown:now<nextAllowedAt,dailyLimit:ADSGRAM_BONUS_DAILY_LIMIT
+        });
+    }catch(e){
+        return res.status(503).json({success:false,retry:true,error:'Không đọc được cooldown AdsGram.'});
+    }
+});
 app.post('/api/adsgram/session/start',async(req,res)=>{
     const userId=String(req.body?.userId||'');
     if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     if(!requireTelegramMobile(req,res))return;
     const format=String(req.body?.format||'interstitial').toLowerCase()==='reward'?'reward':'interstitial';
+    const purpose=adsgramPurpose(format,req.body?.purpose);
+    if(String(req.body?.purpose||'')==='auto-ad'&&format!=='reward'){
+        return res.status(400).json({success:false,code:'invalid_auto_adsgram_format',error:'Auto AdsGram chỉ dùng Reward block 46075.'});
+    }
     const expectedBlock=adsgramBlockForFormat(format);
     const blockId=String(req.body?.blockId||expectedBlock);
     if(blockId!==expectedBlock)return res.status(400).json({success:false,code:'invalid_adsgram_block',error:'AdsGram block không hợp lệ.'});
@@ -10004,30 +9992,35 @@ app.post('/api/adsgram/session/start',async(req,res)=>{
         if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
         const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
         if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
-        const nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
-        if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,bonusAdsToday:bonusCount});
+        const now=Date.now();
+        let nextAllowedAt=0;
+        if(purpose==='adsgram-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
+        else if(purpose==='bonus-task')nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        else if(purpose==='auto-ad')nextAllowedAt=await readAutoAdNextAllowedAt(userId);
+        if(now<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-now,nextAllowedAt,bonusAdsToday:bonusCount,purpose});
 
         const monetagActive=await readPersistentEvent(persistentEventKey('ad-active-user',userId));
-        if(monetagActive?.status==='active'&&Number(monetagActive.expiresAt||0)>Date.now()){
+        if(monetagActive?.status==='active'&&Number(monetagActive.expiresAt||0)>now){
             return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo Monetag khác đang được xử lý.'});
         }
         const active=await readPersistentEvent(adsgramActiveKey(userId));
-        if(active&&String(active.status||'')==='active'&&Number(active.expiresAt||0)>Date.now()){
+        if(active&&String(active.status||'')==='active'&&Number(active.expiresAt||0)>now){
             const oldSession=await readPersistentEvent(adsgramSessionKey(active.token));
-            if(oldSession&&String(oldSession.actionId||'')===actionId&&String(oldSession.format||'')===format){
-                return res.json({success:true,token:String(active.token),blockId:expectedBlock,format,idempotent:true,recovered:true});
+            if(oldSession&&String(oldSession.actionId||'')===actionId&&String(oldSession.format||'')===format&&String(oldSession.purpose||'')===purpose){
+                return res.json({success:true,token:String(active.token),blockId:expectedBlock,format,purpose,idempotent:true,recovered:true});
             }
             return res.status(409).json({success:false,retry:true,active:true,error:'Một phiên AdsGram khác đang hoạt động.'});
         }
         const token=crypto.randomBytes(24).toString('base64url');
         const startedAt=Date.now(),expiresAt=startedAt+ADSGRAM_SESSION_TTL_MS;
-        const session={status:'started',userId,token,blockId:expectedBlock,format,purpose:'bonus-task',actionId,sessionId,startedAt,expiresAt};
+        const session={status:'started',userId,token,blockId:expectedBlock,format,purpose,actionId,sessionId,startedAt,expiresAt};
         if(!(await writePersistentEvent(adsgramSessionKey(token),session,3)))return res.status(503).json({success:false,retry:true,error:'Không lưu được phiên AdsGram.'});
-        if(!(await writePersistentEvent(adsgramActiveKey(userId),{status:'active',userId,token,actionId,format,startedAt,expiresAt},3))){
+        if(!(await writePersistentEvent(adsgramActiveKey(userId),{status:'active',userId,token,actionId,format,purpose,startedAt,expiresAt},3))){
             await writePersistentEvent(adsgramSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},1).catch(()=>false);
             return res.status(503).json({success:false,retry:true,error:'Không khóa được phiên AdsGram.'});
         }
-        return res.json({success:true,token,blockId:expectedBlock,format});
+        await recordAntiFraudEvent(userId,'ad_start',{ip:requestIp(req),sessionId,countAction:false}).catch(()=>{});
+        return res.json({success:true,token,blockId:expectedBlock,format,purpose});
     }catch(e){
         console.error('AdsGram session start:',e?.message||e);
         return res.status(503).json({success:false,retry:true,error:'Không tạo được phiên AdsGram. Vui lòng thử lại.'});
@@ -10074,40 +10067,67 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
         let user=await loadCurrentDailyUser(userId);
         if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const purpose=String(session.purpose||adsgramPurpose(session.format,''));
+        const completedAt=Date.now();
+
+        // Crash/retry recovery after wallet commit. Rebuild the required persistent cooldown before returning.
         if(String(user.lastBonusAdToken||'')===token){
+            let manualNext=0,autoNext=0;
+            if(purpose==='adsgram-manual')manualNext=await writeAdsgramManualCooldown(userId,token,Number(user.lastManualRewardedCompletedAt||completedAt));
+            if(purpose==='auto-ad')autoNext=await writeAutoAdCooldown(userId,'adsgram',token,Number(user.lastManualRewardedCompletedAt||completedAt));
             const fresh=await readUserRow(userId);const recovered=fresh.data||user;
-            const result=adsgramBonusResponseFromUser(recovered,token,Number(recovered.lastBonusRewardCoins||0),Number(recovered.lastBonusRewardOrders||0),session.format);
-            await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt:Date.now(),result},3);
+            const result=adsgramBonusResponseFromUser(recovered,token,Number(recovered.lastBonusRewardCoins||0),Number(recovered.lastBonusRewardOrders||0),session.format,purpose,{adsgramManualNextAllowedAt:manualNext||await readAdsgramManualNextAllowedAt(userId),autoAdNextAllowedAt:autoNext||await readAutoAdNextAllowedAt(userId)});
+            await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt,result},3);
             await releaseAdsgramActive(userId,token,'completed');
             return res.json({...result,idempotent:true,recovered:true});
         }
+
         const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
         if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
-        const nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
-        if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,error:'Đang trong thời gian chờ lượt QC tiếp theo.'});
+        let nextAllowedAt=0;
+        if(purpose==='adsgram-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
+        else if(purpose==='bonus-task')nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        else if(purpose==='auto-ad')nextAllowedAt=await readAutoAdNextAllowedAt(userId);
+        if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,purpose,error:'Đang trong thời gian chờ lượt QC tiếp theo.'});
+
         const preRisk=await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
         if(preRisk.blockedReward)return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
+
+        // Official AdsGram show() promise resolving is the only client completion trigger. Server then performs
+        // the existing reward atomically; no timeout/focus/visibility signal can create a reward.
         const rewardCoins=crypto.randomInt(10,26),rewardOrders=crypto.randomInt(10,26);
-        const now=Date.now();
         const updateFields={
             adsToday:Number(user.adsToday||0)+1,
             rewardedAdsToday:Number(user.rewardedAdsToday||0)+(String(session.format)==='reward'?1:0),
             lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,
-            bonusAdsToday:bonusCount+1,bonusAdNextAllowedAt:now+ADSGRAM_BONUS_COOLDOWN_MS,
+            bonusAdsToday:bonusCount+1,
+            lastManualRewardedCompletedAt:completedAt,
             lastBonusAdToken:token,lastBonusRewardCoins:rewardCoins,lastBonusRewardOrders:rewardOrders,lastBonusClicked:false,lastBonusAdProvider:'adsgram',lastResetDate:vietnamDayKey()
         };
+        if(purpose==='bonus-task') updateFields.bonusAdNextAllowedAt=completedAt+BONUS_AD_COOLDOWN_MS;
         const mutation=await atomicWalletMutation(userId,{deltaCoins:rewardCoins,deltaOrders:rewardOrders,setFields:updateFields});
         if(mutation.error)return res.status(409).json({success:false,retry:true,error:mutation.error.message});
         if(!(await flushUserExtra()))return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'AdsGram đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại, không cần xem lại QC.'});
+
+        let manualNext=0,autoNext=0;
+        if(purpose==='adsgram-manual'){
+            manualNext=await writeAdsgramManualCooldown(userId,token,completedAt);
+            if(!manualNext)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward AdsGram đã commit nhưng cooldown 10 phút đang đồng bộ. Không cần xem lại QC.'});
+        }
+        if(purpose==='auto-ad'){
+            autoNext=await writeAutoAdCooldown(userId,'adsgram',token,completedAt);
+            if(!autoNext)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward AdsGram đã commit nhưng auto-ad cooldown đang đồng bộ. Không cần xem lại QC.'});
+        }
+
         const fresh=await readUserRow(userId);const out=fresh.data||{};
-        const result=adsgramBonusResponseFromUser(out,token,rewardCoins,rewardOrders,session.format);
-        const saved=await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt:Date.now(),result},3);
+        const result=adsgramBonusResponseFromUser(out,token,rewardCoins,rewardOrders,session.format,purpose,{adsgramManualNextAllowedAt:manualNext,autoAdNextAllowedAt:autoNext});
+        const saved=await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt,result},3);
         if(!saved)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward AdsGram đã commit nhưng marker đang đồng bộ. Vui lòng thử lại, không cần xem lại QC.'});
-        await writePersistentEvent(adsgramSessionKey(token),{...session,status:'completed',completedAt:Date.now()},2).catch(()=>false);
+        await writePersistentEvent(adsgramSessionKey(token),{...session,status:'completed',completedAt},2).catch(()=>false);
         await releaseAdsgramActive(userId,token,'completed');
-        await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,sessionId,purpose:'adsgram-bonus'}).catch(()=>{});
-        logTransaction(userId,'coin',rewardCoins,'Xem 1 QC AdsGram hợp lệ');
-        logTransaction(userId,'orders',rewardOrders,'Xem 1 QC AdsGram hợp lệ');
+        await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,sessionId,purpose}).catch(()=>{});
+        logTransaction(userId,'coin',rewardCoins,`Xem 1 QC AdsGram hợp lệ (${purpose})`);
+        logTransaction(userId,'orders',rewardOrders,`Xem 1 QC AdsGram hợp lệ (${purpose})`);
         try{await tryFinalizeReferral(userId);}catch(_){}
         try{result.tutorial=await maybeCompleteNewUserTutorial(userId);}catch(_){}
         return res.json(result);
@@ -10130,7 +10150,7 @@ app.post('/api/ad/session/start', async (req, res) => {
         if (String(purpose || '') === 'passive') {
             return res.status(410).json({success:false,code:'passive_ads_disabled',error:'Automatic fullscreen ads are disabled.'});
         }
-        const allowedPurposes = ['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin'];
+        const allowedPurposes = ['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','auto-ad'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const normalizedUserId = String(userId);
         const normalizedActionId = String(actionId || '');
@@ -10224,6 +10244,21 @@ app.post('/api/ad/session/start', async (req, res) => {
                     retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),
                     nextAllowedAt,
                     bonusAdsToday:bonusCount
+                });
+            }
+        }
+
+        // Automatic Monetag has a dedicated persistent cadence marker. It does not consume or change the
+        // manual Monetag bonus-task cooldown/economy.
+        if (sessionPurpose === 'auto-ad') {
+            const autoUser = await loadCurrentDailyUser(normalizedUserId);
+            if (!autoUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+            if (autoUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+            const nextAllowedAt = await readAutoAdNextAllowedAt(normalizedUserId);
+            if (Date.now() < nextAllowedAt) {
+                return res.status(429).json({
+                    success:false,cooldown:true,purpose:'auto-ad',
+                    retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),nextAllowedAt
                 });
             }
         }
@@ -10551,6 +10586,32 @@ app.post('/api/ad/session/complete', async (req, res) => {
                 }
             }
         }
+        if (purpose === 'auto-ad') {
+            // Auto Monetag is presentation-only: no Coin/Orders and no wallet/counter mutation. The only
+            // durable business state is the anti-replay cadence marker in app_settings.
+            const existingAutoMarker=await readPersistentEvent(autoAdCooldownKey(String(userId)));
+            let autoAdNextAllowedAt=String(existingAutoMarker?.token||'')===String(token)
+                ? Math.max(0,Number(existingAutoMarker?.nextAllowedAt||0))
+                : 0;
+            if(!autoAdNextAllowedAt){
+                autoAdNextAllowedAt=await writeAutoAdCooldown(String(userId),'monetag',String(token),Date.now());
+                if(!autoAdNextAllowedAt){
+                    return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'auto-ad',error:'QC tự động đã hoàn tất nhưng cooldown đang đồng bộ.'});
+                }
+            }
+            const autoResponse={success:true,adToken:String(token),purpose:'auto-ad',provider:'monetag',rewardCoins:0,rewardOrders:0,rewardSpins:0,autoAdNextAllowedAt};
+            const autoCompleted={userId:String(userId),adType,purpose:'auto-ad',completedAt:Date.now(),used:false,completionResult:autoResponse};
+            completedAdEvents.set(String(token),autoCompleted);
+            if(!(await persistCompletedAdEvent(String(token),autoCompleted))){
+                return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'auto-ad',error:'QC tự động đã hoàn tất nhưng marker completion đang đồng bộ.'});
+            }
+            await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,purpose:'auto-ad'}).catch(()=>{});
+            insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose:'auto-ad',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
+            const released=await releasePersistentAdSession(String(userId),String(token),'completed');
+            if(!released)return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose:'auto-ad',error:'QC tự động đã hoàn tất nhưng phiên đang cleanup.'});
+            return res.json(autoResponse);
+        }
+
         const preRisk=await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
         if (preRisk.blockedReward) return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,riskLevel:preRisk.level,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
         let user=await loadCurrentDailyUser(String(userId)); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
@@ -10609,7 +10670,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,lastManualRewardedCompletedAt:Date.now(),lastResetDate:vietnamDayKey()};
         if(purpose==='bonus-task') {
             updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
-            updateFields.bonusAdNextAllowedAt=Date.now()+5*60*1000;
+            updateFields.bonusAdNextAllowedAt=Date.now()+BONUS_AD_COOLDOWN_MS;
             updateFields.lastBonusAdToken=String(token);
             updateFields.lastBonusRewardCoins=rewardCoins;
             updateFields.lastBonusRewardOrders=rewardOrders;
@@ -10855,7 +10916,7 @@ async function detectAndAlertSharedWithdrawalDestination(newWithdrawal) {
         const riskState = antiFraud?.state || {};
         const riskScore = Math.max(0, Math.min(100, Number(riskState.riskScore || 0)));
         return {
-            id, name:user?.name || 'User', ip:normalizeIpForDuplicateCheck(riskState.ip || user?.ip) || 'Chưa có',
+            id, name:user?.name || 'User', ip:normalizeIpForDuplicateCheck(user?.ip) || 'Chưa có',
             total:history.length, successTotal, latest:history[0]?.createdAt || null, riskScore
         };
     }));
@@ -11099,11 +11160,9 @@ app.post('/api/withdraw', async (req, res) => {
         if (withdrawInsertError) {
             // CHỐNG MẤT ĐƠN HÀNG: đơn hàng đã bị trừ trước khi tạo đơn rút. Nếu tạo đơn rút thất bại
             // thì hoàn lại đúng số đã trừ, thay vì để người dùng mất trắng số dư như trước.
-            const { data: afterFail } = await readUserRow(userId);
-            const rollback = await saveUserFields(userId, {
-                orders: Number(afterFail?.orders || 0) + ordersAmount,
-                walletUpdatedAt: new Date().toISOString()
-            });
+            // Roll back with the same atomic/CAS wallet primitive used by rewards. Reading a fresh snapshot and
+            // then saveUserFields(orders=snapshot+amount) could overwrite a concurrent Orders reward.
+            const rollback = await atomicWalletMutation(userId, { deltaOrders: ordersAmount });
             if (!rollback.error) {
                 ordersDebited = false;
                 await restoreCaptchaReservation();
@@ -11362,7 +11421,8 @@ function getAdminWebSession(req){
     return session;
 }
 function adminSecurityIp(req){
-    return requestIp(req) || normalizeRequestIp(req.ip) || normalizeRequestIp(req.socket?.remoteAddress) || 'unknown';
+    // Admin rate-limit/audit key follows the same canonical public-IP trust boundary as the rest of the app.
+    return requestIp(req) || 'unknown';
 }
 function adminLoginRateState(req){
     const key=crypto.createHash('sha256').update(adminSecurityIp(req)).digest('hex').slice(0,24);
@@ -11589,7 +11649,7 @@ async function adminGetUserDetail(userId){
         adminDb().from('transactions').select('*').eq('userId',id).limit(30)
     ]);
     const withdrawals=withdrawalsResult.data||[];const latestWithdrawal=withdrawals[0]||null;
-    const activeIp=normalizeIpForDuplicateCheck(user.ip)||normalizeIpForDuplicateCheck(antiFraud.state?.ip)||'';
+    const activeIp=normalizeIpForDuplicateCheck(user.ip)||'';
     const withdrawalIp=latestWithdrawal?await getStoredWithdrawalSourceIp(latestWithdrawal).catch(()=>''):'';
     const duplicates=activeIp?await duplicateAccountsByReliableIp(id,activeIp):[];
     const risk=calculateFraudRisk(antiFraud.state||{},duplicates.length,Number(antiFraud.state?.duplicateDeviceAccounts||0));
@@ -11600,23 +11660,75 @@ async function adminGetUserDetail(userId){
 }
 async function adminDashboardStats(force=false){
     if(!force&&adminDashboardCache&&Date.now()-adminDashboardCache.cachedAt<20000)return adminDashboardCache.value;
-    const db=adminDb();const bounds=vietnamDayBoundsIso();const cols=await getUserColumns();
-    const wanted=['id','coins','orders','adsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'];
-    const selectCols=wanted.filter(c=>cols.has(c));
-    const totals={totalUsers:0,totalCoins:0,totalOrders:0,totalAds:0,totalSmartlinks:0,totalChests:0,totalReferrals:0,adsToday:0,smartlinksToday:0,newUsersToday:0};
-    const countResult=await db.from('users').select('id',{count:'exact',head:true});totals.totalUsers=Number(countResult.count||0);
-    let offset=0;const pageSize=1000;
-    while(selectCols.length&&offset<200000){const {data,error}=await db.from('users').select(selectCols.join(',')).range(offset,offset+pageSize-1);if(error)break;if(!data?.length)break;for(const u of data){totals.totalCoins+=Number(u.coins||0);totals.totalOrders+=Number(u.orders||0);totals.totalAds+=Number(u.lifetimeAdsWatched||0);totals.totalSmartlinks+=Number(u.lifetimeSmartlinks||0);totals.totalChests+=Number(u.chestOpensTotal||0);totals.totalReferrals+=Number(u.validInvites||0);totals.adsToday+=Number(u.adsToday||0);totals.smartlinksToday+=Number(u.smartlinksToday||0);if(u.accountCreatedAt&&u.accountCreatedAt>=bounds.start&&u.accountCreatedAt<bounds.end)totals.newUsersToday++;}if(data.length<pageSize)break;offset+=pageSize;}
-    const [linkStats,jobStats,pendingWd,todayWd,todayLink]=await Promise.all([
-        getLinkTaskGlobalStats().catch(()=>({completed:0,rewardOrders:0})),getJobMailGlobalStats().catch(()=>({total:0,pending:0,approved:0,rejected:0,todaySubmitted:0,todayApproved:0,todayRejected:0,rewardOrders:0})),
+    const db=adminDb(),bounds=vietnamDayBoundsIso(),cols=await getUserColumns();
+    const totals={totalUsers:0,totalCoins:0,totalOrders:0,totalAds:0,totalSmartlinks:0,totalChests:0,totalReferrals:0,adsToday:0,smartlinksToday:0,newUsersToday:0,bannedUsers:0};
+    let supabaseReady=true;
+
+    // Prefer the existing database-side aggregate for the expensive wallet totals.
+    try{
+        const publicStats=await getPublicLogisticsStats();
+        totals.totalUsers=Number(publicStats.totalUsers||0);
+        totals.totalCoins=Number(publicStats.totalCoins||0);
+        totals.totalOrders=Number(publicStats.totalOrders||0);
+    }catch(e){
+        supabaseReady=false;
+        const countResult=await db.from('users').select('id',{count:'exact',head:true});
+        if(!countResult.error)totals.totalUsers=Number(countResult.count||0);
+    }
+
+    if(cols.has('isBanned')){
+        const bannedResult=await db.from('users').select('id',{count:'exact',head:true}).eq('isBanned',true);
+        if(!bannedResult.error)totals.bannedUsers=Number(bannedResult.count||0);
+    }
+
+    // No existing RPC exposes these activity counters. Read only the minimum non-wallet columns required
+    // for real dashboard numbers; never synthesize chart/history data.
+    const activityCols=['adsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'].filter(c=>cols.has(c));
+    let offset=0,pageSize=1000;
+    while(activityCols.length&&offset<200000){
+        const {data,error}=await db.from('users').select(activityCols.join(',')).range(offset,offset+pageSize-1);
+        if(error){supabaseReady=false;break;}
+        if(!data?.length)break;
+        for(const u of data){
+            totals.totalAds+=Number(u.lifetimeAdsWatched||0);
+            totals.totalSmartlinks+=Number(u.lifetimeSmartlinks||0);
+            totals.totalChests+=Number(u.chestOpensTotal||0);
+            totals.totalReferrals+=Number(u.validInvites||0);
+            totals.adsToday+=Number(u.adsToday||0);
+            totals.smartlinksToday+=Number(u.smartlinksToday||0);
+            if(u.accountCreatedAt&&u.accountCreatedAt>=bounds.start&&u.accountCreatedAt<bounds.end)totals.newUsersToday++;
+        }
+        if(data.length<pageSize)break;
+        offset+=pageSize;
+    }
+
+    const [linkStats,jobStats,pendingWd,todayWd,todayLink,linkDbReady]=await Promise.all([
+        getLinkTaskGlobalStats().catch(()=>({completed:0,rewardOrders:0})),
+        getJobMailGlobalStats().catch(()=>({total:0,pending:0,approved:0,rejected:0,todaySubmitted:0,todayApproved:0,todayRejected:0,rewardOrders:0})),
         db.from('withdrawals').select('id',{count:'exact',head:true}).eq('status','pending'),
         db.from('withdrawals').select('id',{count:'exact',head:true}).gte('createdAt',bounds.start).lt('createdAt',bounds.end),
-        SUPABASE_SERVICE_ROLE_KEY?linkTaskDb().from('link_task_attempts').select('id',{count:'exact',head:true}).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end):Promise.resolve({count:0})
+        SUPABASE_SERVICE_ROLE_KEY?linkTaskDb().from('link_task_attempts').select('id',{count:'exact',head:true}).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end):Promise.resolve({count:0}),
+        checkLinkTaskDatabaseReadiness().catch(()=>({ready:false}))
     ]);
-    let totalWithdrawn=0,wdOffset=0;while(wdOffset<200000){const {data,error}=await db.from('withdrawals').select('amount').eq('status','success').range(wdOffset,wdOffset+999);if(error||!data?.length)break;totalWithdrawn+=data.reduce((s,w)=>s+Number(w.amount||0),0);if(data.length<1000)break;wdOffset+=1000;}
-    const value={...totals,totalLinkTasks:Number(linkStats.completed||0),linkRewardOrders:Number(linkStats.rewardOrders||0),totalWithdrawn,pendingWithdrawals:Number(pendingWd.count||0),withdrawalsToday:Number(todayWd.count||0),linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!BOT_LOCKED,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString()};
-    adminDashboardCache={cachedAt:Date.now(),value};return value;
+    let totalWithdrawn=0,wdOffset=0;
+    while(wdOffset<200000){
+        const {data,error}=await db.from('withdrawals').select('amount').eq('status','success').range(wdOffset,wdOffset+999);
+        if(error||!data?.length)break;
+        totalWithdrawn+=data.reduce((sum,w)=>sum+Number(w.amount||0),0);
+        if(data.length<1000)break;
+        wdOffset+=1000;
+    }
+    const value={
+        ...totals,totalLinkTasks:Number(linkStats.completed||0),linkRewardOrders:Number(linkStats.rewardOrders||0),
+        totalWithdrawn,pendingWithdrawals:Number(pendingWd.count||0),withdrawalsToday:Number(todayWd.count||0),
+        linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!BOT_LOCKED,
+        supabaseReady,linkTaskDbReady:!!linkDbReady?.ready,trustProxy:TRUST_PROXY_SETTING===false?'DIRECT / 0 HOP':`${TRUST_PROXY_SETTING} HOP`,
+        uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),webAppUrl:String(WEB_APP_URL||'')
+    };
+    adminDashboardCache={cachedAt:Date.now(),value};
+    return value;
 }
+
 async function adminStartBroadcast(message,actor='admin'){
     const text=adminSafeText(message,3500);if(!text)throw new Error('MESSAGE_EMPTY');
     const jobId=crypto.randomBytes(10).toString('hex');const state={id:jobId,status:'running',total:0,success:0,failed:0,startedAt:new Date().toISOString(),finishedAt:null};adminBroadcastJobs.set(jobId,state);
@@ -11655,18 +11767,29 @@ app.post('/api/admin/logout',requireAdminWebMutation,async(req,res)=>{const sid=
 app.get('/api/admin/dashboard',requireAdminWebSession,async(req,res)=>{try{return res.json({success:true,stats:await adminDashboardStats(req.query.force==='1')});}catch(e){console.error('Admin dashboard:',e);return res.status(500).json({success:false,error:'Không tải được thống kê.'});}});
 app.get('/api/admin/users',requireAdminWebSession,async(req,res)=>{
     try{
-        const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,query=adminSafeText(req.query.q,100),banned=String(req.query.banned||'all');const cols=await getUserColumns();
-        const selected=['id','name','coins','orders','spins','truckLevel','validInvites','isBanned','ip','walletUpdatedAt','adsToday','smartlinksToday'].filter(c=>cols.has(c));
-        let q=adminDb().from('users').select(selected.join(','),{count:'exact'}).order('id',{ascending:false}).range(offset,offset+limit-1);
+        const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit;
+        const query=adminSafeText(req.query.q,100),banned=String(req.query.banned||'all'),cols=await getUserColumns();
+        const sortMap={id:'id',name:'name',coins:'coins',orders:'orders',ads:'adsToday',smartlinks:'smartlinksToday'};
+        const sortField=sortMap[String(req.query.sort||'id')]||'id';
+        const ascending=String(req.query.dir||'desc').toLowerCase()==='asc';
+        const selected=['id','name','coins','orders','spins','truckLevel','validInvites','isBanned','ip','walletUpdatedAt','adsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks'].filter(c=>cols.has(c));
+        let q=adminDb().from('users').select(selected.join(','),{count:'exact'}).order(cols.has(sortField)?sortField:'id',{ascending}).range(offset,offset+limit-1);
         if(query){if(/^\d+$/.test(query))q=q.eq('id',query);else if(cols.has('name'))q=q.ilike('name',`%${query.replace(/[%_]/g,'\\$&')}%`);}
         if(cols.has('isBanned')&&banned!=='all')q=q.eq('isBanned',banned==='true');
         const {data,error,count}=await q;if(error)throw error;const rows=data||[];
-        const ips=[...new Set(rows.map(r=>normalizeIpForDuplicateCheck(r.ip)).filter(Boolean))];const duplicateCounts={};
+        const ips=[...new Set(rows.map(r=>normalizeIpForDuplicateCheck(r.ip)).filter(Boolean))],duplicateCounts={};
         await Promise.all(ips.slice(0,50).map(async ip=>{const c=await adminDb().from('users').select('id',{count:'exact',head:true}).eq('ip',ip);duplicateCounts[ip]=Number(c.count||0);}));
-        const enriched=await Promise.all(rows.map(async r=>{let riskScore=0,riskLevel='LOW';try{const af=await getAntiFraudState(String(r.id));riskScore=Number(af.stats?.score||0);riskLevel=String(af.stats?.level||'LOW');}catch(_){}const ip=normalizeIpForDuplicateCheck(r.ip);return {...r,riskScore,riskLevel,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};}));
-        return res.json({success:true,page,limit,total:Number(count||0),users:enriched});
+        const enriched=await Promise.all(rows.map(async r=>{
+            let riskScore=0,riskLevel='LOW',linkTaskCompleted=0;
+            try{const af=await getAntiFraudState(String(r.id));riskScore=Number(af.stats?.score||0);riskLevel=String(af.stats?.level||'LOW');}catch(_){}
+            try{const lt=await getLinkTaskUserStats(String(r.id));linkTaskCompleted=Number(lt.completed||0);}catch(_){}
+            const ip=normalizeIpForDuplicateCheck(r.ip);
+            return {...r,riskScore,riskLevel,linkTaskCompleted,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};
+        }));
+        return res.json({success:true,page,limit,total:Number(count||0),sort:sortField,dir:ascending?'asc':'desc',users:enriched});
     }catch(e){console.error('Admin users:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được danh sách người dùng.'});}
 });
+
 app.get('/api/admin/users/:id',requireAdminWebSession,async(req,res)=>{try{return res.json({success:true,detail:await adminGetUserDetail(req.params.id)});}catch(e){return res.status(e.message==='USER_NOT_FOUND'?404:400).json({success:false,error:e.message==='USER_NOT_FOUND'?'Không tìm thấy người dùng.':'Không đọc được thông tin người dùng.'});}});
 app.post('/api/admin/users/:id/action',requireAdminWebMutation,async(req,res)=>{
     const actor=adminActor(req),id=adminValidUserId(req.params.id),action=String(req.body?.action||'');if(!id)return res.status(400).json({success:false,error:'User ID không hợp lệ.'});
@@ -11686,7 +11809,7 @@ app.post('/api/admin/users/:id/action',requireAdminWebMutation,async(req,res)=>{
 app.get('/api/admin/transactions/:id',requireAdminWebSession,async(req,res)=>{try{const id=adminValidUserId(req.params.id);if(!id)return res.status(400).json({success:false,error:'ID không hợp lệ.'});let q=adminDb().from('transactions').select('*').eq('userId',id).limit(100);const type=String(req.query.type||'');if(type==='coin')q=q.eq('type','coin');if(type==='orders')q=q.eq('type','orders');const {data,error}=await q;if(error)throw error;return res.json({success:true,transactions:data||[]});}catch(e){return res.status(500).json({success:false,error:'Không tải được sao kê.'});}});
 app.get('/api/admin/withdrawals',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,100);let q=adminDb().from('withdrawals').select('*',{count:'exact'}).order('createdAt',{ascending:false}).range(offset,offset+limit-1);if(['pending','success','rejected','refunded'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('userId',qtext);else q=q.eq('txCode',qtext);}const {data,error,count}=await q;if(error)throw error;const rows=await Promise.all((data||[]).map(async w=>{const ip=await getStoredWithdrawalSourceIp(w).catch(()=>'');const duplicates=ip?await duplicateAccountsByReliableIp(String(w.userId),ip).catch(()=>[]):[];return {...w,sourceIp:ip||'',duplicateAccounts:duplicates};}));return res.json({success:true,page,limit,total:Number(count||0),withdrawals:rows});}catch(e){console.error('Admin withdrawals:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được đơn rút.'});}});
 app.post('/api/admin/withdrawals/:id/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),map={approve:'success',reject:'rejected',refund:'refunded'},status=map[action];if(!status)return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});const result=await adminProcessWithdrawal(req.params.id,status,req.body?.reason,adminActor(req),true);adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được đơn rút.').slice(0,220)});}});
-app.get('/api/admin/link-tasks',requireAdminWebSession,async(req,res)=>{try{const [locks,dbReady]=await Promise.all([readLinkTaskAdminLockMap(),checkLinkTaskDatabaseReadiness({force:req.query.force==='1'})]);const bounds=vietnamDayBoundsIso();const tasks=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{let rewardedToday=0,activeAttempts=0,lastProviderError='';try{const db=linkTaskDb();const [r,a,last]=await Promise.all([db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end),db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).in('status',LINK_TASK_ACTIVE_STATUSES),db.from('link_task_attempts').select('metadata,created_at').eq('task_id',cfg.taskId).eq('status','cancelled').order('created_at',{ascending:false}).limit(1).maybeSingle()]);rewardedToday=Number(r.count||0);activeAttempts=Number(a.count||0);lastProviderError=adminSafeText(last.data?.metadata?.providerError||'',180);}catch(_){}return {id:cfg.taskId,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,requiresStrictNetwork:!!cfg.requiresStrictNetwork,rule:linkTaskRuleText(cfg),envConfigured:linkTaskProviderConfigured(cfg),adminLocked:!!locks[cfg.taskId]?.locked,rewardedToday,activeAttempts,lastProviderError};}));return res.json({success:true,tasks,diagnostic:{serviceRole:!!SUPABASE_SERVICE_ROLE_KEY,ipHashSecret:!!IP_HASH_SECRET,ipIntelligence:!!IP_INTELLIGENCE_API_KEY,database:dbReady,network:requestNetworkDiagnostic(req),webAppUrl:String(WEB_APP_URL||'')}});}catch(e){console.error('Admin link tasks:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được Link Task diagnostic.'});}});
+app.get('/api/admin/link-tasks',requireAdminWebSession,async(req,res)=>{try{const [locks,dbReady]=await Promise.all([readLinkTaskAdminLockMap(),checkLinkTaskDatabaseReadiness({force:req.query.force==='1'})]);const bounds=vietnamDayBoundsIso();const tasks=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{let rewardedToday=0,activeAttempts=0,lastProviderError='';try{const db=linkTaskDb();const [r,a,last]=await Promise.all([db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end),db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).in('status',LINK_TASK_ACTIVE_STATUSES),db.from('link_task_attempts').select('metadata,created_at').eq('task_id',cfg.taskId).eq('status','cancelled').order('created_at',{ascending:false}).limit(1).maybeSingle()]);rewardedToday=Number(r.count||0);activeAttempts=Number(a.count||0);lastProviderError=adminSafeText(last.data?.metadata?.providerError||'',180);}catch(_){}return {id:cfg.taskId,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,rule:linkTaskRuleText(cfg),envConfigured:linkTaskProviderConfigured(cfg),adminLocked:!!locks[cfg.taskId]?.locked,rewardedToday,activeAttempts,lastProviderError};}));return res.json({success:true,tasks,diagnostic:{serviceRole:!!SUPABASE_SERVICE_ROLE_KEY,ipHashSecret:!!IP_HASH_SECRET,ipIntelligence:!!IP_INTELLIGENCE_API_KEY,ipIntelligenceOptional:true,database:dbReady,network:requestNetworkDiagnostic(req),webAppUrl:String(WEB_APP_URL||'')}});}catch(e){console.error('Admin link tasks:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được Link Task diagnostic.'});}});
 app.post('/api/admin/link-tasks/:id/lock',requireAdminWebMutation,async(req,res)=>{try{const id=String(req.params.id||''),locked=req.body?.locked===true;if(!LINK_TASK_CONFIG[id])return res.status(400).json({success:false,error:'Nhiệm vụ không hợp lệ.'});const state=await setLinkTaskAdminLock(id,locked,adminActor(req));await writeAdminAudit(adminActor(req),locked?'lock_link_task':'unlock_link_task',id,{});return res.json({success:true,state});}catch(e){return res.status(500).json({success:false,error:'Không cập nhật được trạng thái nhiệm vụ.'});}});
 app.get('/api/admin/job-mails',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,160);let q=jobMailDb().from('job_mails').select('*',{count:'exact'}).order('submitted_at',{ascending:false}).range(offset,offset+limit-1);if(['pending','approved','rejected'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('user_id',qtext);else q=q.ilike('email_original',`%${qtext.replace(/[%_]/g,'\\$&')}%`);}const [{data,error,count},stats,availability]=await Promise.all([q,getJobMailGlobalStats(),getJobMailAvailability()]);if(error)throw error;return res.json({success:true,page,limit,total:Number(count||0),mails:data||[],stats,availability});}catch(e){console.error('Admin job mail:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được JOB MAIL.'});}});
 app.post('/api/admin/job-mails/:id/action',requireAdminWebMutation,async(req,res)=>{try{const result=await adminJobMailAction(req.params.id,String(req.body?.action||''),req.body?.reason,adminActor(req));adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được JOB MAIL.').slice(0,220)});}});
@@ -11705,56 +11828,144 @@ app.post('/api/admin/system/action',requireAdminWebMutation,async(req,res)=>{try
 
 function renderAdminWebHtml(nonce){
 return String.raw`<!DOCTYPE html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Kho Hàng Admin</title>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Logistics Command Center</title>
 <style nonce="${nonce}">
-:root{color-scheme:dark;--bg:#07111f;--card:#101d31;--card2:#13243d;--line:#24405f;--text:#eef6ff;--muted:#8ca5c1;--cyan:#3ee7ff;--blue:#4c7dff;--gold:#ffc94a;--green:#47e6a1;--red:#ff6b7a;--radius:20px}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:radial-gradient(circle at 10% 0,#163458 0,transparent 28%),radial-gradient(circle at 90% 10%,#271a55 0,transparent 26%),var(--bg);color:var(--text);min-height:100vh}.hidden{display:none!important}button,input,select,textarea{font:inherit}.login{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(430px,100%);padding:30px;border:1px solid #2d4c70;border-radius:28px;background:linear-gradient(145deg,rgba(19,36,61,.96),rgba(8,19,34,.94));box-shadow:0 30px 90px #0008}.brand{font-size:25px;font-weight:900;letter-spacing:-.03em}.muted{color:var(--muted)}.field{width:100%;border:1px solid #2b496b;background:#091626;color:#fff;border-radius:14px;padding:12px 14px;outline:none}.field:focus{border-color:var(--cyan);box-shadow:0 0 0 3px #3ee7ff18}.btn{border:0;border-radius:13px;padding:10px 14px;background:#1d3553;color:#fff;font-weight:800;cursor:pointer}.btn:hover{filter:brightness(1.12)}.btn.primary{background:linear-gradient(135deg,#2475ff,#1ecde8)}.btn.good{background:#16734f}.btn.warn{background:#815c0c}.btn.danger{background:#842b3d}.btn.ghost{background:#14243a;border:1px solid #294966}.btn:disabled{opacity:.45;cursor:not-allowed}.layout{display:grid;grid-template-columns:240px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;padding:18px 14px;border-right:1px solid #203b58;background:#081525e8;backdrop-filter:blur(16px);overflow:auto}.side-brand{padding:10px 10px 18px;font-weight:900;font-size:18px}.nav-btn{display:flex;width:100%;gap:10px;align-items:center;text-align:left;border:0;color:#b8cce2;background:transparent;border-radius:13px;padding:10px 12px;margin:3px 0;font-weight:800;cursor:pointer}.nav-btn.active,.nav-btn:hover{background:#17304c;color:#fff}.main{min-width:0;padding:20px 24px 60px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:18px}.top-title{font-size:22px;font-weight:900}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #294b6c;background:#10233a;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid #203e5d;background:linear-gradient(145deg,#10213aee,#0c192bed);border-radius:var(--radius);padding:16px;box-shadow:0 14px 40px #0003}.stat .k{font-size:12px;color:var(--muted);font-weight:700}.stat .v{font-size:23px;font-weight:950;margin-top:5px}.section{display:none}.section.active{display:block}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.toolbar .field{width:auto;min-width:170px}.table-wrap{overflow:auto;border:1px solid #213f5d;border-radius:18px;background:#0c1a2c}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:11px 12px;border-bottom:1px solid #1e3852;text-align:left;font-size:12px;vertical-align:top}th{position:sticky;top:0;background:#10243d;color:#9db7d2;z-index:1}tr:hover td{background:#10223a}.tag{display:inline-block;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;background:#18304c}.tag.good{color:#70f6bb;background:#153d34}.tag.bad{color:#ff9aa5;background:#472330}.tag.warn{color:#ffd96e;background:#473915}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions .btn{padding:6px 9px;font-size:11px}.modal{position:fixed;inset:0;z-index:30;background:#020814d9;display:grid;place-items:center;padding:18px}.modal-card{width:min(950px,100%);max-height:90vh;overflow:auto;border:1px solid #31567b;border-radius:24px;background:#0c1b2e;padding:20px;box-shadow:0 30px 100px #000b}.modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.mini{padding:11px;border:1px solid #23415d;border-radius:14px;background:#0c1a2a}.mini b{display:block;margin-top:4px}.toast{position:fixed;right:18px;top:18px;z-index:99;max-width:360px;padding:12px 14px;border-radius:14px;background:#15354c;border:1px solid #2f668b;box-shadow:0 16px 45px #0008;font-weight:800}.toast.err{background:#4b1d29;border-color:#8f384d}.link-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.link-card{border:1px solid #284b6b;border-radius:18px;background:#0d1e33;padding:14px}.link-card h3{margin:0 0 8px}.diag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap}.chart{width:100%;height:230px}.progress{height:9px;background:#11263f;border-radius:999px;overflow:hidden}.progress>span{display:block;height:100%;background:linear-gradient(90deg,#277cff,#3ee7ff);width:0}.empty{padding:30px;text-align:center;color:var(--muted)}
-@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.link-grid{grid-template-columns:repeat(2,1fr)}.detail-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.layout{grid-template-columns:1fr}.sidebar{position:fixed;z-index:20;left:0;right:0;bottom:0;top:auto;height:auto;display:flex;overflow:auto;padding:7px;border-right:0;border-top:1px solid #274761}.side-brand{display:none}.nav-btn{min-width:95px;justify-content:center;font-size:10px;flex-direction:column;padding:7px}.main{padding:15px 12px 95px}.grid,.link-grid,.detail-grid{grid-template-columns:1fr}.top-title{font-size:18px}.topbar{align-items:flex-start}.toolbar .field{width:100%}.card{padding:13px}}
+:root{color-scheme:dark;--bg:#06101d;--panel:#0b1929;--panel2:#10243a;--line:#203b57;--line2:#2b5277;--text:#edf7ff;--muted:#8fa9c2;--cyan:#3ee7ff;--blue:#4d82ff;--gold:#ffc94a;--green:#48e7a2;--red:#ff7080;--orange:#ffb44d;--shadow:0 18px 50px rgba(0,0,0,.28);--radius:20px}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{background:radial-gradient(circle at 0 0,rgba(28,82,130,.38),transparent 30%),radial-gradient(circle at 100% 8%,rgba(65,40,127,.24),transparent 28%),var(--bg);overflow-x:hidden}button,input,select,textarea{font:inherit}.hidden{display:none!important}.muted{color:var(--muted)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.empty{text-align:center;color:var(--muted);padding:24px}.nowrap{white-space:nowrap}
+.login{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(440px,100%);padding:30px;border:1px solid var(--line2);border-radius:28px;background:linear-gradient(150deg,rgba(17,41,66,.98),rgba(7,18,31,.98));box-shadow:0 34px 100px rgba(0,0,0,.55)}.brand{font-size:26px;font-weight:950;letter-spacing:-.04em}.brand-sub{margin:6px 0 22px;color:var(--muted);font-size:12px;letter-spacing:.12em}.field{width:100%;border:1px solid #294968;background:#081624;color:#fff;border-radius:13px;padding:11px 13px;outline:none;min-height:42px}.field:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(62,231,255,.10)}textarea.field{resize:vertical;min-height:110px}
+.btn{border:0;border-radius:12px;padding:10px 13px;background:#17304b;color:#fff;font-weight:850;cursor:pointer;transition:.18s ease}.btn:hover{filter:brightness(1.12);transform:translateY(-1px)}.btn:disabled{opacity:.42;cursor:not-allowed;transform:none}.btn.primary{background:linear-gradient(135deg,#2876ff,#10bcd8)}.btn.good{background:#126a4c}.btn.warn{background:#765610}.btn.danger{background:#7b2939}.btn.ghost{background:#102338;border:1px solid #2a4b69}
+.layout{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:270px;padding:20px 14px;border-right:1px solid #1b354e;background:rgba(6,17,30,.96);backdrop-filter:blur(18px);z-index:40;overflow:auto}.side-brand{padding:8px 10px 18px;font-size:19px;font-weight:950}.side-brand small{display:block;margin-top:4px;color:var(--muted);font-size:10px;letter-spacing:.14em}.nav-btn{width:100%;display:flex;align-items:center;gap:10px;border:0;border-radius:13px;background:transparent;color:#afc5db;padding:11px 12px;margin:3px 0;text-align:left;font-weight:800;cursor:pointer}.nav-btn.active,.nav-btn:hover{color:#fff;background:linear-gradient(135deg,#163756,#132b47);box-shadow:inset 0 0 0 1px #274c6e}.side-footer{margin-top:18px;padding:12px;border-top:1px solid #183149}.main{margin-left:270px;min-width:0;padding:0 24px 60px}.topbar{position:sticky;top:0;z-index:25;display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:74px;margin:0 -24px 18px;padding:12px 24px;border-bottom:1px solid rgba(38,72,104,.7);background:rgba(6,16,29,.88);backdrop-filter:blur(18px)}.top-left{display:flex;align-items:center;gap:11px;min-width:0}.menu-btn{display:none}.top-title{font-size:22px;font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-kicker{font-size:10px;color:var(--cyan);font-weight:900;letter-spacing:.12em}.top-actions{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #2c4e6c;background:#0e2238;border-radius:999px;padding:7px 10px;font-size:11px;font-weight:850}
+.section{display:none;max-width:1540px;margin:0 auto}.section.active{display:block}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:12px}.section-head h2{margin:0;font-size:18px}.section-head p{margin:4px 0 0;color:var(--muted);font-size:12px}
+.status-strip{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:12px}.status-box{min-width:0;border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#0d2034,#091624);padding:10px 11px}.status-box .s-label{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.07em}.status-box .s-value{margin-top:5px;font-size:12px;font-weight:900;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);background:linear-gradient(145deg,rgba(15,34,55,.97),rgba(8,20,34,.98));border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}.stat{position:relative;overflow:hidden}.stat:after{content:"";position:absolute;width:80px;height:80px;border-radius:50%;right:-30px;top:-30px;background:rgba(62,231,255,.06)}.stat .k{font-size:11px;color:var(--muted);font-weight:750}.stat .v{margin-top:6px;font-size:24px;font-weight:950}.stat .ico{font-size:18px}.subgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}.toolbar .field{width:auto;min-width:150px}.toolbar .grow{flex:1;min-width:220px}.table-wrap{width:100%;overflow:auto;border:1px solid var(--line);border-radius:18px;background:#081625;box-shadow:var(--shadow)}table{width:100%;border-collapse:collapse;min-width:900px}th,td{padding:11px 12px;border-bottom:1px solid #19334c;text-align:left;font-size:11px;vertical-align:top}th{position:sticky;top:0;z-index:1;background:#10243a;color:#9db8d0;font-size:10px;letter-spacing:.04em}tbody tr:hover td{background:#0e2135}.tag{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:9px;font-weight:950;background:#18304c;white-space:nowrap}.tag.good{color:#75f3bd;background:#153b31}.tag.bad{color:#ff9dab;background:#47222e}.tag.warn{color:#ffdd7b;background:#463815}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions .btn{padding:7px 9px;font-size:10px}.pager{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px}.link-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.link-card{border:1px solid #28506f;border-radius:18px;padding:14px;background:linear-gradient(150deg,#102840,#0b192a)}.link-card h3{margin:0 0 10px}.diag{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;font-size:11px}
+.modal{position:fixed;inset:0;z-index:70;background:rgba(0,7,16,.86);display:grid;place-items:center;padding:18px}.modal-card{width:min(1080px,100%);max-height:92vh;overflow:auto;border:1px solid #315b7d;border-radius:24px;background:#09192a;padding:20px;box-shadow:0 36px 110px rgba(0,0,0,.72)}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:center;position:sticky;top:-20px;background:#09192af5;padding:12px 0;z-index:2}.detail-sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.detail-group{border:1px solid #203e5b;border-radius:17px;padding:13px;background:#0b1c2e}.detail-group h4{margin:0 0 10px;font-size:12px;color:#cfe9ff}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.mini{padding:9px;border:1px solid #1e3b56;border-radius:12px;background:#081725;min-width:0}.mini span{display:block;font-size:9px;color:var(--muted)}.mini b{display:block;margin-top:4px;font-size:11px;overflow-wrap:anywhere}.pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#06121f;border:1px solid #1c384f;border-radius:13px;padding:11px;font-size:10px;max-height:220px;overflow:auto}.progress{height:9px;border-radius:999px;background:#0a1725;overflow:hidden;border:1px solid #1e3a54}.progress>div{height:100%;background:linear-gradient(90deg,#2d7dff,#3ee7ff);width:0}.toast{position:fixed;right:18px;top:18px;z-index:100;max-width:min(390px,calc(100vw - 36px));padding:12px 14px;border-radius:13px;background:#12354c;border:1px solid #2e698d;box-shadow:0 18px 50px #000a;font-weight:800;font-size:12px}.toast.err{background:#4b1e2a;border-color:#8f3c51}.drawer-overlay{display:none}
+@media(max-width:1180px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.status-strip{grid-template-columns:repeat(4,minmax(0,1fr))}.link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:820px){.sidebar{transform:translateX(-105%);transition:transform .22s ease;width:min(300px,86vw)}.sidebar.open{transform:translateX(0)}.drawer-overlay{display:block;position:fixed;inset:0;background:#0009;z-index:35;opacity:0;pointer-events:none;transition:.22s}.drawer-overlay.show{opacity:1;pointer-events:auto}.main{margin-left:0;padding:0 14px 48px}.topbar{margin:0 -14px 15px;padding:10px 14px;min-height:66px}.menu-btn{display:inline-flex}.top-actions .pill{display:none}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.status-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.link-grid,.detail-sections{grid-template-columns:1fr}.toolbar .field,.toolbar .grow{width:100%;min-width:0}.toolbar .btn{flex:1}.top-title{font-size:18px}.card{padding:13px}}
+@media(max-width:460px){.grid{grid-template-columns:1fr 1fr}.stat .v{font-size:19px}.status-strip{grid-template-columns:1fr 1fr}.detail-grid{grid-template-columns:1fr}.modal{padding:8px}.modal-card{padding:13px;border-radius:18px}.top-kicker{display:none}}
 </style></head><body>
 <div id="toast" class="toast hidden"></div>
-<div id="loginView" class="login"><form id="loginForm" class="login-card"><div class="brand">👑 Kho Hàng Admin</div><p class="muted">Đăng nhập để quản lý Mini App và dữ liệu Supabase.</p><div style="display:grid;gap:10px;margin-top:18px"><input id="loginUser" class="field" autocomplete="username" placeholder="Tài khoản"><input id="loginPass" class="field" type="password" autocomplete="current-password" placeholder="Mật khẩu"><button class="btn primary" type="submit">ĐĂNG NHẬP AN TOÀN</button><div id="loginError" class="muted"></div></div></form></div>
-<div id="appView" class="layout hidden"><aside class="sidebar"><div class="side-brand">📦 KHO HÀNG<br><span class="muted">CONTROL CENTER</span></div>
-<button class="nav-btn active" data-tab="overview">📊 <span>Tổng quan</span></button><button class="nav-btn" data-tab="users">👥 <span>Người dùng</span></button><button class="nav-btn" data-tab="withdrawals">💸 <span>Rút tiền</span></button><button class="nav-btn" data-tab="links">🔗 <span>Vượt link</span></button><button class="nav-btn" data-tab="jobmail">📩 <span>JOB MAIL</span></button><button class="nav-btn" data-tab="giftcodes">🎁 <span>Giftcode</span></button><button class="nav-btn" data-tab="admins">👑 <span>Admin</span></button><button class="nav-btn" data-tab="broadcast">📢 <span>Broadcast</span></button><button class="nav-btn" data-tab="system">⚙️ <span>Hệ thống</span></button></aside>
-<main class="main"><header class="topbar"><div><div id="pageTitle" class="top-title">📊 Tổng quan</div><div class="muted" style="font-size:12px">Dữ liệu trực tiếp từ Supabase • Asia/Ho_Chi_Minh</div></div><div class="actions"><span id="adminUser" class="pill">👑 Admin</span><button id="logoutBtn" class="btn ghost">Đăng xuất</button></div></header>
-<section id="sec-overview" class="section active"><div id="statsGrid" class="grid"></div><div class="card" style="margin-top:12px"><canvas id="overviewChart" class="chart"></canvas></div></section>
-<section id="sec-users" class="section"><div class="toolbar"><input id="userSearch" class="field" placeholder="ID hoặc tên"><select id="userBanned" class="field"><option value="all">Tất cả</option><option value="false">Đang hoạt động</option><option value="true">Đã ban</option></select><button id="userSearchBtn" class="btn primary">Tìm</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Đơn Hàng</th><th>Risk</th><th>IP</th><th>Trạng thái</th><th></th></tr></thead><tbody id="usersBody"></tbody></table></div><div id="usersPager" class="toolbar"></div></section>
-<section id="sec-withdrawals" class="section"><div class="toolbar"><select id="wdStatus" class="field"><option value="pending">Chờ duyệt</option><option value="success">Đã duyệt</option><option value="rejected">Từ chối</option><option value="refunded">Hoàn trả</option><option value="all">Tất cả</option></select><input id="wdSearch" class="field" placeholder="User ID / txCode"><button id="wdLoad" class="btn primary">Tải</button></div><div class="table-wrap"><table><thead><tr><th>Mã</th><th>User</th><th>Số tiền</th><th>Thông tin</th><th>IP</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="wdBody"></tbody></table></div><div id="wdPager" class="toolbar"></div></section>
-<section id="sec-links" class="section"><div id="linkDiag" class="card diag">Đang tải...</div><div id="linkGrid" class="link-grid" style="margin-top:12px"></div></section>
-<section id="sec-jobmail" class="section"><div id="jmStats" class="grid"></div><div class="toolbar"><select id="jmStatus" class="field"><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option></select><input id="jmSearch" class="field" placeholder="Gmail hoặc User ID"><button id="jmLoad" class="btn primary">Tải</button><button id="jmLock" class="btn warn">Khóa nhận mail</button><button id="jmUnlock" class="btn good">Mở nhận mail</button></div><div class="toolbar"><input id="jmUserId" class="field" placeholder="User ID JOB MAIL"><button id="jmBanUser" class="btn danger">Ban JOB MAIL</button><button id="jmUnbanUser" class="btn good">Unban JOB MAIL</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Email</th><th>User</th><th>IP</th><th>Thời gian</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="jmBody"></tbody></table></div></section>
-<section id="sec-giftcodes" class="section"><div class="card"><div class="toolbar"><input id="gcCode" class="field" placeholder="Mã code"><input id="gcCoin" class="field" type="number" placeholder="Coin"><input id="gcOrders" class="field" type="number" placeholder="Đơn Hàng"><input id="gcSpins" class="field" type="number" placeholder="Spin"><input id="gcLimit" class="field" type="number" placeholder="Giới hạn"><select id="gcScope" class="field"><option value="nguoidung">Người dùng</option><option value="admin">Chỉ Admin</option></select><button id="gcCreate" class="btn primary">Tạo code</button></div></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Code</th><th>Coin</th><th>Đơn</th><th>Spin</th><th>Đã dùng</th><th>Scope</th><th></th></tr></thead><tbody id="gcBody"></tbody></table></div></section>
-<section id="sec-admins" class="section"><div class="card"><div class="toolbar"><input id="subAdminId" class="field" placeholder="Telegram User ID"><button id="subAdminAdd" class="btn primary">Thêm Admin phụ</button></div><div id="adminsList"></div></div></section>
-<section id="sec-broadcast" class="section"><div class="card"><h3>📢 Gửi thông báo toàn bộ người dùng</h3><textarea id="broadcastText" class="field" style="min-height:170px" placeholder="Nội dung thông báo..."></textarea><div class="toolbar"><button id="broadcastSend" class="btn danger">GỬI BROADCAST</button></div><div id="broadcastState" class="muted"></div><div class="progress"><span id="broadcastProgress"></span></div></div></section>
-<section id="sec-system" class="section"><div id="systemInfo" class="card diag">Đang tải...</div><div class="toolbar"><button id="botLock" class="btn danger">🔒 Khóa Bot</button><button id="botUnlock" class="btn good">🔓 Mở Bot</button><input id="banIpInput" class="field" placeholder="IP public"><button id="banIpBtn" class="btn danger">Ban IP</button><button id="resetAllBtn" class="btn danger">☢ RESET TOÀN BỘ</button></div><div class="card"><h3>🧾 Audit gần nhất</h3><div id="auditList" class="diag"></div></div></section>
+<div id="loginView" class="login"><form id="loginForm" class="login-card" autocomplete="off"><div class="brand">🚚 Logistics Command Center</div><div class="brand-sub">SECURE ADMIN CONSOLE</div><input id="loginUser" class="field" placeholder="Tài khoản" autocomplete="username" required><div style="height:9px"></div><input id="loginPass" class="field" type="password" placeholder="Mật khẩu" autocomplete="current-password" required><div style="height:12px"></div><button class="btn primary" style="width:100%">Đăng nhập an toàn</button><p id="loginError" class="muted" style="font-size:11px"></p></form></div>
+
+<div id="appView" class="layout hidden">
+<div id="drawerOverlay" class="drawer-overlay"></div>
+<aside id="sidebar" class="sidebar">
+  <div class="side-brand">📦 KHO HÀNG <small>LOGISTICS COMMAND CENTER</small></div>
+  <button class="nav-btn active" data-tab="overview">🏠 Tổng quan</button>
+  <button class="nav-btn" data-tab="users">👥 Người dùng</button>
+  <button class="nav-btn" data-tab="withdrawals">💸 Rút tiền</button>
+  <button class="nav-btn" data-tab="links">🔗 Vượt Link</button>
+  <button class="nav-btn" data-tab="jobmail">📩 JOB MAIL</button>
+  <button class="nav-btn" data-tab="giftcodes">🎁 Giftcode</button>
+  <button class="nav-btn" data-tab="admins">🛡 Admin & Broadcast</button>
+  <button class="nav-btn" data-tab="system">⚙️ Hệ thống</button>
+  <div class="side-footer"><div id="sideSession" class="muted" style="font-size:10px"></div><button id="logoutBtn" class="btn ghost" style="width:100%;margin-top:10px">Đăng xuất</button></div>
+</aside>
+
+<main class="main">
+<header class="topbar"><div class="top-left"><button id="menuBtn" class="btn ghost menu-btn">☰</button><div><div class="top-kicker">LOGISTICS COMMAND CENTER</div><div id="pageTitle" class="top-title">Tổng quan</div></div></div><div class="top-actions"><span id="topBotBadge" class="pill">● BOT</span><button id="refreshBtn" class="btn ghost">↻ Làm mới</button></div></header>
+
+<section id="sec-overview" class="section active">
+  <div class="section-head"><div><h2>Trạng thái vận hành</h2><p>Dữ liệu thật từ server/Supabase, không tạo số giả.</p></div></div>
+  <div id="overviewStatus" class="status-strip"></div>
+  <div id="statsGrid" class="grid"></div>
+  <div id="activityGrid" class="subgrid"></div>
+</section>
+
+<section id="sec-users" class="section">
+  <div class="section-head"><div><h2>Quản lý người dùng</h2><p>IP gần nhất chỉ lấy từ canonical users.ip; event IP được giữ riêng.</p></div></div>
+  <div class="toolbar"><input id="userSearch" class="field grow" placeholder="Tìm ID hoặc tên"><select id="userBanned" class="field"><option value="all">Tất cả trạng thái</option><option value="false">Đang hoạt động</option><option value="true">Đang ban</option></select><select id="userSort" class="field"><option value="id">Sort: ID</option><option value="name">Sort: Tên</option><option value="coins">Sort: Coin</option><option value="orders">Sort: Orders</option><option value="ads">Sort: QC</option><option value="smartlinks">Sort: SmartLink</option></select><select id="userDir" class="field"><option value="desc">Giảm dần</option><option value="asc">Tăng dần</option></select><button id="userSearchBtn" class="btn primary">Tải</button></div>
+  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Orders</th><th>QC</th><th>SmartLink</th><th>Link Task</th><th>Risk</th><th>IP gần nhất</th><th>Ban</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><div id="usersPager" class="pager"></div></div>
+</section>
+
+<section id="sec-withdrawals" class="section">
+  <div class="section-head"><div><h2>Rút tiền</h2><p>IP đơn rút là snapshot lịch sử của chính đơn đó.</p></div></div>
+  <div class="toolbar"><select id="wdStatus" class="field"><option value="pending">Chờ duyệt</option><option value="success">Đã duyệt</option><option value="rejected">Đã hủy</option><option value="refunded">Đã hoàn</option></select><input id="wdSearch" class="field grow" placeholder="User ID hoặc mã lệnh"><button id="wdLoad" class="btn primary">Tải</button></div>
+  <div class="table-wrap"><table><thead><tr><th>Mã</th><th>User</th><th>Số tiền</th><th>Đích nhận</th><th>IP đơn rút</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="wdBody"></tbody></table><div id="wdPager" class="pager"></div></div>
+</section>
+
+<section id="sec-links" class="section">
+  <div class="section-head"><div><h2>Vượt Link / Network</h2><p>NO1SHARE không phụ thuộc IP Intelligence; quota IP vẫn server-side.</p></div></div>
+  <div class="card"><pre id="linkDiag" class="diag mono"></pre></div><div id="linkGrid" class="link-grid" style="margin-top:12px"></div>
+</section>
+
+<section id="sec-jobmail" class="section">
+  <div class="section-head"><div><h2>JOB MAIL</h2><p>Duyệt/từ chối giữ nguyên luồng atomic hiện tại.</p></div></div>
+  <div id="jmStats" class="grid"></div><div class="toolbar"><select id="jmStatus" class="field"><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option></select><input id="jmSearch" class="field grow" placeholder="Gmail hoặc User ID"><button id="jmLoad" class="btn primary">Tải</button><button id="jmLock" class="btn warn">Khóa nhận mail</button><button id="jmUnlock" class="btn good">Mở nhận mail</button></div>
+  <div class="toolbar"><input id="jmUserId" class="field grow" placeholder="User ID JOB MAIL"><button id="jmBanUser" class="btn danger">Ban JOB MAIL</button><button id="jmUnbanUser" class="btn good">Unban JOB MAIL</button></div>
+  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Email</th><th>User</th><th>IP gửi Mail</th><th>Thời gian</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="jmBody"></tbody></table></div>
+</section>
+
+<section id="sec-giftcodes" class="section">
+  <div class="section-head"><div><h2>Giftcode</h2><p>Quản lý code và lịch sử nhập.</p></div></div>
+  <div class="card"><div class="toolbar"><input id="gcCode" class="field" placeholder="CODE"><input id="gcCoin" class="field" type="number" min="0" placeholder="Coin"><input id="gcOrders" class="field" type="number" min="0" placeholder="Orders"><input id="gcSpins" class="field" type="number" min="0" placeholder="Spins"><input id="gcLimit" class="field" type="number" min="1" placeholder="Limit"><select id="gcScope" class="field"><option value="nguoidung">Người dùng</option><option value="admin">Admin</option><option value="all">Tất cả</option></select><button id="gcCreate" class="btn primary">Tạo code</button></div></div>
+  <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Code</th><th>Coin</th><th>Orders</th><th>Spins</th><th>Đã dùng</th><th>Scope</th><th></th></tr></thead><tbody id="gcBody"></tbody></table></div>
+</section>
+
+<section id="sec-admins" class="section">
+  <div class="section-head"><div><h2>Admin & Broadcast</h2><p>Không đưa mật khẩu/token vào URL hoặc HTML.</p></div></div>
+  <div class="grid"><div class="card" style="grid-column:span 2"><h3>🛡 Admin phụ</h3><div class="toolbar"><input id="subAdminId" class="field grow" placeholder="Telegram User ID"><button id="subAdminAdd" class="btn primary">Thêm Admin</button></div><div id="adminsList"></div></div><div class="card" style="grid-column:span 2"><h3>📢 Broadcast</h3><textarea id="broadcastText" class="field" placeholder="Nội dung gửi toàn bộ user"></textarea><button id="broadcastSend" class="btn primary" style="margin-top:8px">Gửi Broadcast</button><p id="broadcastState" class="muted"></p><div class="progress"><div id="broadcastProgress"></div></div></div></div>
+</section>
+
+<section id="sec-system" class="section">
+  <div class="section-head"><div><h2>Hệ thống & Audit</h2><p>Chỉ hiển thị trạng thái, không hiển thị secret/token.</p></div></div>
+  <div class="grid"><div class="card" style="grid-column:span 2"><pre id="systemInfo" class="diag mono"></pre><div class="actions"><button id="botLock" class="btn warn">Bật Maintenance</button><button id="botUnlock" class="btn good">Mở Bot</button></div></div><div class="card" style="grid-column:span 2"><h3>🚫 Ban theo IP hiện tại</h3><div class="toolbar"><input id="banIpInput" class="field grow" placeholder="Canonical public IP"><button id="banIpBtn" class="btn danger">Ban IP</button></div><p class="muted" style="font-size:10px">Không dùng private proxy IP hoặc IP do frontend tự khai báo.</p></div></div>
+  <div class="card" style="margin-top:12px"><h3>🧾 Audit gần nhất</h3><pre id="auditList" class="pre"></pre></div>
+  <div class="card" style="margin-top:12px;border-color:#683241"><h3>⚠️ Khu vực nguy hiểm</h3><button id="resetAllBtn" class="btn danger">RESET ALL DATA</button></div>
+</section>
 </main></div>
-<div id="userModal" class="modal hidden"><div class="modal-card"><div class="modal-head"><div><h2 id="userModalTitle" style="margin:0">User</h2><div id="userModalSub" class="muted"></div></div><button id="userModalClose" class="btn ghost">✕</button></div><div id="userDetailGrid" class="detail-grid" style="margin-top:14px"></div><div class="card" style="margin-top:12px"><h3>🛠 Thao tác</h3><div class="toolbar"><input id="userAmount" class="field" type="number" placeholder="Số lượng"><button class="btn good userAct" data-action="addCoin">+ Coin</button><button class="btn danger userAct" data-action="subCoin">- Coin</button><button class="btn good userAct" data-action="addOrders">+ Đơn</button><button class="btn danger userAct" data-action="subOrders">- Đơn</button><button class="btn good userAct" data-action="addSpins">+ Spin</button><button class="btn danger userAct" data-action="subSpins">- Spin</button><button class="btn primary userAct" data-action="addRef">+ Referral</button></div><div class="toolbar"><input id="userLevel" class="field" type="number" placeholder="Level"><button class="btn userAct" data-action="setLevel">Set Level</button><input id="userNewName" class="field" placeholder="Tên mới"><button class="btn userAct" data-action="rename">Đổi tên</button></div><div class="toolbar"><button class="btn danger userAct" data-action="ban">Ban</button><button class="btn good userAct" data-action="unban">Unban</button><button class="btn warn userAct" data-action="resetDaily">Reset Daily</button><button class="btn warn userAct" data-action="resetLinkTask">Reset Vượt Link</button><button class="btn danger userAct" data-action="resetUser">Reset User</button><button class="btn danger userAct" data-action="deleteUser">Delete User</button></div></div><div class="card" style="margin-top:12px"><h3>🧾 Sao kê server</h3><div id="userTransactions" class="diag"></div></div></div></div>
+
+<div id="userModal" class="modal hidden"><div class="modal-card"><div class="modal-head"><div><b id="userModalTitle">User</b><div id="userModalSub" class="muted" style="font-size:10px"></div></div><button id="userModalClose" class="btn ghost">✕</button></div><div id="userDetailGroups" class="detail-sections"></div><div class="card" style="margin-top:12px"><h3>🧰 Thao tác</h3><div class="toolbar"><input id="userAmount" class="field" type="number" min="1" placeholder="Số lượng"><button class="btn good userAct" data-action="addCoin">+ Coin</button><button class="btn danger userAct" data-action="subCoin">- Coin</button><button class="btn good userAct" data-action="addOrders">+ Orders</button><button class="btn danger userAct" data-action="subOrders">- Orders</button><button class="btn good userAct" data-action="addSpins">+ Spin</button><button class="btn danger userAct" data-action="subSpins">- Spin</button><button class="btn good userAct" data-action="addRef">+ Referral</button></div><div class="toolbar"><input id="userLevel" class="field" type="number" min="1" placeholder="Level"><button class="btn warn userAct" data-action="setLevel">Set Level</button><input id="userNewName" class="field" placeholder="Tên mới"><button class="btn warn userAct" data-action="rename">Đổi tên</button><button class="btn warn userAct" data-action="resetDaily">Reset Daily</button><button class="btn warn userAct" data-action="resetLinkTask">Reset Link Task</button><button class="btn danger userAct" data-action="ban">Ban</button><button class="btn good userAct" data-action="unban">Unban</button><button class="btn danger userAct" data-action="resetUser">Reset User</button><button class="btn danger userAct" data-action="deleteUser">Xóa User</button></div></div><div class="card" style="margin-top:12px"><h3>📒 Sao kê gần nhất</h3><pre id="userTransactions" class="pre"></pre></div></div></div>
+
 <script nonce="${nonce}">
-(function(){'use strict';var csrf='',currentUserId='',userPage=1,wdPage=1,broadcastTimer=null;var titles={overview:'📊 Tổng quan',users:'👥 Người dùng',withdrawals:'💸 Rút tiền',links:'🔗 Vượt link',jobmail:'📩 JOB MAIL',giftcodes:'🎁 Giftcode',admins:'👑 Admin',broadcast:'📢 Broadcast',system:'⚙️ Hệ thống'};
-function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function toast(msg,err){var t=$('toast');t.textContent=msg;t.className='toast'+(err?' err':'');setTimeout(function(){t.classList.add('hidden')},3200)}
-async function api(path,opt){opt=opt||{};opt.headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});if((opt.method||'GET')!=='GET')opt.headers['x-csrf-token']=csrf;var r=await fetch(path,opt);var j=await r.json().catch(function(){return {success:false,error:'Phản hồi máy chủ không hợp lệ.'}});if(r.status===401){showLogin();throw new Error(j.error||'Hết phiên đăng nhập.')}if(!r.ok||j.success===false)throw new Error(j.error||'Thao tác thất bại.');return j}
+(function(){
+'use strict';
+var csrf='',currentUserId='',userPage=1,wdPage=1,broadcastTimer=null,currentTab='overview';
+var titles={overview:'Tổng quan',users:'Người dùng',withdrawals:'Rút tiền',links:'Vượt Link',jobmail:'JOB MAIL',giftcodes:'Giftcode',admins:'Admin & Broadcast',system:'Hệ thống'};
+function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function fmtDate(v){if(!v)return 'N/A';try{return new Date(v).toLocaleString('vi-VN')}catch(_){return String(v)}}function fmtUptime(s){s=Math.max(0,Number(s||0));var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}function toast(msg,err){var el=$('toast');el.textContent=String(msg||'');el.className='toast'+(err?' err':'');clearTimeout(el._t);el._t=setTimeout(function(){el.classList.add('hidden')},3200)}function tag(txt,kind){return '<span class="tag '+(kind||'')+'">'+esc(txt)+'</span>'}function statCard(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+num(v)+'</div></div>'}function mini(k,v){return '<div class="mini"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>'}function group(title,items){return '<div class="detail-group"><h4>'+title+'</h4><div class="detail-grid">'+items.map(function(x){return mini(x[0],x[1])}).join('')+'</div></div>'}
+async function api(url,opt){opt=opt||{};var headers=new Headers(opt.headers||{});if(opt.body&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');if(csrf&&String(opt.method||'GET').toUpperCase()!=='GET')headers.set('x-csrf-token',csrf);var res=await fetch(url,Object.assign({credentials:'same-origin',cache:'no-store'},opt,{headers:headers}));var data=await res.json().catch(function(){return {success:false,error:'Phản hồi server không hợp lệ.'}});if(res.status===401){csrf='';showLogin();throw new Error(data.error||'Phiên Admin đã hết hạn.')}if(!res.ok||data.success===false)throw new Error(data.error||('HTTP '+res.status));return data}
 function showLogin(){$('loginView').classList.remove('hidden');$('appView').classList.add('hidden')}function showApp(){$('loginView').classList.add('hidden');$('appView').classList.remove('hidden')}
-function statCard(k,v,icon){return '<div class="card stat"><div class="k">'+esc(icon+' '+k)+'</div><div class="v">'+esc(num(v))+'</div></div>'}function tag(text,kind){return '<span class="tag '+(kind||'')+'">'+esc(text)+'</span>'}
-async function init(){try{var s=await api('/api/admin/session');csrf=s.csrfToken;$('adminUser').textContent='👑 '+s.username;showApp();bind();switchTab('overview')}catch(e){showLogin()}}
-$('loginForm').addEventListener('submit',async function(e){e.preventDefault();$('loginError').textContent='';try{var r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});var j=await r.json();if(!r.ok)throw new Error(j.error||'Đăng nhập thất bại.');$('loginPass').value='';await init()}catch(err){$('loginError').textContent=err.message}});
-function bind(){if(document.body.dataset.bound)return;document.body.dataset.bound='1';document.querySelectorAll('.nav-btn').forEach(function(b){b.addEventListener('click',function(){switchTab(b.dataset.tab)})});$('logoutBtn').onclick=async function(){try{await api('/api/admin/logout',{method:'POST',body:'{}'})}catch(_){}csrf='';showLogin()};$('userSearchBtn').onclick=function(){userPage=1;loadUsers()};$('userBanned').onchange=function(){userPage=1;loadUsers()};$('wdLoad').onclick=function(){wdPage=1;loadWithdrawals()};$('wdStatus').onchange=function(){wdPage=1;loadWithdrawals()};$('jmLoad').onclick=loadJobMail;$('jmStatus').onchange=loadJobMail;$('jmLock').onclick=function(){setJobMailLock(true)};$('jmUnlock').onclick=function(){setJobMailLock(false)};$('jmBanUser').onclick=function(){setJobMailUserBan(true)};$('jmUnbanUser').onclick=function(){setJobMailUserBan(false)};$('gcCreate').onclick=createGiftcode;$('subAdminAdd').onclick=addSubAdmin;$('broadcastSend').onclick=sendBroadcast;$('botLock').onclick=function(){systemAction('lockBot')};$('botUnlock').onclick=function(){systemAction('unlockBot')};$('banIpBtn').onclick=function(){systemAction('banIp',{ip:$('banIpInput').value})};$('resetAllBtn').onclick=resetAllWeb;$('userModalClose').onclick=function(){$('userModal').classList.add('hidden')};document.querySelectorAll('.userAct').forEach(function(b){b.onclick=function(){userAction(b.dataset.action)}})}
-function switchTab(tab){document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.toggle('active',b.dataset.tab===tab)});document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active')});$('sec-'+tab).classList.add('active');$('pageTitle').textContent=titles[tab]||tab;if(tab==='overview')loadOverview();if(tab==='users')loadUsers();if(tab==='withdrawals')loadWithdrawals();if(tab==='links')loadLinks();if(tab==='jobmail')loadJobMail();if(tab==='giftcodes')loadGiftcodes();if(tab==='admins')loadAdmins();if(tab==='system')loadSystem()}
-async function loadOverview(){try{var s=(await api('/api/admin/dashboard')).stats;$('statsGrid').innerHTML=[statCard('Tổng User',s.totalUsers,'👥'),statCard('Tổng Coin',s.totalCoins,'🪙'),statCard('Tổng Đơn Hàng',s.totalOrders,'📦'),statCard('Tổng QC',s.totalAds,'📺'),statCard('Tổng SmartLink',s.totalSmartlinks,'🔗'),statCard('Vượt Link',s.totalLinkTasks,'🌐'),statCard('Mở rương',s.totalChests,'🎁'),statCard('Referral',s.totalReferrals,'🤝'),statCard('Đã rút VNĐ',s.totalWithdrawn,'💸'),statCard('Đơn rút chờ',s.pendingWithdrawals,'⏳'),statCard('JOB MAIL chờ',s.jobMail&&s.jobMail.pending,'📩'),statCard('User mới hôm nay',s.newUsersToday,'✨')].join('');drawChart([s.adsToday,s.smartlinksToday,s.linkTasksToday,s.withdrawalsToday,s.jobMail&&s.jobMail.todaySubmitted])}catch(e){toast(e.message,true)}}
-function drawChart(vals){var c=$('overviewChart'),dpr=devicePixelRatio||1,w=c.clientWidth||700,h=c.clientHeight||230;c.width=w*dpr;c.height=h*dpr;var x=c.getContext('2d');x.scale(dpr,dpr);x.clearRect(0,0,w,h);var labels=['QC hôm nay','SmartLink','Vượt link','Rút tiền','JOB MAIL'],m=Math.max.apply(null,[1].concat(vals.map(Number))),gap=w/(vals.length*2+1),bw=gap;for(var i=0;i<vals.length;i++){var bh=(Number(vals[i]||0)/m)*(h-55),px=gap+i*gap*2,py=h-28-bh;x.fillStyle='#224867';x.fillRect(px,25,bw,h-53);var g=x.createLinearGradient(0,py,0,h);g.addColorStop(0,'#3ee7ff');g.addColorStop(1,'#3975ff');x.fillStyle=g;x.fillRect(px,py,bw,bh);x.fillStyle='#dfefff';x.font='11px system-ui';x.fillText(String(vals[i]||0),px,Math.max(18,py-6));x.fillStyle='#8ca5c1';x.fillText(labels[i],px,h-10)}}
-async function loadUsers(){try{var j=await api('/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value));$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td>'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td>'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Xem</button></td></tr>'}).join('')||'<tr><td colspan="8" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(p){userPage=p;loadUsers()})}catch(e){toast(e.message,true)}}
-function pager(id,page,total,limit,fn){var pages=Math.max(1,Math.ceil(total/limit));$(id).innerHTML='<button class="btn ghost" id="'+id+'Prev">◀</button><span class="pill">Trang '+page+'/'+pages+' • '+num(total)+'</span><button class="btn ghost" id="'+id+'Next">▶</button>';$(id+'Prev').disabled=page<=1;$(id+'Next').disabled=page>=pages;$(id+'Prev').onclick=function(){fn(page-1)};$(id+'Next').onclick=function(){fn(page+1)}}
-async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100';var items=[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Level',num(d.user.truckLevel)],['QC hôm nay',num(d.user.adsToday)],['SmartLink hôm nay',num(d.user.smartlinksToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)],['Vượt Link',d.linkTask?num(d.linkTask.completed):'N/A'],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Referral',num(d.user.validInvites)],['Đã rút',num(d.withdrawal.totalWithdrawn)+' VNĐ'],['Bị hủy',num(d.withdrawal.totalCancelled)+' VNĐ'],['IP',d.user.ip||'Chưa có'],['Trùng IP',d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không'],['JOB MAIL',num(d.jobMail.total)+' / duyệt '+num(d.jobMail.approved)],['Risk',d.risk.score+'/100 '+d.risk.level],['Banned',d.user.isBanned?'Có':'Không']];$('userDetailGrid').innerHTML=items.map(function(x){return '<div class="mini"><span class="muted">'+esc(x[0])+'</span><b>'+esc(x[1])+'</b></div>'}).join('');$('userTransactions').textContent=(d.transactions||[]).map(function(t){return String(t.type||'')+' '+String(t.amount||'')+' • '+String(t.reason||'')}).join('\n')||'Chưa có sao kê server.';$('userModal').classList.remove('hidden')}catch(e){toast(e.message,true)}}
+function openDrawer(){if(innerWidth>820)return;$('sidebar').classList.add('open');$('drawerOverlay').classList.add('show')}function closeDrawer(){$('sidebar').classList.remove('open');$('drawerOverlay').classList.remove('show')}
+async function init(){bind();try{var s=await api('/api/admin/session');csrf=s.csrfToken;$('sideSession').textContent='🔐 '+s.username+' • hết hạn '+fmtDate(s.expiresAt);showApp();switchTab('overview')}catch(_){showLogin()}}
+function bind(){if(document.body.dataset.bound)return;document.body.dataset.bound='1';
+ $('loginForm').addEventListener('submit',async function(e){e.preventDefault();$('loginError').textContent='';try{await api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});var s=await api('/api/admin/session');csrf=s.csrfToken;$('sideSession').textContent='🔐 '+s.username+' • hết hạn '+fmtDate(s.expiresAt);$('loginPass').value='';showApp();switchTab('overview')}catch(x){$('loginError').textContent=x.message}});
+ document.querySelectorAll('.nav-btn').forEach(function(b){b.addEventListener('click',function(){switchTab(b.dataset.tab)})});
+ $('menuBtn').onclick=openDrawer;$('drawerOverlay').onclick=closeDrawer;$('refreshBtn').onclick=function(){switchTab(currentTab,true)};
+ $('logoutBtn').onclick=async function(){try{await api('/api/admin/logout',{method:'POST',body:'{}'})}catch(_){}csrf='';showLogin()};
+ $('userSearchBtn').onclick=function(){userPage=1;loadUsers()};$('userSearch').addEventListener('keydown',function(e){if(e.key==='Enter'){userPage=1;loadUsers()}});$('userBanned').onchange=function(){userPage=1;loadUsers()};$('userSort').onchange=function(){userPage=1;loadUsers()};$('userDir').onchange=function(){userPage=1;loadUsers()};
+ $('wdLoad').onclick=function(){wdPage=1;loadWithdrawals()};$('wdStatus').onchange=function(){wdPage=1;loadWithdrawals()};
+ $('jmLoad').onclick=loadJobMail;$('jmStatus').onchange=loadJobMail;$('jmLock').onclick=function(){setJobMailLock(true)};$('jmUnlock').onclick=function(){setJobMailLock(false)};$('jmBanUser').onclick=function(){setJobMailUserBan(true)};$('jmUnbanUser').onclick=function(){setJobMailUserBan(false)};
+ $('gcCreate').onclick=createGiftcode;$('subAdminAdd').onclick=addSubAdmin;$('broadcastSend').onclick=sendBroadcast;$('botLock').onclick=function(){systemAction('lockBot')};$('botUnlock').onclick=function(){systemAction('unlockBot')};$('banIpBtn').onclick=function(){systemAction('banIp',{ip:$('banIpInput').value})};$('resetAllBtn').onclick=resetAllWeb;$('userModalClose').onclick=function(){$('userModal').classList.add('hidden')};
+ document.querySelectorAll('.userAct').forEach(function(b){b.onclick=function(){userAction(b.dataset.action)}})
+}
+function switchTab(tab,force){currentTab=tab;document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.toggle('active',b.dataset.tab===tab)});document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active')});var sec=$('sec-'+tab);if(sec)sec.classList.add('active');$('pageTitle').textContent=titles[tab]||tab;closeDrawer();if(tab==='overview')loadOverview(force);if(tab==='users')loadUsers();if(tab==='withdrawals')loadWithdrawals();if(tab==='links')loadLinks();if(tab==='jobmail')loadJobMail();if(tab==='giftcodes')loadGiftcodes();if(tab==='admins')loadAdmins();if(tab==='system')loadSystem(force)}
+async function loadOverview(force){try{var s=(await api('/api/admin/dashboard'+(force?'?force=1':''))).stats;var status=[['BOT',s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE'],['SUPABASE',s.supabaseReady?'🟢 READY':'🔴 ERROR'],['LINK TASK DB',s.linkTaskDbReady?'🟢 READY':'🔴 NOT READY'],['TRUST PROXY','🌐 '+(s.trustProxy||'N/A')],['UPTIME','⏱ '+fmtUptime(s.uptimeSeconds)],['SERVER STARTED','🚀 '+fmtDate(s.startedAt)],['WEB_APP_URL','🌎 '+(s.webAppUrl||'N/A')]];$('overviewStatus').innerHTML=status.map(function(x){return '<div class="status-box"><div class="s-label">'+esc(x[0])+'</div><div class="s-value">'+esc(x[1])+'</div></div>'}).join('');$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE';$('statsGrid').innerHTML=[statCard('Tổng User',s.totalUsers,'👥'),statCard('User đang Ban',s.bannedUsers,'🚫'),statCard('Tổng Coin hiện có',s.totalCoins,'🪙'),statCard('Tổng Đơn Hàng',s.totalOrders,'📦'),statCard('Đơn rút chờ duyệt',s.pendingWithdrawals,'💸'),statCard('Mail chờ duyệt',s.jobMail&&s.jobMail.pending,'📩'),statCard('Link Task hoàn thành',s.totalLinkTasks,'🔗'),statCard('QC hôm nay',s.adsToday,'📺'),statCard('SmartLink hôm nay',s.smartlinksToday,'🌐')].join('');$('activityGrid').innerHTML=[statCard('Link Task hôm nay',s.linkTasksToday,'🔗'),statCard('Rút tiền hôm nay',s.withdrawalsToday,'💸'),statCard('Mail gửi hôm nay',s.jobMail&&s.jobMail.todaySubmitted,'📨')].join('')}catch(e){toast(e.message,true)}}
+function pager(id,page,total,limit,cb){var el=$(id),pages=Math.max(1,Math.ceil(Number(total||0)/Number(limit||25)));el.innerHTML='<button class="btn ghost" id="'+id+'Prev" '+(page<=1?'disabled':'')+'>←</button><span class="muted">Trang '+page+'/'+pages+' • '+num(total)+' bản ghi</span><button class="btn ghost" id="'+id+'Next" '+(page>=pages?'disabled':'')+'>→</button>';$(id+'Prev').onclick=function(){if(page>1)cb(page-1)};$(id+'Next').onclick=function(){if(page<pages)cb(page+1)}}
+async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="11" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
+async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100 '+d.risk.level;var dup=d.duplicates&&d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không';var reasons=d.risk&&d.risk.reasons&&d.risk.reasons.length?d.risk.reasons.join(', '):'Không có';$('userDetailGroups').innerHTML=[
+ group('💰 Ví',[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Truck Level',num(d.user.truckLevel)]]),
+ group('📺 Hoạt động',[['QC hôm nay',num(d.user.adsToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['SmartLink hôm nay',num(d.user.smartlinksToday)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Referral',num(d.user.validInvites)]]),
+ group('🔗 Link Task',[['Hoàn thành',d.linkTask?num(d.linkTask.completed):'N/A'],['Orders nhận',d.linkTask?num(d.linkTask.rewardOrders):'N/A']]),
+ group('🌐 Network',[['IP gần nhất',d.user.ip||'Chưa có'],['Trùng IP với',dup]]),
+ group('💸 Rút tiền',[['Tổng đã rút',num(d.withdrawal.totalWithdrawn)+' VNĐ'],['Tổng bị hủy',num(d.withdrawal.totalCancelled)+' VNĐ'],['IP đơn rút gần nhất',d.withdrawal.latestIp||'Chưa có']]),
+ group('📩 JOB MAIL',[['Tổng gửi',num(d.jobMail.total)],['Được duyệt',num(d.jobMail.approved)],['Bị từ chối',num(d.jobMail.rejected)],['IP gửi mail gần nhất',d.jobMail.lastIp||'Chưa có']]),
+ group('🛡 Risk',[['Risk Score',d.risk.score+'/100'],['Risk Level',d.risk.level],['Lý do',reasons],['Ban status',d.user.isBanned?'BANNED':'ACTIVE']])
+ ].join('');$('userTransactions').textContent=(d.transactions||[]).map(function(x){return String(x.type||'')+' '+String(x.amount||'')+' • '+String(x.reason||'')}).join('\n')||'Chưa có sao kê server.';$('userModal').classList.remove('hidden')}catch(e){toast(e.message,true)}}
 async function userAction(action){if(!currentUserId)return;var body={action:action};if(['addCoin','subCoin','addOrders','subOrders','addSpins','subSpins','addRef'].indexOf(action)>=0)body.amount=Number($('userAmount').value);if(action==='setLevel')body.level=Number($('userLevel').value);if(action==='rename')body.name=$('userNewName').value;if(action==='resetUser'){var c=prompt('Nhập chính xác RESET '+currentUserId);if(c===null)return;body.confirmText=c}if(action==='deleteUser'){var d=prompt('CẢNH BÁO: xóa vĩnh viễn. Nhập DELETE '+currentUserId);if(d===null)return;body.confirmText=d}if(!confirm('Xác nhận thao tác '+action+' với user '+currentUserId+'?'))return;try{await api('/api/admin/users/'+currentUserId+'/action',{method:'POST',body:JSON.stringify(body)});toast('✅ Thao tác thành công');if(action==='deleteUser'){$('userModal').classList.add('hidden');loadUsers()}else openUser(currentUserId)}catch(e){toast(e.message,true)}}
-async function loadWithdrawals(){try{var j=await api('/api/admin/withdrawals?page='+wdPage+'&limit=25&status='+encodeURIComponent($('wdStatus').value)+'&q='+encodeURIComponent($('wdSearch').value));$('wdBody').innerHTML=j.withdrawals.map(function(w){var info=[w.method,w.bankName,w.accountName,w.accountNumber||w.accountInfo].filter(Boolean).join(' • ');var acts=w.status==='pending'?'<div class="actions"><button class="btn good wd-act" data-id="'+esc(w.id)+'" data-a="approve">Duyệt</button><button class="btn danger wd-act" data-id="'+esc(w.id)+'" data-a="reject">Hủy</button><button class="btn warn wd-act" data-id="'+esc(w.id)+'" data-a="refund">Hoàn</button></div>':'';return '<tr><td>#'+esc(w.txCode||w.id)+'</td><td>'+esc(w.userId)+'</td><td>'+num(w.amount)+' VNĐ</td><td>'+esc(info)+'</td><td>'+esc(w.sourceIp||'Chưa lưu')+(w.duplicateAccounts&&w.duplicateAccounts.length?' '+tag('TRÙNG','bad'):'')+'</td><td>'+tag(w.status,w.status==='success'?'good':w.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có đơn</td></tr>';document.querySelectorAll('.wd-act').forEach(function(b){b.onclick=function(){withdrawAction(b.dataset.id,b.dataset.a)}});pager('wdPager',wdPage,j.total,j.limit,function(p){wdPage=p;loadWithdrawals()})}catch(e){toast(e.message,true)}}
+async function loadWithdrawals(){try{var j=await api('/api/admin/withdrawals?page='+wdPage+'&limit=25&status='+encodeURIComponent($('wdStatus').value)+'&q='+encodeURIComponent($('wdSearch').value));$('wdBody').innerHTML=j.withdrawals.map(function(w){var info=[w.method,w.bankName,w.accountName,w.accountNumber||w.accountInfo].filter(Boolean).join(' • ');var acts=w.status==='pending'?'<div class="actions"><button class="btn good wd-act" data-id="'+esc(w.id)+'" data-a="approve">Duyệt</button><button class="btn danger wd-act" data-id="'+esc(w.id)+'" data-a="reject">Hủy</button><button class="btn warn wd-act" data-id="'+esc(w.id)+'" data-a="refund">Hoàn</button></div>':'';return '<tr><td>#'+esc(w.txCode||w.id)+'</td><td>'+esc(w.userId)+'</td><td>'+num(w.amount)+' VNĐ</td><td>'+esc(info)+'</td><td class="mono">'+esc(w.sourceIp||'Chưa lưu')+(w.duplicateAccounts&&w.duplicateAccounts.length?' '+tag('TRÙNG','bad'):'')+'</td><td>'+tag(w.status,w.status==='success'?'good':w.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có đơn</td></tr>';document.querySelectorAll('.wd-act').forEach(function(b){b.onclick=function(){withdrawAction(b.dataset.id,b.dataset.a)}});pager('wdPager',wdPage,j.total,j.limit,function(pg){wdPage=pg;loadWithdrawals()})}catch(e){toast(e.message,true)}}
 async function withdrawAction(id,a){var reason='';if(a==='reject')reason=prompt('Lý do hủy:')||'';if(!confirm('Xác nhận '+a+' đơn '+id+'?'))return;try{await api('/api/admin/withdrawals/'+encodeURIComponent(id)+'/action',{method:'POST',body:JSON.stringify({action:a,reason:reason})});toast('✅ Đã xử lý đơn');loadWithdrawals()}catch(e){toast(e.message,true)}}
-async function loadLinks(){try{var j=await api('/api/admin/link-tasks');var d=j.diagnostic,n=d.network;$('linkDiag').textContent='SYSTEM DIAGNOSTIC\nSUPABASE SERVICE ROLE: '+(d.serviceRole?'✅':'❌')+'\nIP HASH SECRET: '+(d.ipHashSecret?'✅':'❌')+'\nIP INTELLIGENCE: '+(d.ipIntelligence?'✅':'❌')+'\nDATABASE: '+(d.database&&d.database.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+n.trustProxy+'\nX-FORWARDED-FOR: '+(n.forwardedForPresent?'✅ '+n.forwardedHopCount+' hop':'❌')+'\nREQUEST PUBLIC IP: '+(n.publicIpAvailable?'✅ '+n.resolvedPublicIp:'❌ UNAVAILABLE')+'\nWEB_APP_URL: '+d.webAppUrl;$('linkGrid').innerHTML=j.tasks.map(function(t){return '<div class="link-card"><h3>🔗 '+esc(t.name)+'</h3><div>'+tag(t.envConfigured?'ENV ✅':'ENV ❌',t.envConfigured?'good':'bad')+' '+tag(t.adminLocked?'🔒 LOCKED':'🔓 ENABLED',t.adminLocked?'bad':'good')+'</div><p class="muted">💰 +'+num(t.rewardOrders)+' Đơn • '+esc(t.rule)+'</p><p class="muted">IP '+t.maxPerIp+' • Device '+t.maxPerDevice+' • Dev/IP '+t.maxPerDeviceIp+' • Strict '+(t.requiresStrictNetwork?'Có':'Không')+'</p><p>✅ Hôm nay: <b>'+num(t.rewardedToday)+'</b> • ⏳ Active: <b>'+num(t.activeAttempts)+'</b></p>'+(t.lastProviderError?'<p class="muted">Lỗi gần nhất: '+esc(t.lastProviderError)+'</p>':'')+'<button class="btn '+(t.adminLocked?'good':'danger')+' link-toggle" data-id="'+esc(t.id)+'" data-lock="'+(t.adminLocked?'0':'1')+'">'+(t.adminLocked?'🔓 Mở nhiệm vụ':'🔒 Khóa nhiệm vụ')+'</button></div>'}).join('');document.querySelectorAll('.link-toggle').forEach(function(b){b.onclick=function(){toggleLink(b.dataset.id,b.dataset.lock==='1')}})}catch(e){toast(e.message,true)}}
+async function loadLinks(){try{var j=await api('/api/admin/link-tasks'),d=j.diagnostic,n=d.network||{};var ipLine=n.publicIpAvailable?'✅ '+(n.canonicalPublicIp||n.resolvedPublicIp||''):'❌ PUBLIC IP UNAVAILABLE';$('linkDiag').textContent='SYSTEM DIAGNOSTIC\nSUPABASE SERVICE ROLE: '+(d.serviceRole?'✅':'❌')+'\nIP HASH SECRET: '+(d.ipHashSecret?'✅':'❌')+'\nIP INTELLIGENCE: '+(d.ipIntelligence?'✅ CONFIGURED':'❌ NOT CONFIGURED')+' (OPTIONAL / NOT REQUIRED)\nLINK TASK DB: '+(d.database&&d.database.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+String(n.trustProxy||'N/A')+'\nREMOTE ADDRESS: '+String(n.remoteAddress||'N/A')+'\nX-FORWARDED-FOR PRESENT: '+(n.forwardedForPresent?'✅ YES':'❌ NO')+'\nFORWARDED HOP COUNT: '+Number(n.forwardedHopCount||0)+'\nCANONICAL PUBLIC IP: '+ipLine+'\nWEB_APP_URL: '+String(d.webAppUrl||'');$('linkGrid').innerHTML=j.tasks.map(function(x){var strict='KHÔNG';return '<div class="link-card"><h3>🔗 '+esc(x.name)+'</h3><div>'+tag(x.envConfigured?'ENV ✅':'ENV ❌',x.envConfigured?'good':'bad')+' '+tag(x.adminLocked?'🔒 LOCKED':'🔓 ENABLED',x.adminLocked?'bad':'good')+'</div><p class="muted">💰 +'+num(x.rewardOrders)+' Đơn • '+esc(x.rule)+'</p><p class="muted">Quota IP: '+num(x.maxPerIp)+' • Device: '+num(x.maxPerDevice)+' • Dev/IP: '+num(x.maxPerDeviceIp)+'</p><p class="muted">Strict VPN check: <b>'+strict+'</b></p><p>✅ Completed hôm nay: <b>'+num(x.rewardedToday)+'</b> • ⏳ Active: <b>'+num(x.activeAttempts)+'</b></p>'+(x.lastProviderError?'<p class="muted">Provider error gần nhất: '+esc(x.lastProviderError)+'</p>':'')+'<button class="btn '+(x.adminLocked?'good':'danger')+' link-toggle" data-id="'+esc(x.id)+'" data-lock="'+(x.adminLocked?'0':'1')+'">'+(x.adminLocked?'🔓 Mở nhiệm vụ':'🔒 Khóa nhiệm vụ')+'</button></div>'}).join('');document.querySelectorAll('.link-toggle').forEach(function(b){b.onclick=function(){toggleLink(b.dataset.id,b.dataset.lock==='1')}})}catch(e){toast(e.message,true)}}
 async function toggleLink(id,locked){if(!confirm((locked?'Khóa ':'Mở ')+id+'?'))return;try{await api('/api/admin/link-tasks/'+encodeURIComponent(id)+'/lock',{method:'POST',body:JSON.stringify({locked:locked})});toast('✅ Đã cập nhật');loadLinks()}catch(e){toast(e.message,true)}}
-async function loadJobMail(){try{var j=await api('/api/admin/job-mails?status='+encodeURIComponent($('jmStatus').value)+'&q='+encodeURIComponent($('jmSearch').value));var s=j.stats;$('jmStats').innerHTML=[statCard('Tổng mail',s.total,'📩'),statCard('Chờ duyệt',s.pending,'⏳'),statCard('Đã duyệt',s.approved,'✅'),statCard('Từ chối',s.rejected,'❌')].join('');$('jmBody').innerHTML=j.mails.map(function(m){var acts=m.status==='pending'?'<div class="actions"><button class="btn good jm-act" data-id="'+m.id+'" data-a="approve">Duyệt</button><button class="btn danger jm-act" data-id="'+m.id+'" data-a="reject">Từ chối</button></div>':'';return '<tr><td>'+m.id+'</td><td>'+esc(m.email_original)+'</td><td>'+esc(m.user_id)+'</td><td>'+esc(m.source_ip||'')+'</td><td>'+esc(m.submitted_at||'')+'</td><td>'+tag(m.status,m.status==='approved'?'good':m.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có mail</td></tr>';document.querySelectorAll('.jm-act').forEach(function(b){b.onclick=function(){mailAction(b.dataset.id,b.dataset.a)}});$('jmLock').disabled=!!j.availability.jobMailManualLocked;$('jmUnlock').disabled=!j.availability.jobMailManualLocked}catch(e){toast(e.message,true)}}
+async function loadJobMail(){try{var j=await api('/api/admin/job-mails?status='+encodeURIComponent($('jmStatus').value)+'&q='+encodeURIComponent($('jmSearch').value));var s=j.stats;$('jmStats').innerHTML=[statCard('Tổng mail',s.total,'📩'),statCard('Chờ duyệt',s.pending,'⏳'),statCard('Đã duyệt',s.approved,'✅'),statCard('Từ chối',s.rejected,'❌')].join('');$('jmBody').innerHTML=j.mails.map(function(m){var acts=m.status==='pending'?'<div class="actions"><button class="btn good jm-act" data-id="'+m.id+'" data-a="approve">Duyệt</button><button class="btn danger jm-act" data-id="'+m.id+'" data-a="reject">Từ chối</button></div>':'';return '<tr><td>'+m.id+'</td><td>'+esc(m.email_original)+'</td><td>'+esc(m.user_id)+'</td><td class="mono">'+esc(m.source_ip||'')+'</td><td>'+fmtDate(m.submitted_at)+'</td><td>'+tag(m.status,m.status==='approved'?'good':m.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có mail</td></tr>';document.querySelectorAll('.jm-act').forEach(function(b){b.onclick=function(){mailAction(b.dataset.id,b.dataset.a)}});$('jmLock').disabled=!!j.availability.jobMailManualLocked;$('jmUnlock').disabled=!j.availability.jobMailManualLocked}catch(e){toast(e.message,true)}}
 async function mailAction(id,a){var reason='';if(a==='reject')reason=prompt('Lý do từ chối:')||'';if(!confirm('Xác nhận '+a+' mail #'+id+'?'))return;try{await api('/api/admin/job-mails/'+id+'/action',{method:'POST',body:JSON.stringify({action:a,reason:reason})});toast('✅ Đã xử lý mail');loadJobMail()}catch(e){toast(e.message,true)}}async function setJobMailUserBan(banned){var id=$('jmUserId').value.trim();if(!id)return;if(!confirm((banned?'Ban':'Unban')+' JOB MAIL user '+id+'?'))return;try{await api('/api/admin/job-mail/user/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({action:banned?'ban':'unban'})});toast('✅ Đã cập nhật quyền JOB MAIL')}catch(e){toast(e.message,true)}}async function setJobMailLock(locked){try{await api('/api/admin/job-mail/lock',{method:'POST',body:JSON.stringify({locked:locked})});toast('✅ Đã cập nhật JOB MAIL');loadJobMail()}catch(e){toast(e.message,true)}}
 async function loadGiftcodes(){try{var j=await api('/api/admin/giftcodes');$('gcBody').innerHTML=j.codes.map(function(c){return '<tr><td><b>'+esc(c.code)+'</b></td><td>'+num(c.rewardAmount)+'</td><td>'+num(c.orders)+'</td><td>'+num(c.spins)+'</td><td>'+num(c.usedCount)+'/'+num(c.limitUses)+'</td><td>'+esc(c.scope||'nguoidung')+'</td><td><div class="actions"><button class="btn ghost gc-act" data-c="'+esc(c.code)+'" data-a="history">Lịch sử</button><button class="btn warn gc-act" data-c="'+esc(c.code)+'" data-a="revoke">Thu hồi</button><button class="btn danger gc-act" data-c="'+esc(c.code)+'" data-a="delete">Xóa</button></div></td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Chưa có code</td></tr>';document.querySelectorAll('.gc-act').forEach(function(b){b.onclick=function(){giftAction(b.dataset.c,b.dataset.a)}})}catch(e){toast(e.message,true)}}
-async function createGiftcode(){try{await api('/api/admin/giftcodes',{method:'POST',body:JSON.stringify({code:$('gcCode').value,coin:Number($('gcCoin').value||0),orders:Number($('gcOrders').value||0),spins:Number($('gcSpins').value||0),limit:Number($('gcLimit').value||0),scope:$('gcScope').value})});toast('✅ Đã tạo Giftcode');$('gcCode').value='';loadGiftcodes()}catch(e){toast(e.message,true)}}async function giftAction(code,a){try{if(a==='history'){var j=await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/redemptions');alert(j.redemptions.map(function(r){return r.userId+' • '+(r.userName||'')+' • '+(r.createdAt||'')}).join('\n')||'Chưa có ai nhập');return}if(!confirm((a==='revoke'?'Thu hồi toàn bộ thưởng từ ':'Xóa code ')+code+'?'))return;await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/action',{method:'POST',body:JSON.stringify({action:a})});toast('✅ Đã xử lý Giftcode');loadGiftcodes()}catch(e){toast(e.message,true)}}
+async function createGiftcode(){try{await api('/api/admin/giftcodes',{method:'POST',body:JSON.stringify({code:$('gcCode').value,coin:Number($('gcCoin').value||0),orders:Number($('gcOrders').value||0),spins:Number($('gcSpins').value||0),limit:Number($('gcLimit').value||0),scope:$('gcScope').value})});toast('✅ Đã tạo Giftcode');$('gcCode').value='';loadGiftcodes()}catch(e){toast(e.message,true)}}async function giftAction(code,a){try{if(a==='history'){var j=await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/redemptions');alert(j.redemptions.map(function(r){return String(r.userId||'')+' • '+String(r.userName||'')+' • '+String(r.createdAt||'')}).join('\n')||'Chưa có ai nhập');return}if(!confirm((a==='revoke'?'Thu hồi toàn bộ thưởng từ ':'Xóa code ')+code+'?'))return;await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/action',{method:'POST',body:JSON.stringify({action:a})});toast('✅ Đã xử lý Giftcode');loadGiftcodes()}catch(e){toast(e.message,true)}}
 async function loadAdmins(){try{var j=await api('/api/admin/admins');$('adminsList').innerHTML='<p>👑 Main Admin: <b>'+esc(j.mainAdmin)+'</b></p>'+(j.subAdmins.length?j.subAdmins.map(function(a){return '<div class="mini" style="margin:6px 0">👤 '+esc(a.id)+' <button class="btn danger sub-remove" data-id="'+esc(a.id)+'" style="float:right">Xóa</button></div>'}).join(''):'<p class="muted">Chưa có Admin phụ.</p>');document.querySelectorAll('.sub-remove').forEach(function(b){b.onclick=function(){subAdminAction('remove',b.dataset.id)}})}catch(e){toast(e.message,true)}}async function addSubAdmin(){subAdminAction('add',$('subAdminId').value)}async function subAdminAction(a,id){if(!id)return;if(!confirm((a==='add'?'Thêm ':'Xóa ')+'Admin '+id+'?'))return;try{await api('/api/admin/admins/action',{method:'POST',body:JSON.stringify({action:a,userId:id})});toast('✅ Đã cập nhật Admin');$('subAdminId').value='';loadAdmins()}catch(e){toast(e.message,true)}}
 async function sendBroadcast(){var msg=$('broadcastText').value;if(!msg.trim())return;if(!confirm('Bạn chắc chắn muốn gửi cho TOÀN BỘ người dùng?'))return;try{var j=await api('/api/admin/broadcast',{method:'POST',body:JSON.stringify({message:msg})});$('broadcastState').textContent='Đã bắt đầu job '+j.job.id;pollBroadcast(j.job.id)}catch(e){toast(e.message,true)}}function pollBroadcast(id){if(broadcastTimer)clearInterval(broadcastTimer);broadcastTimer=setInterval(async function(){try{var j=await api('/api/admin/broadcast/'+id),x=j.job,p=x.total?Math.round((x.success+x.failed)*100/x.total):0;$('broadcastState').textContent='Trạng thái: '+x.status+' • '+x.success+'/'+x.total+' thành công • '+x.failed+' lỗi';$('broadcastProgress').style.width=p+'%';if(x.status!=='running')clearInterval(broadcastTimer)}catch(_){clearInterval(broadcastTimer)}},1200)}
-async function resetAllWeb(){var first=prompt('Thao tác này sẽ reset dữ liệu toàn bộ hệ thống. Nhập RESET ALL DATA để tiếp tục:');if(first!=='RESET ALL DATA')return;var second=confirm('XÁC NHẬN LẦN 2: Bạn chắc chắn muốn reset toàn bộ dữ liệu?');if(!second)return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify({action:'resetAll',confirmText:first})});toast('✅ Đã reset toàn bộ dữ liệu');loadSystem();loadOverview()}catch(e){toast(e.message,true)}}
-async function loadSystem(){try{var s=(await api('/api/admin/system')).system,n=s.network;$('systemInfo').textContent='BOT: '+(s.botLocked?'🔒 MAINTENANCE':'🔓 RUNNING')+'\nUPTIME: '+s.uptimeSeconds+'s\nSTARTED: '+s.startedAt+'\nSUPABASE: '+(s.supabaseOk?'✅':'❌')+'\nLINK TASK DB: '+(s.linkTaskDb&&s.linkTaskDb.ready?'✅':'❌')+'\nTRUST PROXY: '+n.trustProxy+'\nPUBLIC REQUEST IP: '+(n.publicIpAvailable?'✅ '+n.resolvedPublicIp:'❌ UNAVAILABLE')+'\nWEB_APP_URL: '+s.webAppUrl;$('auditList').textContent=(s.audit||[]).map(function(a){return (a.at||'')+' • '+(a.actor||'')+' • '+(a.action||'')+' • '+(a.target||'')}).join('\n')||'Chưa có audit.';$('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked}catch(e){toast(e.message,true)}}async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem()}catch(e){toast(e.message,true)}}
-init();})();
+async function resetAllWeb(){var first=prompt('Thao tác này sẽ reset dữ liệu toàn bộ hệ thống. Nhập RESET ALL DATA để tiếp tục:');if(first!=='RESET ALL DATA')return;var second=confirm('XÁC NHẬN LẦN 2: Bạn chắc chắn muốn reset toàn bộ dữ liệu?');if(!second)return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify({action:'resetAll',confirmText:first})});toast('✅ Đã reset toàn bộ dữ liệu');loadSystem(true);loadOverview(true)}catch(e){toast(e.message,true)}}
+async function loadSystem(force){try{var s=(await api('/api/admin/system'+(force?'?force=1':''))).system,n=s.network||{};$('systemInfo').textContent='BOT: '+(s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE')+'\nUPTIME: '+fmtUptime(s.uptimeSeconds)+'\nSTARTED: '+fmtDate(s.startedAt)+'\nSUPABASE: '+(s.supabaseOk?'✅ READY':'❌ ERROR')+'\nLINK TASK DB: '+(s.linkTaskDb&&s.linkTaskDb.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+String(n.trustProxy||'N/A')+'\nREMOTE ADDRESS: '+String(n.remoteAddress||'N/A')+'\nX-FORWARDED-FOR PRESENT: '+(n.forwardedForPresent?'YES':'NO')+'\nFORWARDED HOP COUNT: '+Number(n.forwardedHopCount||0)+'\nCANONICAL PUBLIC IP: '+(n.publicIpAvailable?(n.canonicalPublicIp||n.resolvedPublicIp):'❌ PUBLIC IP UNAVAILABLE')+'\nWEB_APP_URL: '+String(s.webAppUrl||'');$('auditList').textContent=(s.audit||[]).map(function(a){return String(a.at||'')+' • '+String(a.actor||'')+' • '+String(a.action||'')+' • '+String(a.target||'')}).join('\n')||'Chưa có audit.';$('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked;$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE'}catch(e){toast(e.message,true)}}async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem(true);if(a==='lockBot'||a==='unlockBot')loadOverview(true)}catch(e){toast(e.message,true)}}
+init();
+})();
 </script></body></html>`;
 }
 app.get('/admin',(req,res)=>{
