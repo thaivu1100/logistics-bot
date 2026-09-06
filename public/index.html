@@ -4091,8 +4091,16 @@
                 },
                 linkTaskStatusText(task) {
                     if(!task)return '';
-                    if(!task.available)return task.unavailableCode==='task_admin_locked'?'🔒 Admin đang tạm khóa nhận nhiệm vụ mới':'Tạm chưa khả dụng';
+                    // Active attempt được mô tả trước lỗi của lượt MỚI để user không hiểu nhầm link/mã hiện tại bị hủy.
                     if(task.adminLocked && this.linkTaskIsActive(task))return '🔒 Admin đã khóa lượt mới — attempt hiện tại vẫn có thể hoàn thành';
+                    if(!task.available){
+                        if(task.unavailableCode==='task_admin_locked')return '🔒 Admin đang tạm khóa nhận nhiệm vụ mới';
+                        if(task.unavailableCode==='missing_ip_intelligence')return '🛡 Đang chờ hệ thống xác minh VPN/Proxy';
+                        if(task.unavailableCode==='ip_unavailable')return '🌐 Chưa nhận được IP public từ reverse proxy';
+                        if(task.unavailableCode==='missing_provider_token')return '🔑 Nhà cung cấp chưa được cấu hình';
+                        if(task.unavailableCode==='link_task_db_not_ready'||task.unavailableCode==='link_task_db_access_denied')return '🗄 Database nhiệm vụ chưa sẵn sàng';
+                        return 'Tạm chưa khả dụng';
+                    }
                     if(task.status==='rewarded')return '✅ Đã nhận thưởng — có thể làm lại khi quota cho phép';
                     if(task.status==='landed')return '🔐 Đã vượt link — nhập mã xác nhận bên dưới trước khi hết 10 phút';
                     if(task.status==='shortened')return '⏳ Nhiệm vụ đang chờ hoàn thành';
