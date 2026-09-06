@@ -1271,7 +1271,12 @@ const GROUP_1_ID = parseInt(process.env.GROUP_1_ID); // Kênh thông báo
 const GROUP_2_ID = parseInt(process.env.GROUP_2_ID); // Nhóm chat
 // Các nhóm nhiệm vụ đặc biệt dùng username public và được cấu hình theo campaign ở phần Group Task.
 const ADMIN_ID = 6327666718;
-const ADMIN_PASS = process.env.ADMIN_PASS;
+// Legacy ADMIN_PASS is kept only so old deployments do not crash while migrating.
+// The new /admin panel NEVER accepts a password in the URL/query string.
+const ADMIN_PASS = readSecretEnv('ADMIN_PASS');
+const ADMIN_WEB_USERNAME = readSecretEnv('ADMIN_WEB_USERNAME');
+const ADMIN_WEB_PASSWORD = readSecretEnv('ADMIN_WEB_PASSWORD');
+const ADMIN_SESSION_SECRET = readSecretEnv('ADMIN_SESSION_SECRET');
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://logistics-bot-vyxa.onrender.com';
 const WITHDRAW_NOTIFY_CHAT = process.env.WITHDRAW_NOTIFY_CHAT || '@khohangchatkiemtien';
 const BOT_USERNAME = String(process.env.BOT_USERNAME || 'KhoHangKiemtien_Bot').replace(/^@/, '');
@@ -1309,6 +1314,8 @@ console.log(`${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} LINK TASK DB: ${SUPABA
 console.log(`${IP_HASH_SECRET ? '✅' : '❌'} LINK TASK HASH: ${IP_HASH_SECRET ? 'IP hash secret configured' : 'missing IP_HASH_SECRET'}`);
 console.log(`${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE: ${IP_INTELLIGENCE_API_KEY ? 'configured' : 'missing IP_INTELLIGENCE_API_KEY'}`);
 console.log(`🌐 TRUST PROXY: ${TRUST_PROXY_SETTING === false ? 'direct/no proxy' : `${TRUST_PROXY_SETTING} hop(s)`}${TRUST_CF_CONNECTING_IP ? ' + trusted CF-Connecting-IP' : ''}`);
+console.log(`${ADMIN_WEB_USERNAME && ADMIN_WEB_PASSWORD && ADMIN_SESSION_SECRET ? '✅' : '❌'} ADMIN WEB: ${ADMIN_WEB_USERNAME && ADMIN_WEB_PASSWORD && ADMIN_SESSION_SECRET ? 'credentials/session secret configured' : 'missing ADMIN_WEB_USERNAME / ADMIN_WEB_PASSWORD / ADMIN_SESSION_SECRET'}`);
+if (!IS_RENDER_RUNTIME && TRUST_PROXY_SETTING === false) console.log('ℹ️ VPS proxy note: nếu HTTPS đi qua đúng 1 Nginx/Caddy hop, hãy đặt TRUST_PROXY_HOPS=1 trong EnvironmentFile rồi restart service.');
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -1882,6 +1889,28 @@ function requestIp(req) {
     }
     return '';
 }
+
+function requestNetworkDiagnostic(req) {
+    const resolved=requestIp(req);
+    const reqIpRaw=normalizeRequestIp(req?.ip||'');
+    const socketRaw=normalizeRequestIp(req?.socket?.remoteAddress||req?.connection?.remoteAddress||'');
+    const forwarded=String(req?.get?.('x-forwarded-for')||'').trim();
+    return {
+        trustProxy:TRUST_PROXY_SETTING===false?'direct/no proxy':`${TRUST_PROXY_SETTING} hop(s)`,
+        trustProxyHops:TRUST_PROXY_SETTING===false?0:Number(TRUST_PROXY_SETTING||0),
+        renderRuntime:IS_RENDER_RUNTIME,
+        cfConnectingIpTrusted:TRUST_CF_CONNECTING_IP,
+        reqIpPresent:!!reqIpRaw,
+        reqIpPublic:!!normalizePublicRequestIp(reqIpRaw),
+        socketIpPresent:!!socketRaw,
+        socketIpPublic:!!normalizePublicRequestIp(socketRaw),
+        forwardedForPresent:!!forwarded,
+        forwardedHopCount:forwarded?forwarded.split(',').map(v=>v.trim()).filter(Boolean).length:0,
+        publicIpAvailable:!!resolved,
+        resolvedPublicIp:resolved||''
+    };
+}
+
 function hashNetworkValue(value, purpose = 'ip') {
     if (!IP_HASH_SECRET) return '';
     return crypto.createHmac('sha256', IP_HASH_SECRET)
@@ -2473,7 +2502,7 @@ async function acquireUserStateWriteLock(userId) {
     };
 }
 
-async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrders = 0, deltaSpins = 0, setFields = {}, maxRetries = 6 } = {}) {
+async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrders = 0, deltaSpins = 0, setFields = {}, maxRetries = 6, floorAtZero = false, minCoins = null, minOrders = null, minSpins = null } = {}) {
     const id = String(userId);
     const numericDeltas = {
         coins: Number(deltaCoins || 0),
@@ -2491,9 +2520,17 @@ async function atomicWalletMutationUnlocked(userId, { deltaCoins = 0, deltaOrder
         if (readError || !current) return { error: readError || new Error('Không tìm thấy user.') };
 
         const update = { ...knownSetFields, walletUpdatedAt: new Date().toISOString() };
-        if (numericDeltas.coins !== 0) update.coins = Number(current.coins || 0) + numericDeltas.coins;
-        if (numericDeltas.orders !== 0) update.orders = Number(current.orders || 0) + numericDeltas.orders;
-        if (numericDeltas.spins !== 0) update.spins = Number(current.spins || 0) + numericDeltas.spins;
+        const requestedNext = {
+            coins:Number(current.coins || 0) + numericDeltas.coins,
+            orders:Number(current.orders || 0) + numericDeltas.orders,
+            spins:Number(current.spins || 0) + numericDeltas.spins
+        };
+        if (minCoins !== null && requestedNext.coins < Number(minCoins)) return { error:new Error('Số dư Coin không đủ.'), code:'insufficient_coins' };
+        if (minOrders !== null && requestedNext.orders < Number(minOrders)) return { error:new Error('Số dư Đơn Hàng không đủ.'), code:'insufficient_orders' };
+        if (minSpins !== null && requestedNext.spins < Number(minSpins)) return { error:new Error('Số lượt mở rương không đủ.'), code:'insufficient_spins' };
+        if (numericDeltas.coins !== 0) update.coins = floorAtZero ? Math.max(0, requestedNext.coins) : requestedNext.coins;
+        if (numericDeltas.orders !== 0) update.orders = floorAtZero ? Math.max(0, requestedNext.orders) : requestedNext.orders;
+        if (numericDeltas.spins !== 0) update.spins = floorAtZero ? Math.max(0, requestedNext.spins) : requestedNext.spins;
 
         let query = supabase.from('users').update(update).eq('id', id);
         if (numericDeltas.coins !== 0) query = query.eq('coins', Number(current.coins || 0));
@@ -2779,43 +2816,17 @@ bot.command('mokhoabot', async (ctx) => {
 // Admin phụ dùng được tất cả lệnh admin khác nhưng KHÔNG thể tự thêm/xoá admin (vẫn dưới quyền Admin chính).
 bot.command('addadmin', async (ctx) => {
     if (!isMainAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /addadmin <ID>");
-    if (targetId === String(ADMIN_ID)) return ctx.reply("⚠️ ID này đã là Admin chính.");
-    if (subAdminIds.has(targetId)) return ctx.reply("⚠️ User này đã là admin phụ rồi.");
-
-    const { error } = await supabase.from('admins').upsert({ id: targetId, addedBy: String(ctx.from.id) });
-    if (error) {
-        console.error('Lỗi thêm admin phụ:', error);
-        return ctx.reply("❌ Lỗi khi thêm admin (kiểm tra đã tạo bảng \"admins\" trên Supabase chưa).");
-    }
-    await loadAdmins(); // Nạp lại cache ngay để có hiệu lực tức thì
-    ctx.reply(`✅ Đã phong user ${targetId} làm *Admin phụ*.\nUser này giờ dùng được tất cả lệnh admin (trừ /addadmin, /xoaadmin).`, { parse_mode: 'Markdown' });
-    safeSendLocalizedMessage(targetId,
-        "🎉 Bạn vừa được phong làm *Admin phụ*! Giờ bạn có thể dùng các lệnh quản trị của bot.",
-        "🎉 You have been promoted to *Sub-Admin*! You can now use the bot's admin commands.",
-        { parse_mode: 'Markdown' });
+    const targetId=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');
+    if(!targetId)return ctx.reply('❌ Sử dụng: /addadmin <ID>');
+    try{await adminAddSubAdmin(targetId,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã phong user ${targetId} làm Admin phụ.`);void safeSendLocalizedMessage(targetId,'🎉 Bạn vừa được phong làm *Admin phụ*!','🎉 You have been promoted to *Sub-Admin*!',{parse_mode:'Markdown'});}catch(e){ctx.reply(`❌ Không thể thêm Admin: ${e.message}`);}
 });
 
 // /xoaadmin <ID> - Hạ 1 admin phụ xuống lại thành user thường (CHỈ Admin chính được dùng lệnh này)
 bot.command('xoaadmin', async (ctx) => {
     if (!isMainAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /xoaadmin <ID>");
-    if (targetId === String(ADMIN_ID)) return ctx.reply("❌ Không thể xoá quyền Admin chính.");
-    if (!subAdminIds.has(targetId)) return ctx.reply("⚠️ User này không phải admin phụ.");
-
-    const { error } = await supabase.from('admins').delete().eq('id', targetId);
-    if (error) {
-        console.error('Lỗi xoá admin phụ:', error);
-        return ctx.reply("❌ Lỗi khi xoá admin.");
-    }
-    await loadAdmins();
-    ctx.reply(`✅ Đã hạ user ${targetId} xuống lại thành người dùng thường.`);
-    safeSendLocalizedMessage(targetId,
-        "ℹ️ Bạn đã bị gỡ quyền *Admin phụ*.",
-        "ℹ️ Your *Sub-Admin* permission has been removed.",
-        { parse_mode: 'Markdown' });
+    const targetId=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');
+    if(!targetId)return ctx.reply('❌ Sử dụng: /xoaadmin <ID>');
+    try{await adminRemoveSubAdmin(targetId,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã hạ quyền Admin phụ của ${targetId}.`);}catch(e){ctx.reply(`❌ Không thể xóa Admin: ${e.message}`);}
 });
 
 // /listadmins - Xem danh sách admin hiện tại
@@ -3609,22 +3620,10 @@ bot.command('quantri', async (ctx) => {
 });
 
 // /ban
-bot.command('ban', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /ban <userId>");
-    await touchWallet(targetId, { isBanned: true });
-    ctx.reply(`✅ Đã ban user ${targetId}`);
-});
+bot.command('ban', async (ctx) => { if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /ban <userId>');try{await adminSetBan(id,true,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã ban user ${id}`);}catch(e){ctx.reply(`❌ ${e.message}`);} });
 
 // /unban
-bot.command('unban', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /unban <userId>");
-    await touchWallet(targetId, { isBanned: false });
-    ctx.reply(`✅ Đã unban user ${targetId}`);
-});
+bot.command('unban', async (ctx) => { if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /unban <userId>');try{await adminSetBan(id,false,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã unban user ${id}`);}catch(e){ctx.reply(`❌ ${e.message}`);} });
 
 
 // /listban — ADMIN ONLY. Query trực tiếp Supabase để phản ánh toàn bộ user HIỆN isBanned=true.
@@ -3674,167 +3673,52 @@ Tổng: ${rows.length.toLocaleString('vi-VN')}
 
 // /congcoin
 bot.command('congcoin', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /congcoin <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('coins').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await touchWallet(targetId, { coins: (data.coins || 0) + amount });
-    logTransaction(targetId, 'coin', amount, `Admin ${ctx.from.id} cộng coin (/congcoin)`);
-    ctx.reply(`✅ Đã cộng ${amount} coin cho ${targetId}. Số dư mới: ${(data.coins || 0) + amount}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /congcoin <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{coins:1*amount},`telegram:${ctx.from.id}`,false);ctx.reply(`✅ Đã cộng ${amount.toLocaleString('vi-VN')} coin cho ${id}. Số dư mới: ${Number(data?.coins||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /trucoin
 bot.command('trucoin', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /trucoin <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('coins').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    const newCoins = Math.max(0, (data.coins || 0) - amount);
-    await touchWallet(targetId, { coins: newCoins });
-    logTransaction(targetId, 'coin', -amount, `Admin ${ctx.from.id} trừ coin (/trucoin)`);
-    ctx.reply(`✅ Đã trừ ${amount} coin của ${targetId}. Số dư mới: ${newCoins}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /trucoin <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{coins:-1*amount},`telegram:${ctx.from.id}`,true);ctx.reply(`✅ Đã trừ ${amount.toLocaleString('vi-VN')} coin của ${id}. Số dư mới: ${Number(data?.coins||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /addspin
 bot.command('addspin', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /addspin <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('spins').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await touchWallet(targetId, { spins: (data.spins || 0) + amount });
-    ctx.reply(`✅ Đã cộng ${amount} lượt mở rương cho ${targetId}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /addspin <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{spins:1*amount},`telegram:${ctx.from.id}`,false);ctx.reply(`✅ Đã cộng ${amount.toLocaleString('vi-VN')} lượt mở rương cho ${id}. Số dư mới: ${Number(data?.spins||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /adddonhang
 bot.command('adddonhang', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /adddonhang <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('orders').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    await touchWallet(targetId, { orders: (data.orders || 0) + amount });
-    logTransaction(targetId, 'orders', amount, `Admin ${ctx.from.id} cộng đơn hàng (/adddonhang)`);
-    ctx.reply(`✅ Đã cộng ${amount} đơn hàng cho ${targetId}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /adddonhang <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{orders:1*amount},`telegram:${ctx.from.id}`,false);ctx.reply(`✅ Đã cộng ${amount.toLocaleString('vi-VN')} đơn hàng cho ${id}. Số dư mới: ${Number(data?.orders||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /trudonhang - Trừ đơn hàng của 1 user (không cho âm)
 bot.command('trudonhang', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /trudonhang <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('orders').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    const newOrders = Math.max(0, (data.orders || 0) - amount);
-    await touchWallet(targetId, { orders: newOrders });
-    logTransaction(targetId, 'orders', -amount, `Admin ${ctx.from.id} trừ đơn hàng (/trudonhang)`);
-    ctx.reply(`✅ Đã trừ ${amount} đơn hàng của ${targetId}. Số dư mới: ${newOrders}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /trudonhang <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{orders:-1*amount},`telegram:${ctx.from.id}`,true);ctx.reply(`✅ Đã trừ ${amount.toLocaleString('vi-VN')} đơn hàng của ${id}. Số dư mới: ${Number(data?.orders||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /truspin - Trừ lượt mở rương của 1 user (không cho âm)
 bot.command('truspin', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /truspin <userId> <số_lượng>");
-    const targetId = parts[1];
-    const amount = parseInt(parts[2]);
-    const { data, error } = await supabase.from('users').select('spins').eq('id', targetId).single();
-    if (error || !data) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-    const newSpins = Math.max(0, (data.spins || 0) - amount);
-    await touchWallet(targetId, { spins: newSpins });
-    ctx.reply(`✅ Đã trừ ${amount} lượt mở rương của ${targetId}. Số dư mới: ${newSpins}`);
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],1_000_000_000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /truspin <userId> <số_lượng>');
+    try{const data=await adminAdjustWallet(id,{spins:-1*amount},`telegram:${ctx.from.id}`,true);ctx.reply(`✅ Đã trừ ${amount.toLocaleString('vi-VN')} lượt mở rương của ${id}. Số dư mới: ${Number(data?.spins||0).toLocaleString('vi-VN')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /addref <userId> <số_ref> - Cộng thủ công N lượt mời HỢP LỆ và đúng phần thưởng tức thì hiện hành.
 // Dùng persistent lease + atomic increment/wallet mutation để không mất lượt hoặc ghi đè ví khi nhiều request chạy đồng thời.
 bot.command('addref', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /addref <userId> <số_ref>");
-    const targetId = String(parts[1] || '');
-    const amount = parseInt(parts[2]);
-    if (!amount || amount <= 0) return ctx.reply("❌ Số ref phải là số nguyên dương.");
-
-    const lockKey = persistentEventKey('admin-addref-lock', targetId);
-    const release = await acquirePersistentLeaseLock(lockKey, 30 * 1000);
-    if (!release) return ctx.reply('⚠️ User đang được cập nhật. Vui lòng thử lại sau vài giây.');
-    try {
-        const { data: before, error } = await readUserRow(targetId);
-        if (error || !before) return ctx.reply("❌ Không tìm thấy user hoặc lỗi database.");
-
-        const newValid = await atomicIncrement(targetId, 'validInvites', amount);
-        if (newValid === null) return ctx.reply('❌ Lỗi khi cập nhật số lượt mời hợp lệ.');
-        if (Number(before.invitedCount || 0) < newValid) {
-            const invitedSaved = await saveUserFields(targetId, { invitedCount:newValid });
-            if (invitedSaved.error) {
-                await atomicIncrement(targetId, 'validInvites', -amount).catch(()=>{});
-                return ctx.reply('❌ Lỗi khi đồng bộ tổng số bạn đã mời.');
-            }
-        }
-
-        const bonusCoins = INSTANT_REF_COINS * amount;
-        const bonusOrders = INSTANT_REF_ORDERS * amount;
-        const mutation = await atomicWalletMutation(targetId, { deltaCoins:bonusCoins, deltaOrders:bonusOrders });
-        if (mutation.error) {
-            await atomicIncrement(targetId, 'validInvites', -amount).catch(()=>{});
-            return ctx.reply('❌ Lỗi khi cập nhật ví user.');
-        }
-        await flushUserExtra();
-        logTransaction(targetId, 'coin', bonusCoins, `Admin cộng ${amount} lượt mời hợp lệ`);
-        logTransaction(targetId, 'orders', bonusOrders, `Admin cộng ${amount} lượt mời hợp lệ`);
-
-        ctx.reply(`✅ Đã cộng ${amount} lượt mời hợp lệ cho ${targetId}.\n📊 Tổng hợp lệ mới: ${newValid}\n🎁 Đã cộng thưởng: +${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng`);
-        safeSendLocalizedMessage(targetId,
-            `🎉 Admin vừa cộng thêm *${amount}* lượt mời bạn hợp lệ cho bạn!\n🎁 Nhận thêm: *+${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng*\n📊 Tổng hợp lệ hiện tại: *${newValid}*`,
-            `🎉 Admin added *${amount}* valid invite(s) to your account!\n🎁 Reward: *+${bonusCoins.toLocaleString('en-US')} Coins + ${bonusOrders.toLocaleString('en-US')} Orders*\n📊 Current valid invites: *${newValid}*`,
-            { parse_mode:'Markdown' });
-    } finally {
-        try { await release(); } catch (_) {}
-    }
+    if(!isAdmin(ctx))return;const parts=String(ctx.message?.text||'').trim().split(/\s+/);const id=parts[1],amount=adminPositiveInt(parts[2],100000);if(!id||!amount)return ctx.reply('❌ Sử dụng: /addref <userId> <số_ref>');
+    try{const r=await adminAddValidInvites(id,amount,`telegram:${ctx.from.id}`,true);ctx.reply(`✅ Đã cộng ${amount} lượt mời hợp lệ cho ${id}.\n📊 Tổng hợp lệ mới: ${r.newValid}\n🎁 +${r.bonusCoins.toLocaleString()} Coin + ${r.bonusOrders.toLocaleString()} Đơn Hàng`);}catch(e){ctx.reply(`❌ ${e.message}`);}
 });
 
 // /setlevel
-bot.command('setlevel', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /setlevel <userId> <cấp_độ>");
-    const targetId = parts[1];
-    const level = parseInt(parts[2]);
-    if (level < 1 || level > MAX_TRUCK_LEVEL) return ctx.reply(`❌ Cấp độ phải từ 1-${MAX_TRUCK_LEVEL}`);
-    await touchWallet(targetId, { truckLevel: level });
-    ctx.reply(`✅ Đã đặt cấp độ xe của ${targetId} lên ${level}`);
-});
+bot.command('setlevel', async (ctx) => {if(!isAdmin(ctx))return;const p=String(ctx.message?.text||'').trim().split(/\s+/);if(!p[1]||!p[2])return ctx.reply(`❌ Sử dụng: /setlevel <userId> <cấp_độ>`);try{await adminSetTruckLevel(p[1],Number(p[2]),`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã đặt cấp độ xe của ${p[1]} lên ${p[2]}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /resetdaily
-bot.command('resetdaily', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /resetdaily <userId>");
-    await touchWallet(targetId, { 
-        adsToday: 0, 
-        smartlinksToday: 0,
-        bonusAdsToday: 0,
-        deliveryCount: 0,
-        smartlinkCount: 0,
-        spinAdCount: 0,
-        spinFree: 1,
-        chestOpensToday: 0,
-        lastResetDate: addVietnamDays(vietnamDayKey(), -1) // Đặt ngày reset về hôm qua để kích hoạt reset khi mini app load
-    });
-    ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${targetId}`);
-});
+bot.command('resetdaily', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /resetdaily <userId>');try{await adminResetDailyUser(id,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã reset nhiệm vụ hàng ngày cho ${id}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // Toàn bộ field cần đưa về 0 / trạng thái khởi đầu khi reset 1 user hoặc tất cả user
 // (đơn hàng, coin, lượt mở rương, số bạn mời được, số qc đã xem, số smartlink đã ấn, số lv xe)
@@ -3908,15 +3792,7 @@ async function resetGiftcodeRedemptions(userId = null) {
 
 
 // /reset <userId> - Reset TOÀN BỘ dữ liệu của 1 user về 0
-bot.command('reset', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /reset <userId>");
-    const ok = await touchWallet(targetId, fullResetFields());
-    await resetGiftcodeRedemptions(targetId); // Cho phép user nhập lại các code đã nhập trước khi reset
-    if (ok) ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${targetId} về 0 (kể cả lịch sử nhập code).`);
-    else ctx.reply(`❌ Lỗi khi reset dữ liệu user ${targetId}.`);
-});
+bot.command('reset', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /reset <userId>');try{await adminResetUser(id,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã reset toàn bộ dữ liệu của user ${id} về trạng thái ban đầu.`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /resetall - Reset TOÀN BỘ dữ liệu bot về trạng thái ban đầu. CHỈ Admin CHÍNH (ADMIN_ID) được dùng,
 // Admin phụ KHÔNG được dùng lệnh này (dùng isMainAdmin thay vì isAdmin). Vì đây là thao tác PHÁ HUỶ
@@ -3933,120 +3809,23 @@ bot.command('resetall', async (ctx) => {
 // /confirmreset - Bước xác nhận bắt buộc của /resetall. Chỉ thực thi nếu ĐÚNG Admin chính vừa gõ
 // /resetall trước đó và còn trong thời hạn xác nhận, nếu không sẽ không làm gì cả (an toàn).
 bot.command('confirmreset', async (ctx) => {
-    if (!isMainAdmin(ctx)) return;
-    const adminId = String(ctx.from.id);
-    const expireAt = pendingResetAllConfirm.get(adminId);
-    pendingResetAllConfirm.delete(adminId);
-    if (!expireAt || Date.now() > expireAt) {
-        return ctx.reply("⚠️ Chưa có yêu cầu /resetall nào đang chờ xác nhận (hoặc đã hết hạn 60s). Vui lòng gõ /resetall trước.");
-    }
-
-    try {
-        // 1) Users: coin/đơn hàng/lượt mở rương/level xe/nhiệm vụ/QC/ref... về 0, và MỞ BAN toàn bộ user
-        // (yêu cầu "Danh sách ban" cũng phải được reset về trạng thái ban đầu).
-        const { known: resetRow } = await splitUserFields({
-            ...fullResetFields(),
-            isBanned: false,
-            walletUpdatedAt: new Date().toISOString()
-        });
-        const { error } = await supabase.from('users').update(resetRow).not('id', 'is', null);
-        if (error) {
-            console.error("Lỗi /confirmreset:", error);
-            return ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + error.message);
-        }
-
-        // 2) Dữ liệu phụ ngoài bảng users (app_settings: user_extra_state) - gồm cả Anti-fraud/Session per-user
-        await clearUserExtra(null);
-
-        // 3) Lịch sử nhập Giftcode (đồng thời hoàn trả lượt dùng cho từng code)
-        await resetGiftcodeRedemptions(null);
-
-        // 4) Giftcode: xoá sạch các mã đã tạo (KHÔNG xoá cấu trúc bảng, chỉ xoá dữ liệu)
-        const { error: gcError } = await supabase.from('giftcodes').delete().not('code', 'is', null);
-        if (gcError) console.error('Lỗi xoá bảng giftcodes khi /confirmreset:', gcError.message);
-
-        // 5) Lịch sử rút tiền
-        const { error: wdError } = await supabase.from('withdrawals').delete().not('id', 'is', null);
-        if (wdError) console.error('Lỗi xoá bảng withdrawals khi /confirmreset:', wdError.message);
-
-        // 6) Anti-fraud: xoá index thiết bị dùng chung + cache liên quan trong bộ nhớ
-        const { error: afError } = await supabase.from('app_settings').delete().eq('key', antiFraudDeviceIndexKey);
-        if (afError) console.error('Lỗi xoá anti_fraud_device_index khi /confirmreset:', afError.message);
-        antiFraudDeviceIndexCache = {};
-
-        ctx.reply("✅ Đã reset toàn bộ dữ liệu bot về 0.");
-    } catch (e) {
-        console.error("Lỗi /confirmreset:", e);
-        ctx.reply("❌ Lỗi khi reset toàn bộ dữ liệu: " + e.message);
-    }
+    if(!isMainAdmin(ctx))return;
+    const adminId=String(ctx.from.id),expireAt=pendingResetAllConfirm.get(adminId);pendingResetAllConfirm.delete(adminId);
+    if(!expireAt||Date.now()>expireAt)return ctx.reply('⚠️ Chưa có yêu cầu /resetall nào đang chờ xác nhận (hoặc đã hết hạn 60s). Vui lòng gõ /resetall trước.');
+    try{await adminResetAllData(`telegram:${ctx.from.id}`);ctx.reply('✅ Đã reset toàn bộ dữ liệu bot về 0.');}catch(e){console.error('Lỗi /confirmreset:',e);ctx.reply('❌ Lỗi khi reset toàn bộ dữ liệu: '+e.message);}
 });
 
 // /deleteuser
-bot.command('deleteuser', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /deleteuser <userId>");
-    await supabase.from('users').delete().eq('id', targetId);
-    ctx.reply(`✅ Đã xóa vĩnh viễn user ${targetId}`);
-});
+bot.command('deleteuser', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /deleteuser <userId>');try{await adminDeleteUser(id,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã xóa vĩnh viễn user ${id}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /doiten - Sửa tên hiển thị của 1 user thủ công (dùng khi tên bị lỗi/ghi sai, không cần chờ user gõ lại /start)
-bot.command('doiten', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /doiten <userId> <tên mới>");
-    const targetId = parts[1];
-    const newName = parts.slice(2).join(' ');
-    const { error } = await supabase.from('users').update({ name: newName }).eq('id', targetId);
-    if (error) return ctx.reply("❌ Lỗi: " + error.message);
-    ctx.reply(`✅ Đã đổi tên user ${targetId} thành: ${newName}`);
-});
+bot.command('doiten', async (ctx) => {if(!isAdmin(ctx))return;const p=String(ctx.message?.text||'').trim().split(/\s+/);if(p.length<3)return ctx.reply('❌ Sử dụng: /doiten <userId> <tên mới>');try{await adminRenameUser(p[1],p.slice(2).join(' '),`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã đổi tên user ${p[1]} thành: ${p.slice(2).join(' ')}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /taocode - Tạo code (số đơn hàng + coin + mở rương + số lượt nhập + phạm vi áp dụng)
 // Cú pháp: /taocode <mã> <coin> <orders> <spins> <giới_hạn> <phạm_vi>
 // <phạm_vi> = "admin" (chỉ Admin chính/phụ mới nhập được, dùng để test code nội bộ)
 //           hoặc "nguoidung" (ai cũng nhập được - mặc định dùng cho sự kiện public)
-bot.command('taocode', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.trim().split(/\s+/);
-    if (parts.length < 7) return ctx.reply("❌ Sử dụng: /taocode <mã> <coin> <orders> <spins> <giới_hạn> <phạm_vi>\nPhạm vi: admin hoặc nguoidung\nVí dụ: /taocode TET2024 500 1000 2 100 nguoidung");
-
-    const [, code, coin, orders, spins, limit, scopeRaw] = parts;
-    const scope = scopeRaw.toLowerCase() === 'admin' ? 'admin' : 'nguoidung';
-    const baseRow = {
-        code: code,
-        rewardType: 'multi',
-        rewardAmount: parseInt(coin) || 0,
-        orders: parseInt(orders) || 0,
-        spins: parseInt(spins) || 0,
-        limitUses: parseInt(limit) || 0,
-        usedCount: 0
-    };
-
-    // Thử insert đầy đủ (kèm scope/createdBy) trước. Nếu bảng "giftcodes" trên Supabase CHƯA được thêm 2
-    // cột này (chưa chạy SQL migration), Postgres sẽ báo lỗi "column does not exist" (mã 42703 hoặc
-    // PGRST204) -> tự động fallback insert KHÔNG kèm scope/createdBy để code vẫn được tạo bình thường
-    // (khi đó phạm vi sẽ mặc định là "Người dùng" cho tới khi admin chạy SQL migration để bật được tính
-    // năng phạm vi "Chỉ Admin"). Nhờ vậy lệnh /taocode KHÔNG BAO GIỜ bị lỗi vì thiếu cột nữa.
-    let { error } = await supabase.from('giftcodes').insert({ ...baseRow, scope, createdBy: String(ctx.from.id) });
-    let scopeSaved = true;
-
-    if (error && (error.code === '42703' || error.code === 'PGRST204' || /column|scope|createdBy/i.test(error.message || ''))) {
-        scopeSaved = false;
-        const retry = await supabase.from('giftcodes').insert(baseRow);
-        error = retry.error;
-    }
-
-    if (error) {
-        console.error("Lỗi tạo code:", error);
-        return ctx.reply(`❌ Lỗi: Mã code \`${code}\` đã tồn tại hoặc dữ liệu không hợp lệ.\n${error.message ? 'Chi tiết: ' + error.message : ''}`, { parse_mode: 'Markdown' });
-    }
-    let msg = `✅ Đã tạo code: \`${code}\`\n🪙 Coin: ${coin}\n📦 Đơn hàng: ${orders}\n🎡 Lượt mở rương: ${spins}\n🔢 Giới hạn: ${limit} lần\n🔒 Phạm vi: *${scope === 'admin' ? 'Chỉ Admin' : 'Người dùng'}*`;
-    if (!scopeSaved) {
-        msg += `\n\n⚠️ *Lưu ý:* chưa lưu được phạm vi (bảng \`giftcodes\` thiếu cột \`scope\`/\`createdBy\`) nên code này tạm thời áp dụng cho *Người dùng*. Chạy SQL migration ở đầu file server.js rồi tạo lại code để bật đúng phạm vi *Chỉ Admin*.`;
-    }
-    ctx.reply(msg, { parse_mode: 'Markdown' });
-});
+bot.command('taocode', async (ctx) => {if(!isAdmin(ctx))return;const p=String(ctx.message?.text||'').trim().split(/\s+/);if(p.length<7)return ctx.reply('❌ Sử dụng: /taocode <mã> <coin> <orders> <spins> <giới_hạn> <phạm_vi>');try{const r=await adminCreateGiftcode({code:p[1],coin:Number(p[2]),orders:Number(p[3]),spins:Number(p[4]),limit:Number(p[5]),scope:p[6]},`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã tạo code: ${r.code}${r.scopeSaved?'':'\n⚠️ Schema cũ chưa lưu được scope.'}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /listcodes
 bot.command('listcodes', async (ctx) => {
@@ -4074,17 +3853,7 @@ bot.command('listcodes', async (ctx) => {
 });
 
 // /delcode
-bot.command('delcode', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const code = ctx.message.text.split(' ')[1];
-    if (!code) return ctx.reply("❌ Sử dụng: /delcode <mã_code>");
-    const { error } = await supabase.from('giftcodes').delete().eq('code', code);
-    if (error) {
-        console.error("Lỗi xóa code:", error);
-        return ctx.reply("❌ Lỗi: Không tìm thấy code hoặc lỗi database.");
-    }
-    ctx.reply(`✅ Đã xóa code: ${code}`);
-});
+bot.command('delcode', async (ctx) => {if(!isAdmin(ctx))return;const code=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!code)return ctx.reply('❌ Sử dụng: /delcode <mã_code>');try{await adminDeleteGiftcode(code,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã xóa code: ${code}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /listnguoinhapcode <mã> - Xem TẤT CẢ người dùng đã từng nhập 1 mã code cụ thể (ID, tên, phần thưởng
 // nhận, thời gian) - hoạt động ĐƯỢC kể cả khi admin đã /delcode xoá mã đó rồi, vì lệnh này đọc từ lịch sử
@@ -4129,48 +3898,7 @@ bot.command('listnguoinhapcode', async (ctx) => {
 // hệ thống không lưu "phả hệ" của từng đồng Coin/Đơn hàng - đây là giới hạn chung của mọi hệ thống có quỹ
 // tiền tệ dùng chung (fungible), không riêng gì bot này. Sau khi thu hồi, xoá lịch sử nhập code để user có
 // thể nhập lại từ đầu nếu admin mở lại mã, và trả lại đúng usedCount cho code.
-bot.command('thuhoi', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const code = ctx.message.text.split(' ')[1];
-    if (!code) return ctx.reply("❌ Sử dụng: /thuhoi <mã_code>");
-
-    const { data: redemptions, error: redErr } = await supabase.from('giftcode_redemptions').select('*').eq('code', code);
-    if (redErr) {
-        console.error("Lỗi lấy redemptions để thu hồi:", redErr);
-        return ctx.reply("❌ Lỗi khi lấy dữ liệu người đã nhập code.");
-    }
-    if (!redemptions || redemptions.length === 0) return ctx.reply(`📭 Chưa có ai nhập mã \`${code}\`, không có gì để thu hồi.`, { parse_mode: 'Markdown' });
-
-    ctx.reply(`⏳ Đang thu hồi mã \`${code}\` từ ${redemptions.length} người dùng, vui lòng đợi...`, { parse_mode: 'Markdown' });
-
-    let successCount = 0, failCount = 0;
-    for (const r of redemptions) {
-        const { data: u } = await supabase.from('users').select('coins, orders, spins, name').eq('id', r.userId).single();
-        if (!u) { failCount++; continue; }
-        const newCoins = Math.max(0, (u.coins || 0) - (r.rewardCoin || 0));
-        const newOrders = Math.max(0, (u.orders || 0) - (r.rewardOrders || 0));
-        const newSpins = Math.max(0, (u.spins || 0) - (r.rewardSpins || 0));
-        const ok = await touchWallet(r.userId, { coins: newCoins, orders: newOrders, spins: newSpins });
-        if (ok) {
-            successCount++;
-            if (r.rewardCoin) logTransaction(r.userId, 'coin', -(r.rewardCoin || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
-            if (r.rewardOrders) logTransaction(r.userId, 'orders', -(r.rewardOrders || 0), `Admin thu hồi code "${code}" (/thuhoi)`);
-            safeSendLocalizedMessage(r.userId,
-                `⚠️ Mã code \`${code}\` bạn đã nhập trước đây vừa bị *Admin thu hồi*.\n🪙 -${r.rewardCoin || 0} Coin | 📦 -${r.rewardOrders || 0} Đơn hàng | 🎡 -${r.rewardSpins || 0} Lượt mở rương\n(Số dư không thể âm nên nếu bạn đã tiêu hết, phần đã tiêu không thể trừ thêm).`,
-                `⚠️ The code \`${code}\` you redeemed earlier has been *revoked by Admin*.\n🪙 -${r.rewardCoin || 0} Coins | 📦 -${r.rewardOrders || 0} Orders | 🎡 -${r.rewardSpins || 0} Chest Opens\n(Balances cannot go below zero, so already-spent rewards cannot be deducted further).`,
-                { parse_mode: 'Markdown' }
-            );
-        } else {
-            failCount++;
-        }
-    }
-
-    // Xoá lịch sử nhập + trả usedCount về 0 để mã có thể được nhập lại từ đầu nếu admin muốn mở lại
-    await supabase.from('giftcode_redemptions').delete().eq('code', code);
-    await supabase.from('giftcodes').update({ usedCount: 0 }).eq('code', code);
-
-    ctx.reply(`✅ Đã thu hồi mã \`${code}\`.\n👥 Thành công: ${successCount} user\n❌ Lỗi: ${failCount} user\n📋 Đã xoá lịch sử nhập, mã có thể được nhập lại từ đầu.`, { parse_mode: 'Markdown' });
-});
+bot.command('thuhoi', async (ctx) => {if(!isAdmin(ctx))return;const code=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!code)return ctx.reply('❌ Sử dụng: /thuhoi <mã_code>');try{ctx.reply(`⏳ Đang thu hồi mã ${code}...`);const r=await adminRevokeGiftcode(code,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã thu hồi mã ${code}.\n👥 Thành công: ${r.success}\n❌ Lỗi: ${r.failed}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /saoke <userId> <coin|donhang> - Xem lịch sử biến động coin/đơn hàng của 1 user, từ những việc nào.
 // LƯU Ý: chỉ hiển thị các khoản mà SERVER biết rõ lý do (lệnh admin, nhập code, mời bạn, rút tiền, thưởng
@@ -4274,6 +4002,8 @@ bot.command('linkconfig', async (ctx) => {
         `${IP_HASH_SECRET ? '✅' : '❌'} IP HASH SECRET\n` +
         `${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE\n` +
         `🌐 WEB_APP_URL: ${webAppUrlState}\n\n` +
+        `🌐 NETWORK / PROXY\nTrust Proxy: ${TRUST_PROXY_SETTING === false ? '❌ direct/no proxy' : `✅ ${TRUST_PROXY_SETTING} hop(s)`}\n` +
+        `Request public IP: xem trực tiếp tại /admin → Vượt link (lệnh Telegram không mang IP WebView của người dùng).\n\n` +
         `🗄 DATABASE\n${tableLine}\n${columnsLine}\n${rewardRpcLine}\n${verifyRpcLine}\n${accessLine}\n\n` +
         'ℹ️ Chỉ hiển thị trạng thái cấu hình/diagnostic an toàn, không hiển thị giá trị secret.'
     );
@@ -4332,34 +4062,7 @@ bot.command('linkdb', async (ctx) => {
 });
 
 // /resetvuotlink <ID> — reset quota của CHÍNH user, giữ nguyên mọi rewarded history.
-bot.command('resetvuotlink', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');
-    if(!targetId)return ctx.reply('❌ Sử dụng: /resetvuotlink <ID>');
-    try{
-        const {data:user,error:userError}=await readUserRow(targetId);
-        if(userError||!user)return ctx.reply('❌ Không tìm thấy người dùng.');
-        const {data,error}=await linkTaskDb().rpc('link_task_reset_user',{p_user_id:targetId,p_admin_id:String(ctx.from?.id||'')});
-        if(error)throw error;
-        const result=Array.isArray(data)?data[0]:data;
-        if(!result?.ok){
-            if(result?.code==='user_not_found')return ctx.reply('❌ Không tìm thấy người dùng.');
-            return ctx.reply('❌ Không thể reset lượt vượt link lúc này.');
-        }
-        const resetAt=result.reset_at?new Date(result.reset_at):new Date();
-        return ctx.reply(
-            `♻️ RESET VƯỢT LINK\n\n`+
-            `👤 ID: ${targetId}\n`+
-            `🕐 Reset lúc: ${vietnamTimeText(resetAt)}\n`+
-            `🧹 Active attempts đã huỷ: ${Number(result.cancelled_count||0).toLocaleString('vi-VN')}\n`+
-            `📊 Reward history được giữ nguyên: ✅\n`+
-            `🔗 User có thể nhận lại nhiệm vụ theo quota mới.`
-        );
-    }catch(e){
-        console.error('/resetvuotlink:',linkTaskDbDiagnosticCode(e));
-        return ctx.reply('❌ Không thể reset vượt link. Hãy chạy migration Link Task mới trong Supabase SQL Editor rồi thử lại.');
-    }
-});
+bot.command('resetvuotlink', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /resetvuotlink <ID>');try{const r=await adminResetLinkTaskUser(id,`telegram:${ctx.from.id}`);ctx.reply(`♻️ RESET VƯỢT LINK\n\n👤 ID: ${id}\n🧹 Active attempts đã huỷ: ${Number(r.cancelled_count||0).toLocaleString('vi-VN')}\n📊 Reward history được giữ nguyên: ✅`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /lsmail - shortcut ADMIN: đọc lịch sử mail đã duyệt trực tiếp từ Supabase, không dùng RAM làm source of truth.
 bot.command('lsmail', async (ctx) => {
@@ -4603,116 +4306,13 @@ bot.command('checkID', async (ctx) => {
 });
 
 // /hoantra - Hoàn trả đơn rút tiền chưa duyệt
-bot.command('hoantra', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 2) return ctx.reply("❌ Sử dụng: /hoantra <userId> (hoàn trả tất cả đơn chưa duyệt của user)");
-    const targetId = parts[1];
-    
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
-    if (withdrawError) {
-        console.error("Lỗi lấy đơn rút để hoàn trả:", withdrawError);
-        return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
-    }
-    if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có đơn chờ duyệt của user này.");
-    
-    let totalRefundedOrdersValue = 0;
-    for (const w of withdrawals) {
-        // Tính lại số đơn hàng đã bị trừ khi user yêu cầu rút (1000 VNĐ = 10000 đơn hàng)
-        const ordersToRefund = Math.floor((w.amount || 0) / 1000) * 10000; 
-        
-        await supabase.from('withdrawals').update({ status: 'refunded', reason: 'Hoàn trả bởi admin' }).eq('id', w.id);
-        
-        const { data: userData, error: userError } = await supabase.from('users').select('orders').eq('id', targetId).single();
-        if (userError) {
-            console.error("Lỗi lấy user để hoàn trả đơn hàng:", userError);
-            continue; // Bỏ qua nếu lỗi, cố gắng xử lý các yêu cầu rút khác
-        }
-        const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await touchWallet(targetId, { orders: newOrders });
-        
-        totalRefundedOrdersValue += ordersToRefund; // Đây là giá trị đơn hàng, không phải số tiền
-        await safeSendLocalizedMessage(targetId, `🔄 Yêu cầu rút tiền của bạn đã được HOÀN TRẢ.\n📦 Số đơn hàng được hoàn: ${ordersToRefund.toLocaleString()}`, `🔄 Your withdrawal request has been REFUNDED.\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`);
-    }
-    
-    ctx.reply(`✅ Đã hoàn trả ${withdrawals.length} đơn của ${targetId}.\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
-});
+bot.command('hoantra', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /hoantra <userId>');try{const {data,error}=await adminDb().from('withdrawals').select('id').eq('userId',id).eq('status','pending');if(error)throw error;if(!data?.length)return ctx.reply('❌ Không có đơn chờ duyệt của user này.');let ok=0,total=0;for(const w of data){try{const r=await adminProcessWithdrawal(w.id,'refunded','Hoàn trả bởi admin',`telegram:${ctx.from.id}`,true);ok++;total+=Number(r.refundOrders||0);}catch(e){console.error('/hoantra item:',e.message)}}ctx.reply(`✅ Đã hoàn trả ${ok}/${data.length} đơn của ${id}.\n📦 Tổng Đơn Hàng hoàn: ${total.toLocaleString()}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /duyet + ID
-bot.command('duyet', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const targetId = ctx.message.text.split(' ')[1];
-    if (!targetId) return ctx.reply("❌ Sử dụng: /duyet <userId>");
-    
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('*').eq('userId', targetId).eq('status', 'pending');
-    if (withdrawError) {
-        console.error("Lỗi lấy đơn rút để duyệt:", withdrawError);
-        return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
-    }
-    if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt cho user này.");
-    
-    let totalApprovedAmount = 0;
-    let approvedCount = 0;
-    for (const w of withdrawals) {
-        const { data: approvedRows, error: approveError } = await supabase.from('withdrawals')
-            .update({ status: 'success', reason: 'Đã duyệt bởi admin' })
-            .eq('id', w.id).eq('status', 'pending').select('*');
-        if (approveError) {
-            console.error(`Lỗi duyệt withdrawal ${w.id}:`,approveError.message);
-            continue;
-        }
-        const approved=approvedRows?.[0];
-        if (!approved) continue; // request/admin flow khác vừa duyệt trước đó
-        approvedCount += 1;
-        totalApprovedAmount += Number(approved.amount || 0);
-        await notifyWithdrawalSuccessToGroup(approved);
-    }
-    if (approvedCount <= 0) return ctx.reply("ℹ️ Các đơn rút này đã được xử lý bởi một thao tác khác.");
-    
-    await safeSendLocalizedMessage(targetId, `✅ Yêu cầu rút tiền của bạn đã được *DUYỆT*!
-💰 Tổng số tiền: ${totalApprovedAmount.toLocaleString()} VNĐ
-Tiền sẽ sớm được chuyển vào tài khoản.`, `✅ Your withdrawal request has been *APPROVED*!
-💰 Total amount: ${totalApprovedAmount.toLocaleString()} VND
-The funds will be transferred to your account soon.`, { parse_mode: 'Markdown' });
-    ctx.reply(`✅ Đã duyệt ${approvedCount} yêu cầu rút của ${targetId}. Tổng: ${totalApprovedAmount.toLocaleString()} VNĐ`);
-});
+bot.command('duyet', async (ctx) => {if(!isAdmin(ctx))return;const id=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!id)return ctx.reply('❌ Sử dụng: /duyet <userId>');try{const {data,error}=await adminDb().from('withdrawals').select('id').eq('userId',id).eq('status','pending');if(error)throw error;if(!data?.length)return ctx.reply('❌ Không có yêu cầu rút tiền nào đang chờ duyệt.');let ok=0,total=0;for(const w of data){try{const r=await adminProcessWithdrawal(w.id,'success','Đã duyệt bởi admin',`telegram:${ctx.from.id}`,true);if(!r.idempotent){ok++;total+=Number(r.row?.amount||0)}}catch(e){console.error('/duyet item:',e.message)}}ctx.reply(`✅ Đã duyệt ${ok} đơn của ${id}. Tổng: ${total.toLocaleString()} VNĐ`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /huy + ID + lý do
-bot.command('huy', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const parts = ctx.message.text.split(' ');
-    if (parts.length < 3) return ctx.reply("❌ Sử dụng: /huy <userId> <lý do>");
-    const targetId = parts[1];
-    const reason = parts.slice(2).join(' ');
-    
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('id, amount').eq('userId', targetId).eq('status', 'pending');
-    if (withdrawError) {
-        console.error("Lỗi lấy đơn rút để hủy:", withdrawError);
-        return ctx.reply("❌ Lỗi database khi lấy đơn rút.");
-    }
-    if (!withdrawals || withdrawals.length === 0) return ctx.reply("❌ Không có yêu cầu rút tiền nào đang chờ duyệt.");
-    
-    let totalRefundedOrdersValue = 0;
-    for (const w of withdrawals) {
-        // Tính lại số đơn hàng đã bị trừ khi user yêu cầu rút (1000 VNĐ = 10000 đơn hàng)
-        const ordersToRefund = Math.floor((w.amount || 0) / 1000) * 10000; 
-
-        await supabase.from('withdrawals').update({ status: 'rejected', reason: reason }).eq('id', w.id);
-        
-        const { data: userData, error: userError } = await supabase.from('users').select('orders').eq('id', targetId).single();
-        if (userError) {
-            console.error("Lỗi lấy user để hoàn trả đơn hàng khi hủy:", userError);
-            continue;
-        }
-        const newOrders = (userData?.orders || 0) + ordersToRefund;
-        await touchWallet(targetId, { orders: newOrders });
-        
-        totalRefundedOrdersValue += ordersToRefund;
-        await safeSendLocalizedMessage(targetId, `❌ Yêu cầu rút tiền của bạn đã bị *HỦY*.\n📝 Lý do: ${reason}\n📦 Số đơn hàng đã được hoàn trả: ${ordersToRefund.toLocaleString()}`, `❌ Your withdrawal request was *REJECTED*.\n📝 Reason: ${reason}\n📦 Orders returned: ${ordersToRefund.toLocaleString()}`, { parse_mode: 'Markdown' });
-    }
-    
-    ctx.reply(`✅ Đã hủy yêu cầu rút tiền của ${targetId}.\n📝 Lý do: ${reason}\n📦 Tổng giá trị đơn hàng hoàn trả: ${totalRefundedOrdersValue.toLocaleString()}`);
-});
+bot.command('huy', async (ctx) => {if(!isAdmin(ctx))return;const p=String(ctx.message?.text||'').trim().split(/\s+/);if(p.length<3)return ctx.reply('❌ Sử dụng: /huy <userId> <lý do>');const id=p[1],reason=p.slice(2).join(' ');try{const {data,error}=await adminDb().from('withdrawals').select('id').eq('userId',id).eq('status','pending');if(error)throw error;if(!data?.length)return ctx.reply('❌ Không có yêu cầu rút tiền nào đang chờ duyệt.');let ok=0,total=0;for(const w of data){try{const r=await adminProcessWithdrawal(w.id,'rejected',reason,`telegram:${ctx.from.id}`,true);ok++;total+=Number(r.refundOrders||0)}catch(e){console.error('/huy item:',e.message)}}ctx.reply(`✅ Đã hủy ${ok}/${data.length} đơn của ${id}.\n📦 Tổng Đơn Hàng hoàn: ${total.toLocaleString()}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // /donrutall - Thống kê đơn rút chưa duyệt + check IP trùng
 bot.command('donrutall', async (ctx) => {
@@ -4797,35 +4397,7 @@ bot.command('donrutall', async (ctx) => {
 // trong suốt thời gian gửi (có thể vài phút). Cách fix: trả lời admin "Đã bắt đầu gửi" NGAY LẬP TỨC rồi để
 // vòng lặp gửi chạy NGẦM (background) không chặn middleware chain, nhờ đó bot vẫn phản hồi bình thường mọi
 // lệnh khác trong lúc broadcast đang chạy.
-bot.command('broadcast', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const msg = ctx.message.text.substring(11).trim(); // Bỏ '/broadcast '
-    if (!msg) return ctx.reply("❌ Nhập tin nhắn cần gửi!");
-
-    const adminChatId = ctx.chat.id;
-    ctx.reply("⏳ Đang gửi tin nhắn (chạy ngầm, bot vẫn dùng được bình thường trong lúc gửi)...");
-
-    (async () => {
-        try {
-            const { data: users, error } = await supabase.from('users').select('id');
-            if (error) {
-                console.error("Lỗi lấy danh sách user để broadcast:", error);
-                return safeSendMessage(adminChatId, "❌ Lỗi database khi lấy danh sách người dùng.");
-            }
-
-            let successCount = 0;
-            for (const u of users) {
-                const sent = await safeSendMessage(u.id, `📢 *THÔNG BÁO TỪ ADMIN:*\n\n${msg}`, { parse_mode: 'Markdown' });
-                if (sent) successCount++;
-                await new Promise(r => setTimeout(r, 50)); // Giới hạn tốc độ gửi
-            }
-            await safeSendMessage(adminChatId, `✅ Đã gửi thành công đến ${successCount}/${users.length} người dùng.`);
-        } catch (e) {
-            console.error("Lỗi broadcast (chạy ngầm):", e);
-            safeSendMessage(adminChatId, "❌ Có lỗi xảy ra trong lúc gửi broadcast.").catch(() => {});
-        }
-    })();
-});
+bot.command('broadcast', async (ctx) => {if(!isAdmin(ctx))return;const msg=String(ctx.message?.text||'').replace(/^\/broadcast(?:@\w+)?\s*/i,'').trim();if(!msg)return ctx.reply('❌ Nhập tin nhắn cần gửi!');try{const job=await adminStartBroadcast(msg,`telegram:${ctx.from.id}`);ctx.reply(`⏳ Broadcast đã chạy ngầm. Job: ${job.id}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 // ==================== RESET BXH TUẦN — CHỈ CÒN BXH MỜI BẠN TOP 1-10 ====================
 // Tuần bắt đầu đúng 00:00 Chủ Nhật Asia/Ho_Chi_Minh. board quảng cáo hàng tuần cũ đã bị vô hiệu hóa hoàn toàn:
@@ -5299,27 +4871,7 @@ setImmediate(startWeeklyLeaderboardScheduler);
 // (ví dụ lỗi 409 Conflict do phiên bản deploy cũ vẫn còn đang polling khi Render tạo instance mới),
 // Promise sẽ bị reject mà không ai xử lý -> Node coi là "unhandledRejection" và THOÁT TIẾN TRÌNH với mã lỗi 1
 // (đây chính là nguyên nhân phổ biến khiến deploy trên Render báo "Exited with status 1" dù code không có lỗi cú pháp).
-bot.command('ban_ip', async (ctx) => {
-    if (!isMainAdmin(ctx)) return;
-    
-    const args = ctx.message.text.split(' ');
-    const ip = args[1];
-    if (!ip) { ctx.reply('❌ Dùng: /ban_ip <IP>'); return; }
-    
-    // Ban toàn bộ user từ IP này
-    const ipColumn = (await getUserColumns()).has('ip_address') ? 'ip_address' : 'ip';
-    const { data: users, error } = await supabase
-        .from('users')
-        .select('id')
-        .eq(ipColumn, ip);
-    
-    if (users && users.length > 0) {
-        await supabase.from('users').update({ isBanned: true }).eq(ipColumn, ip);
-        ctx.reply(`✅ Đã ban ${users.length} user từ IP ${ip}`);
-    } else {
-        ctx.reply(`ℹ️ Không tìm thấy user nào từ IP ${ip}`);
-    }
-});
+bot.command('ban_ip', async (ctx) => {if(!isMainAdmin(ctx))return;const ip=String(ctx.message?.text?.trim().split(/\s+/)[1]||'');if(!ip)return ctx.reply('❌ Dùng: /ban_ip <IP>');try{const r=await adminBanIp(ip,`telegram:${ctx.from.id}`);ctx.reply(`✅ Đã ban ${r.count} user từ IP ${ip}`);}catch(e){ctx.reply(`❌ ${e.message}`);}});
 
 let httpServer = null;
 let shutdownStarted = false;
@@ -8797,6 +8349,9 @@ function linkTaskNeedsRequestIp(cfg){
 }
 function linkTaskUnavailableState(cfg,runtime={}){
     if(!cfg) return {code:'provider_unsupported',message:'Nhiệm vụ này chưa được hỗ trợ.'};
+    // Admin lock must win over secondary configuration/network errors for NEW attempts.
+    // Existing active attempts are explicitly allowed to remain visible/finish.
+    if(runtime.adminLocked && !runtime.activeAttempt) return {code:'task_admin_locked',message:'Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.'};
     if(!linkTaskProviderConfigured(cfg)) return {code:'missing_provider_token',message:'Nhiệm vụ này đang được cấu hình trên máy chủ. Vui lòng thử lại sau.'};
     if(!SUPABASE_SERVICE_ROLE_KEY) return {code:'missing_service_role',message:'Hệ thống nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
     // device_hash trong schema hiện tại cũng dùng cùng secret HMAC, vì vậy Link Task cần secret này ngay cả
@@ -9459,37 +9014,69 @@ app.get('/api/link-task/status/:id',async(req,res)=>{
         }
 
         const items=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{
-            const runtime={ipAvailable:!!ip,adminLocked:!!adminLocks?.[cfg.taskId]?.locked};
+            const runtime={ipAvailable:!!ip,adminLocked:!!adminLocks?.[cfg.taskId]?.locked,activeAttempt:false};
+            let latest=null;
+            let active=false;
+
+            // A locked task must show ADMIN LOCK instead of an unrelated IP/config error. To preserve an
+            // attempt that was created before the lock, read only that task's latest attempt first.
+            if(runtime.adminLocked && SUPABASE_SERVICE_ROLE_KEY && (!dbReadiness || dbReadiness.ready)){
+                try{
+                    const db=linkTaskDb();
+                    const latestResult=await db.from('link_task_attempts')
+                        .select('id,user_id,task_id,status,created_at,expires_at,rewarded_at,short_url,metadata')
+                        .eq('user_id',userId).eq('task_id',cfg.taskId)
+                        .order('created_at',{ascending:false}).limit(1).maybeSingle();
+                    if(latestResult.error)throw latestResult.error;
+                    latest=await normalizeLinkTaskAttemptExpiry(latestResult.data||null,db);
+                    active=linkTaskAttemptIsActive(latest);
+                    runtime.activeAttempt=active;
+                }catch(e){
+                    console.error(`Link task lock-priority status ${cfg.key}:`,linkTaskDbDiagnosticCode(e));
+                }
+                if(!active){
+                    return linkTaskPublicConfig(cfg,null,latest,{...runtime,forcedState:{code:'task_admin_locked',message:'Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.'}});
+                }
+            }else if(runtime.adminLocked){
+                // Fail closed: if the lock is known but DB cannot prove an active attempt, do not let a
+                // secondary missing-IP error hide the administrative state.
+                return linkTaskPublicConfig(cfg,null,null,{...runtime,forcedState:{code:'task_admin_locked',message:'Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.'}});
+            }
+
             const unavailable=linkTaskUnavailableState(cfg,runtime);
-            if(unavailable.message)return linkTaskPublicConfig(cfg,null,null,{...runtime,forcedState:unavailable});
+            if(unavailable.message && !active)return linkTaskPublicConfig(cfg,null,latest,{...runtime,forcedState:unavailable});
             if(dbReadiness&&!dbReadiness.ready){
-                return linkTaskPublicConfig(cfg,null,null,{...runtime,forcedState:{code:dbReadiness.code||'link_task_db_not_ready',message:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'}});
+                return linkTaskPublicConfig(cfg,null,latest,{...runtime,forcedState:{code:dbReadiness.code||'link_task_db_not_ready',message:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'}});
             }
             try{
                 const db=linkTaskDb();
                 const quotaReset=await quotaResetPromise;
-                const [quota,latestResult]=await Promise.all([
-                    linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''}),
-                    db.from('link_task_attempts')
+                const quotaPromise=linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''});
+                if(!latest){
+                    const latestResult=await db.from('link_task_attempts')
                         .select('id,user_id,task_id,status,created_at,expires_at,rewarded_at,short_url,metadata')
                         .eq('user_id',userId).eq('task_id',cfg.taskId)
-                        .order('created_at',{ascending:false}).limit(1).maybeSingle()
-                ]);
-                if(latestResult.error)throw latestResult.error;
-                const latest=await normalizeLinkTaskAttemptExpiry(latestResult.data||null,db);
-                const active=linkTaskAttemptIsActive(latest);
+                        .order('created_at',{ascending:false}).limit(1).maybeSingle();
+                    if(latestResult.error)throw latestResult.error;
+                    latest=await normalizeLinkTaskAttemptExpiry(latestResult.data||null,db);
+                    active=linkTaskAttemptIsActive(latest);
+                    runtime.activeAttempt=active;
+                }
+                const quota=await quotaPromise;
                 if(adminLockError&&!active){
                     return linkTaskPublicConfig(cfg,quota.remaining,latest,{...runtime,forcedState:{code:'task_lock_state_unavailable',message:'Tạm thời chưa xác minh được trạng thái khóa nhiệm vụ. Vui lòng thử lại sau.'}});
                 }
                 if(runtime.adminLocked&&!active){
-                    return linkTaskPublicConfig(cfg,quota.remaining,latest,{...runtime,forcedState:{code:'task_admin_locked',message:'Nhiệm vụ này đang tạm khóa. Vui lòng thử lại sau.'}});
+                    return linkTaskPublicConfig(cfg,quota.remaining,latest,{...runtime,forcedState:{code:'task_admin_locked',message:'Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.'}});
                 }
+                // Existing attempts remain visible even when a new-attempt prerequisite is temporarily
+                // unavailable. The active URL/code controls do not depend on task.available in the client.
                 return linkTaskPublicConfig(cfg,quota.remaining,latest,runtime);
             }catch(e){
                 console.error(`Link task status ${cfg.key}:`,linkTaskDbDiagnosticCode(e));
                 const dbState=linkTaskDbErrorState(e);
                 if(dbState)linkTaskDbReadinessCache=null;
-                return linkTaskPublicConfig(cfg,null,null,{...runtime,forcedState:dbState||{code:'database_error',message:'Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.'}});
+                return linkTaskPublicConfig(cfg,null,latest,{...runtime,forcedState:dbState||{code:'database_error',message:'Tạm thời chưa tải được trạng thái của nhiệm vụ này. Vui lòng thử lại sau.'}});
             }
         }));
 
@@ -9508,9 +9095,23 @@ app.post('/api/link-task/start',async(req,res)=>{
     const cfg=LINK_TASK_CONFIG[taskId];
     if(!cfg)return res.status(400).json({success:false,code:'provider_unsupported',error:'Nhiệm vụ vượt link không hợp lệ.'});
 
-    const ip=requestIp(req),deviceId=requestDeviceId(req);
+    // Priority: an already-created attempt is reusable; otherwise an Admin lock must be reported before
+    // missing-IP/provider diagnostics so the UI reflects the real administrative state.
+    if(SUPABASE_SERVICE_ROLE_KEY){
+        try{
+            const existing=await getActiveLinkTaskAttempt(userId,cfg.taskId);
+            if(existing){const payload=linkTaskAttemptClientPayload(cfg,existing,{reused:true});return res.status(payload.creating?202:200).json(payload);}
+            if((await readLinkTaskAdminLock(taskId)).locked)return linkTaskAdminLockedResponse(res);
+        }catch(e){
+            const dbState=linkTaskDbErrorState(e);if(dbState)linkTaskDbReadinessCache=null;
+            if(dbState)return res.status(503).json({success:false,providerUnavailable:true,code:dbState.code,error:dbState.message});
+        }
+    }
+
+    const deviceId=requestDeviceId(req);
     if(!deviceId)return res.status(400).json({success:false,code:'device_unavailable',error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
-    const runtime={ipAvailable:!!ip};
+    const ip=requestIp(req);
+    const runtime={ipAvailable:!!ip,adminLocked:false,activeAttempt:false};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
     const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
@@ -9522,12 +9123,6 @@ app.post('/api/link-task/start',async(req,res)=>{
     if(!dbReadiness.ready)return res.status(503).json({success:false,providerUnavailable:true,code:dbReadiness.code||'link_task_db_not_ready',error:dbReadiness.safeReason||'Hệ thống nhiệm vụ đang được hoàn tất cấu hình dữ liệu. Vui lòng thử lại sau.'});
 
     try{
-        // Attempt đã tồn tại trước khi admin khóa vẫn được trả lại để user hoàn thành, không xóa history/attempt.
-        const beforeLock=await getActiveLinkTaskAttempt(userId,cfg.taskId);
-        if(beforeLock){const payload=linkTaskAttemptClientPayload(cfg,beforeLock,{reused:true});return res.status(payload.creating?202:200).json(payload);}
-        const adminState=await readLinkTaskAdminLock(taskId);
-        if(adminState.locked)return linkTaskAdminLockedResponse(res);
-
         const release=await acquirePersistentLeaseLock(persistentEventKey('link-task-start-lock',`${userId}:${taskId}`),LINK_TASK_CREATION_LOCK_MS);
         if(!release){
             const raced=await getActiveLinkTaskAttempt(userId,cfg.taskId);
@@ -9537,7 +9132,6 @@ app.post('/api/link-task/start',async(req,res)=>{
         try{
             const active=await getActiveLinkTaskAttempt(userId,cfg.taskId);
             if(active){const payload=linkTaskAttemptClientPayload(cfg,active,{reused:true});return res.status(payload.creating?202:200).json(payload);}
-            // Re-check sau khi có lease: khóa admin bật trong lúc chờ lease không được tạo attempt mới.
             if((await readLinkTaskAdminLock(taskId)).locked)return linkTaskAdminLockedResponse(res);
             const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk:strictNetwork.risk});
             if(!created.ok)return res.status(created.httpStatus||503).json({success:false,providerUnavailable:!!created.providerUnavailable,limitReached:!!created.limitReached,code:created.code||'link_task_error',error:created.error||'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
@@ -9551,16 +9145,22 @@ app.post('/api/link-task/start',async(req,res)=>{
         return res.status(503).json({success:false,code:'database_error',error:'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
     }
 });
-
 app.post('/api/link-task/change',async(req,res)=>{
     const userId=String(req.body?.userId||''),taskId=String(req.body?.taskId||'');
     if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
     if(!requireTelegramMobile(req,res))return;
     const cfg=LINK_TASK_CONFIG[taskId];
     if(!cfg)return res.status(400).json({success:false,code:'provider_unsupported',error:'Nhiệm vụ vượt link không hợp lệ.'});
-    const ip=requestIp(req),deviceId=requestDeviceId(req);
+
+    // Changing creates a new provider URL, so an Admin lock always wins before network diagnostics.
+    if(SUPABASE_SERVICE_ROLE_KEY){
+        try{if((await readLinkTaskAdminLock(taskId)).locked)return linkTaskAdminLockedResponse(res);}
+        catch(e){const dbState=linkTaskDbErrorState(e);if(dbState)return res.status(503).json({success:false,code:dbState.code,error:dbState.message});}
+    }
+    const deviceId=requestDeviceId(req);
     if(!deviceId)return res.status(400).json({success:false,code:'device_unavailable',error:'Không xác định được thiết bị. Vui lòng mở lại Mini App trong Telegram.'});
-    const runtime={ipAvailable:!!ip};
+    const ip=requestIp(req);
+    const runtime={ipAvailable:!!ip,adminLocked:false,activeAttempt:false};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
     const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
@@ -11707,151 +11307,462 @@ app.get('/api/redeem-history/:userId', async (req, res) => {
 });
 
 
-// Admin: cập nhật trạng thái rút tiền (miniapp sẽ tự đồng bộ trạng thái mới qua polling /api/withdrawals/:userId)
-app.post('/api/admin/update-withdrawal', async (req, res) => {
-    if (req.query.pass !== ADMIN_PASS) return res.status(403).json({ error: "Access Denied" });
-    const { id, status, reason } = req.body;
+// ==================== ADMIN WEB PANEL — SESSION AUTH + CSRF + SUPABASE SOURCE OF TRUTH ====================
+const ADMIN_WEB_SESSION_COOKIE = 'logistics_admin_session';
+const ADMIN_WEB_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const ADMIN_LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const ADMIN_LOGIN_MAX_FAILURES = 5;
+const ADMIN_MUTATION_WINDOW_MS = 60 * 1000;
+const ADMIN_MUTATION_MAX = 120;
+const adminWebSessions = new Map();
+const adminLoginRate = new Map();
+const adminBroadcastJobs = new Map();
+let adminDashboardCache = null;
 
-    const { data: current, error: fetchErr } = await supabase.from('withdrawals').select('*').eq('id', id).single();
-    if (fetchErr || !current) return res.status(404).json({ success: false, error: "Không tìm thấy đơn rút." });
-
-    if (!['pending','success','rejected','refunded'].includes(status)) return res.status(400).json({success:false,error:'Trạng thái withdrawal không hợp lệ.'});
-    if (current.status === status) {
-        if (status === 'success') await notifyWithdrawalSuccessToGroup(current);
-        return res.json({success:true,idempotent:true});
-    }
-    const { data: updatedRows, error } = await supabase.from('withdrawals')
-        .update({ status, reason }).eq('id', id).eq('status', current.status).select('*');
-    if (error) {
-        console.error("Lỗi cập nhật trạng thái rút tiền:", error);
-        return res.status(500).json({ success: false, error: error.message });
-    }
-    if (!updatedRows || updatedRows.length === 0) {
-        return res.status(409).json({success:false,retry:true,error:'Đơn rút vừa được xử lý bởi thao tác khác.'});
-    }
-    const updatedWithdrawal=updatedRows[0];
-
-    // Hoàn trả đơn hàng nếu đơn đang Chờ duyệt bị chuyển sang Từ chối/Hoàn trả
-    if (current.status === 'pending' && (status === 'rejected' || status === 'refunded')) {
-        const refundOrders = current.ordersAmount || (Math.floor((current.amount || 0) / 1000) * 10000);
-        const { data: u } = await supabase.from('users').select('orders').eq('id', current.userId).single();
-        if (u) await touchWallet(current.userId, { orders: (u.orders || 0) + refundOrders });
-        await safeSendLocalizedMessage(current.userId,
-            `❌ Yêu cầu rút tiền #${current.txCode || current.id} đã bị *HỦY*.\n📝 Lý do: ${reason || 'Không có'}\n📦 Đã hoàn trả: ${refundOrders.toLocaleString()} Đơn Hàng`,
-            `❌ Withdrawal #${current.txCode || current.id} was *REJECTED*.\n📝 Reason: ${reason || 'Not provided'}\n📦 Refunded: ${refundOrders.toLocaleString()} Orders`,
-            { parse_mode: 'Markdown' }
-        );
-    } else if (status === 'success') {
-        await safeSendLocalizedMessage(current.userId,
-            `✅ Yêu cầu rút tiền #${current.txCode || current.id} đã được *DUYỆT*!
-💰 Số tiền: ${(current.amount || 0).toLocaleString()} VNĐ`,
-            `✅ Withdrawal #${current.txCode || current.id} has been *APPROVED*!
-💰 Amount: ${(current.amount || 0).toLocaleString()} VND`,
-            { parse_mode: 'Markdown' }
-        );
-        await notifyWithdrawalSuccessToGroup(updatedWithdrawal);
-    }
-
-    res.json({ success: true });
-});
-
-// Admin Web Panel
-app.get('/admin', async (req, res) => {
-    if (req.query.pass !== ADMIN_PASS) return res.status(403).send('<h1>Access Denied</h1>');
-    
-    const { data: users, error: usersError } = await supabase.from('users').select('*');
-    const { data: withdrawals, error: withdrawError } = await supabase.from('withdrawals').select('*').order('createdAt', { ascending: false });
-
-    if (usersError) console.error("Lỗi lấy users cho admin panel:", usersError);
-    if (withdrawError) console.error("Lỗi lấy withdrawals cho admin panel:", withdrawError);
-    
-    const ipCounts = {};
-    if (users) {
-        users.forEach(u => { if (u.ip) ipCounts[u.ip] = (ipCounts[u.ip] || 0) + 1; });
-    }
-    
-    let usersHtml = users ? users.map(u => {
-        const isDup = u.ip && ipCounts[u.ip] > 1;
-        return `<tr class="${isDup ? 'red-flag' : ''}">
-            <td>${u.id}</td><td>${u.name}</td><td>${u.ip || 'N/A'} ${isDup ? '(TRÙNG IP!)' : ''}</td>
-            <td>${u.coins}</td><td>${u.orders}</td><td>${u.truckLevel}</td><td>${u.validInvites}</td>
-            <td>${u.isBanned ? 'Có' : 'Không'}</td>
-        </tr>`;
-    }).join('') : '<tr><td colspan="8">Không có dữ liệu user.</td></tr>';
-    
-    let withdrawsHtml = withdrawals ? withdrawals.map(w => {
-        let statusClass = w.status === 'success' ? 'status-success' : (w.status === 'pending' ? 'status-pending' : (w.status === 'rejected' ? 'status-rejected' : 'status-refunded'));
-        return `<tr>
-            <td>#${w.txCode || w.id}</td><td>${w.userId}</td><td>${w.amount}</td><td>${w.method}</td>
-            <td>${w.accountInfo || 'N/A'}</td>
-            <td class="${statusClass}">${w.status}</td><td>${w.reason || '-'}</td>
-            <td>
-                <form onsubmit="updateWithdraw(event, '${w.id}')">
-                    <select name="status" style="padding:2px;">
-                        <option value="pending" ${w.status==='pending'?'selected':''}>Chờ duyệt</option>
-                        <option value="success" ${w.status==='success'?'selected':''}>Đã duyệt</option>
-                        <option value="rejected" ${w.status==='rejected'?'selected':''}>Từ chối</option>
-                        <option value="refunded" ${w.status==='refunded'?'selected':''}>Hoàn trả</option>
-                    </select>
-                    <input type="text" name="reason" placeholder="Lý do..." value="${w.reason || ''}" style="width:80px; padding:2px;">
-                    <button type="submit" style="padding:2px 5px; cursor:pointer;">Lưu</button>
-                </form>
-            </td>
-        </tr>`;
-    }).join('') : '<tr><td colspan="8">Không có dữ liệu rút tiền.</td></tr>';
-    
-    res.send(`<!DOCTYPE html><html><head><title>Admin Panel</title><style>
-        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; color: #333; }
-        h1, h2 { color: #222; }
-        table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
-        th, td { border: 1px solid #eee; padding: 10px 12px; text-align: left; font-size: 13px; }
-        th { background: #e9e9e9; font-weight: bold; text-transform: uppercase; }
-        tr:nth-child(even) { background: #f8f8f8; }
-        tr:hover { background: #f0f0f0; }
-        .red-flag { background: #ffebeb !important; color: #cc0000; font-weight: bold; }
-        .status-pending { color: #ff9800; font-weight: bold; }
-        .status-success { color: #4caf50; font-weight: bold; }
-        .status-rejected { color: #f44336; font-weight: bold; }
-        .status-refunded { color: #9e9e9e; font-weight: bold; }
-        form { display: flex; gap: 5px; align-items: center; }
-        select, input[type="text"], button[type="submit"] { border: 1px solid #ccc; border-radius: 4px; padding: 5px 8px; font-size: 12px; }
-        button[type="submit"] { background: #007bff; color: white; cursor: pointer; transition: background 0.2s; }
-        button[type="submit"]:hover { background: #0056b3; }
-    </style></head><body>
-    <h1>🛠️ Admin Panel - Logistics App</h1>
-    <h2>📥 Quản lý yêu cầu rút tiền</h2>
-    <table>
-        <thead>
-            <tr><th>ID</th><th>User ID</th><th>Số tiền</th><th>Phương thức</th><th>Thông tin KH</th><th>Trạng thái</th><th>Lý do</th><th>Hành động</th></tr>
-        </thead>
-        <tbody>${withdrawsHtml}</tbody>
-    </table>
-    <h2>👥 Danh sách User (Nền đỏ = Trùng IP)</h2>
-    <table>
-        <thead>
-            <tr><th>ID</th><th>Tên</th><th>IP</th><th>Coin</th><th>Đơn hàng</th><th>Level</th><th>Mời hợp lệ</th><th>Banned</th></tr>
-        </thead>
-        <tbody>${usersHtml}</tbody>
-    </table>
-    <script>
-        async function updateWithdraw(e, id) {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            const res = await fetch('/api/admin/update-withdrawal?pass=${req.query.pass}', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id, status: formData.get('status'), reason: formData.get('reason') })
-            });
-            if(res.ok) {
-                alert('Cập nhật thành công!');
-                location.reload();
-            } else {
-                alert('Cập nhật thất bại: ' + (await res.json()).error);
-            }
+function adminDb(){ return jobMailSupabase || supabase; }
+function adminWebConfigured(){ return !!(ADMIN_WEB_USERNAME && ADMIN_WEB_PASSWORD && ADMIN_SESSION_SECRET && ADMIN_SESSION_SECRET.length >= 24); }
+function parseCookieHeader(req){
+    const out={};
+    String(req.get('cookie')||'').split(';').forEach(part=>{
+        const i=part.indexOf('='); if(i<=0)return;
+        const key=part.slice(0,i).trim(); const value=part.slice(i+1).trim();
+        try{out[key]=decodeURIComponent(value);}catch(_){out[key]=value;}
+    });
+    return out;
+}
+function timingSafeTextEqual(a,b){
+    const left=Buffer.from(String(a??''),'utf8'),right=Buffer.from(String(b??''),'utf8');
+    if(left.length!==right.length)return false;
+    return left.length>0 && crypto.timingSafeEqual(left,right);
+}
+function adminSessionSignature(sid){ return crypto.createHmac('sha256',ADMIN_SESSION_SECRET).update(`admin-session-v1|${sid}`).digest('base64url'); }
+function adminCookieValue(sid){ return `${sid}.${adminSessionSignature(sid)}`; }
+function adminCookieSecure(req){
+    if(req.secure)return true;
+    try{return new URL(String(WEB_APP_URL||'')).protocol==='https:';}catch(_){return true;}
+}
+function setAdminSessionCookie(req,res,sid){
+    const secure=adminCookieSecure(req)?'; Secure':'';
+    res.setHeader('Set-Cookie',`${ADMIN_WEB_SESSION_COOKIE}=${encodeURIComponent(adminCookieValue(sid))}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ADMIN_WEB_SESSION_TTL_MS/1000)}${secure}`);
+}
+function clearAdminSessionCookie(req,res){
+    const secure=adminCookieSecure(req)?'; Secure':'';
+    res.setHeader('Set-Cookie',`${ADMIN_WEB_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
+}
+function getAdminWebSession(req){
+    if(!adminWebConfigured())return null;
+    const raw=String(parseCookieHeader(req)[ADMIN_WEB_SESSION_COOKIE]||'');
+    const dot=raw.lastIndexOf('.'); if(dot<=0)return null;
+    const sid=raw.slice(0,dot),sig=raw.slice(dot+1);
+    if(!/^[A-Za-z0-9_-]{20,100}$/.test(sid) || !timingSafeTextEqual(sig,adminSessionSignature(sid)))return null;
+    const session=adminWebSessions.get(sid);
+    if(!session)return null;
+    if(Number(session.expiresAt||0)<=Date.now()){adminWebSessions.delete(sid);return null;}
+    session.lastSeenAt=Date.now();
+    return session;
+}
+function adminSecurityIp(req){
+    return requestIp(req) || normalizeRequestIp(req.ip) || normalizeRequestIp(req.socket?.remoteAddress) || 'unknown';
+}
+function adminLoginRateState(req){
+    const key=crypto.createHash('sha256').update(adminSecurityIp(req)).digest('hex').slice(0,24);
+    const now=Date.now(); let state=adminLoginRate.get(key);
+    if(!state || now-state.startedAt>ADMIN_LOGIN_WINDOW_MS)state={startedAt:now,failures:0,blockedUntil:0};
+    adminLoginRate.set(key,state); return {key,state};
+}
+function adminLoginAllowed(req){ const {state}=adminLoginRateState(req); return Number(state.blockedUntil||0)<=Date.now(); }
+function recordAdminLoginFailure(req){
+    const {key,state}=adminLoginRateState(req); state.failures+=1;
+    if(state.failures>=ADMIN_LOGIN_MAX_FAILURES)state.blockedUntil=Date.now()+ADMIN_LOGIN_WINDOW_MS;
+    adminLoginRate.set(key,state);
+}
+function clearAdminLoginFailures(req){ const {key}=adminLoginRateState(req); adminLoginRate.delete(key); }
+function consumeAdminMutationQuota(session){
+    const now=Date.now();
+    if(!session.mutationWindowAt || now-session.mutationWindowAt>ADMIN_MUTATION_WINDOW_MS){session.mutationWindowAt=now;session.mutationCount=0;}
+    session.mutationCount=Number(session.mutationCount||0)+1;
+    return session.mutationCount<=ADMIN_MUTATION_MAX;
+}
+function requireAdminWebSession(req,res,next){
+    res.setHeader('Cache-Control','no-store');
+    const session=getAdminWebSession(req);
+    if(!session)return res.status(401).json({success:false,error:'Phiên Admin không hợp lệ hoặc đã hết hạn.'});
+    req.adminWebSession=session; next();
+}
+function requireAdminWebMutation(req,res,next){
+    const session=getAdminWebSession(req);
+    if(!session)return res.status(401).json({success:false,error:'Phiên Admin không hợp lệ hoặc đã hết hạn.'});
+    if(!consumeAdminMutationQuota(session))return res.status(429).json({success:false,error:'Bạn thao tác quá nhanh. Vui lòng thử lại sau.'});
+    const csrf=String(req.get('x-csrf-token')||'');
+    if(!csrf || !timingSafeTextEqual(csrf,session.csrfToken))return res.status(403).json({success:false,error:'CSRF token không hợp lệ.'});
+    req.adminWebSession=session; next();
+}
+function adminActor(req){ return `web:${String(req.adminWebSession?.username||ADMIN_WEB_USERNAME||'admin').slice(0,80)}`; }
+function adminValidUserId(value){ const s=String(value||'').trim(); return /^\d{3,20}$/.test(s)?s:''; }
+function adminPositiveInt(value,max=1_000_000_000){ const n=Number(value); return Number.isSafeInteger(n)&&n>0&&n<=max?n:null; }
+function adminSafeText(value,max=300){ return String(value??'').normalize('NFKC').trim().slice(0,max); }
+function adminPage(value){ const n=Number(value); return Number.isInteger(n)&&n>0?Math.min(n,100000):1; }
+function adminLimit(value,def=25,max=100){ const n=Number(value); return Number.isInteger(n)&&n>0?Math.min(n,max):def; }
+function vietnamDayBoundsIso(date=new Date()){
+    const key=vietnamDayKey(date);
+    const [y,m,d]=key.split('-').map(Number);
+    const start=new Date(Date.UTC(y,m-1,d,-7,0,0,0));
+    return {start:start.toISOString(),end:new Date(start.getTime()+24*60*60*1000).toISOString(),key};
+}
+async function writeAdminAudit(actor,action,target='',detail={}){
+    try{
+        const key=`admin_audit:${String(Date.now()).padStart(13,'0')}:${crypto.randomBytes(6).toString('hex')}`;
+        await writePersistentEvent(key,{actor:String(actor||''),action:String(action||'').slice(0,120),target:String(target||'').slice(0,160),detail,at:new Date().toISOString()},1);
+    }catch(e){console.error('Admin audit:',e?.message||e);}
+}
+async function adminAdjustWallet(userId,{coins=0,orders=0,spins=0}={},actor='admin',floorAtZero=false){
+    const id=adminValidUserId(userId); if(!id)throw new Error('USER_ID_INVALID');
+    for(const value of [coins,orders,spins])if(!Number.isSafeInteger(Number(value))||Math.abs(Number(value))>1_000_000_000)throw new Error('AMOUNT_INVALID');
+    const mutation=await atomicWalletMutation(id,{deltaCoins:Number(coins),deltaOrders:Number(orders),deltaSpins:Number(spins),floorAtZero, ...(floorAtZero?{}:{minCoins:coins<0?0:null,minOrders:orders<0?0:null,minSpins:spins<0?0:null})});
+    if(mutation.error)throw mutation.error;
+    if(coins)void logTransaction(id,'coin',Number(coins),`${actor} điều chỉnh Coin`);
+    if(orders)void logTransaction(id,'orders',Number(orders),`${actor} điều chỉnh Đơn Hàng`);
+    await writeAdminAudit(actor,'wallet_adjust',id,{coins:Number(coins),orders:Number(orders),spins:Number(spins)});
+    return mutation.data;
+}
+async function adminSetBan(userId,banned,actor='admin'){
+    const id=adminValidUserId(userId); if(!id)throw new Error('USER_ID_INVALID');
+    const mutation=await atomicWalletMutation(id,{setFields:{isBanned:!!banned}}); if(mutation.error)throw mutation.error;
+    await writeAdminAudit(actor,banned?'ban_user':'unban_user',id,{}); return mutation.data;
+}
+async function adminSetTruckLevel(userId,level,actor='admin'){
+    const id=adminValidUserId(userId),lv=Number(level); if(!id||!Number.isInteger(lv)||lv<1||lv>MAX_TRUCK_LEVEL)throw new Error('LEVEL_INVALID');
+    const mutation=await atomicWalletMutation(id,{setFields:{truckLevel:lv}});if(mutation.error)throw mutation.error;
+    await writeAdminAudit(actor,'set_level',id,{level:lv});return mutation.data;
+}
+async function adminResetDailyUser(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
+    const fields={adsToday:0,smartlinksToday:0,bonusAdsToday:0,deliveryCount:0,smartlinkCount:0,spinAdCount:0,spinFree:1,chestOpensToday:0,lastResetDate:addVietnamDays(vietnamDayKey(),-1)};
+    const mutation=await atomicWalletMutation(id,{setFields:fields});if(mutation.error)throw mutation.error;
+    await writeAdminAudit(actor,'reset_daily',id,{});return mutation.data;
+}
+async function adminResetUser(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
+    const current=await readUserRow(id);if(current.error||!current.data)throw new Error('USER_NOT_FOUND');
+    const mutation=await atomicWalletMutation(id,{setFields:fullResetFields()});if(mutation.error)throw mutation.error;
+    await resetGiftcodeRedemptions(id); await flushUserExtra();
+    await writeAdminAudit(actor,'reset_user',id,{});return mutation.data;
+}
+async function adminRenameUser(userId,name,actor='admin'){
+    const id=adminValidUserId(userId),safe=adminSafeText(name,80);if(!id||!safe)throw new Error('NAME_INVALID');
+    const mutation=await atomicWalletMutation(id,{setFields:{name:safe}});if(mutation.error)throw mutation.error;
+    await writeAdminAudit(actor,'rename_user',id,{name:safe});return mutation.data;
+}
+async function adminDeleteUser(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
+    await clearUserExtra(id).catch(()=>{});
+    const {data,error}=await adminDb().from('users').delete().eq('id',id).select('id');if(error)throw error;
+    if(!data?.length)throw new Error('USER_NOT_FOUND');
+    await writeAdminAudit(actor,'delete_user',id,{});return true;
+}
+async function adminAddValidInvites(userId,amount,actor='admin',notify=true){
+    const id=adminValidUserId(userId),n=adminPositiveInt(amount,100000);if(!id||!n)throw new Error('AMOUNT_INVALID');
+    const lockKey=persistentEventKey('admin-addref-lock',id);const release=await acquirePersistentLeaseLock(lockKey,30*1000);if(!release)throw new Error('USER_BUSY');
+    try{
+        const {data:before,error}=await readUserRow(id);if(error||!before)throw new Error('USER_NOT_FOUND');
+        const newValid=await atomicIncrement(id,'validInvites',n);if(newValid===null)throw new Error('REF_UPDATE_FAILED');
+        if(Number(before.invitedCount||0)<newValid){const saved=await saveUserFields(id,{invitedCount:newValid});if(saved.error){await atomicIncrement(id,'validInvites',-n).catch(()=>{});throw saved.error;}}
+        const bonusCoins=INSTANT_REF_COINS*n,bonusOrders=INSTANT_REF_ORDERS*n;
+        const mutation=await atomicWalletMutation(id,{deltaCoins:bonusCoins,deltaOrders:bonusOrders});if(mutation.error){await atomicIncrement(id,'validInvites',-n).catch(()=>{});throw mutation.error;}
+        await flushUserExtra();void logTransaction(id,'coin',bonusCoins,`${actor} cộng ${n} lượt mời hợp lệ`);void logTransaction(id,'orders',bonusOrders,`${actor} cộng ${n} lượt mời hợp lệ`);
+        if(notify)void safeSendLocalizedMessage(id,`🎉 Admin vừa cộng thêm *${n}* lượt mời bạn hợp lệ cho bạn!\n🎁 +${bonusCoins.toLocaleString()} Coin + ${bonusOrders.toLocaleString()} Đơn Hàng`,`🎉 Admin added *${n}* valid invite(s)!\n🎁 +${bonusCoins.toLocaleString('en-US')} Coins + ${bonusOrders.toLocaleString('en-US')} Orders`,{parse_mode:'Markdown'});
+        await writeAdminAudit(actor,'add_referral',id,{amount:n,bonusCoins,bonusOrders});return {newValid,bonusCoins,bonusOrders,wallet:mutation.data};
+    }finally{try{await release();}catch(_){}}
+}
+async function adminResetLinkTaskUser(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
+    const {data:user,error:userError}=await readUserRow(id);if(userError||!user)throw new Error('USER_NOT_FOUND');
+    const {data,error}=await linkTaskDb().rpc('link_task_reset_user',{p_user_id:id,p_admin_id:String(actor)});if(error)throw error;
+    const result=Array.isArray(data)?data[0]:data;if(!result?.ok)throw new Error(String(result?.code||'RESET_LINK_FAILED'));
+    await writeAdminAudit(actor,'reset_link_task',id,{cancelledCount:Number(result.cancelled_count||0),resetAt:result.reset_at||null});return result;
+}
+async function adminBanIp(ip,actor='admin'){
+    const canonical=normalizePublicRequestIp(ip);if(!canonical)throw new Error('IP_INVALID');
+    const cols=await getUserColumns();const ipColumn=cols.has('ip_address')?'ip_address':'ip';
+    const {data,error}=await adminDb().from('users').update({isBanned:true,walletUpdatedAt:new Date().toISOString()}).eq(ipColumn,canonical).select('id');if(error)throw error;
+    await writeAdminAudit(actor,'ban_ip',canonical,{users:Number(data?.length||0)});return {count:Number(data?.length||0)};
+}
+async function adminCreateGiftcode(payload,actor='admin'){
+    const code=adminSafeText(payload?.code,60).replace(/\s+/g,'');if(!/^[A-Za-z0-9_-]{2,60}$/.test(code))throw new Error('CODE_INVALID');
+    const coin=Math.max(0,Number(payload?.coin||0)),orders=Math.max(0,Number(payload?.orders||0)),spins=Math.max(0,Number(payload?.spins||0)),limit=Math.max(1,Number(payload?.limit||0));
+    if(![coin,orders,spins,limit].every(Number.isSafeInteger)||coin>1e9||orders>1e9||spins>1e6||limit>1e7)throw new Error('REWARD_INVALID');
+    const scope=String(payload?.scope||'').toLowerCase()==='admin'?'admin':'nguoidung';
+    const baseRow={code,rewardType:'multi',rewardAmount:coin,orders,spins,limitUses:limit,usedCount:0};
+    let {error}=await adminDb().from('giftcodes').insert({...baseRow,scope,createdBy:String(actor)});let scopeSaved=true;
+    if(error&&(error.code==='42703'||error.code==='PGRST204'||/column|scope|createdBy/i.test(error.message||''))){scopeSaved=false;error=(await adminDb().from('giftcodes').insert(baseRow)).error;}
+    if(error)throw error;await writeAdminAudit(actor,'create_giftcode',code,{coin,orders,spins,limit,scope});return {code,scopeSaved};
+}
+async function adminDeleteGiftcode(code,actor='admin'){
+    const safe=adminSafeText(code,60);const {data,error}=await adminDb().from('giftcodes').delete().eq('code',safe).select('code');if(error)throw error;
+    await writeAdminAudit(actor,'delete_giftcode',safe,{});return {deleted:Number(data?.length||0)};
+}
+async function adminRevokeGiftcode(code,actor='admin'){
+    const safe=adminSafeText(code,60);if(!safe)throw new Error('CODE_INVALID');
+    const release=await acquirePersistentLeaseLock(persistentEventKey('admin-revoke-giftcode',safe),5*60*1000);if(!release)throw new Error('CODE_BUSY');
+    try{
+        const {data:redemptions,error}=await adminDb().from('giftcode_redemptions').select('*').eq('code',safe);if(error)throw error;
+        let success=0,failed=0;
+        for(const r of redemptions||[]){
+            const id=adminValidUserId(r.userId);if(!id){failed++;continue;}
+            const mutation=await atomicWalletMutation(id,{deltaCoins:-Math.max(0,Number(r.rewardCoin||0)),deltaOrders:-Math.max(0,Number(r.rewardOrders||0)),deltaSpins:-Math.max(0,Number(r.rewardSpins||0)),floorAtZero:true});
+            if(mutation.error){failed++;continue;}success++;
+            if(r.rewardCoin)void logTransaction(id,'coin',-Number(r.rewardCoin||0),`${actor} thu hồi code "${safe}"`);
+            if(r.rewardOrders)void logTransaction(id,'orders',-Number(r.rewardOrders||0),`${actor} thu hồi code "${safe}"`);
+            void safeSendLocalizedMessage(id,`⚠️ Mã code \`${safe}\` vừa bị *Admin thu hồi*.`,`⚠️ Code \`${safe}\` has been *revoked by Admin*.`,{parse_mode:'Markdown'});
         }
-    </script>
-    </body></html>`);
+        const del=await adminDb().from('giftcode_redemptions').delete().eq('code',safe);if(del.error)throw del.error;
+        const upd=await adminDb().from('giftcodes').update({usedCount:0}).eq('code',safe);if(upd.error)throw upd.error;
+        await writeAdminAudit(actor,'revoke_giftcode',safe,{success,failed,total:Number(redemptions?.length||0)});return {success,failed,total:Number(redemptions?.length||0)};
+    }finally{try{await release();}catch(_){}}
+}
+async function adminProcessWithdrawal(withdrawalId,targetStatus,reason,actor='admin',notify=true){
+    const id=adminSafeText(withdrawalId,120);if(!id)throw new Error('WITHDRAWAL_ID_INVALID');
+    const status=String(targetStatus||'');if(!['success','rejected','refunded'].includes(status))throw new Error('STATUS_INVALID');
+    const safeReason=adminSafeText(reason||({success:'Đã duyệt bởi admin',rejected:'Từ chối bởi admin',refunded:'Hoàn trả bởi admin'}[status]),300);
+    const release=await acquirePersistentLeaseLock(persistentEventKey('admin-withdrawal-lock',id),45*1000);if(!release)throw new Error('WITHDRAWAL_BUSY');
+    try{
+        const {data:current,error:fetchError}=await adminDb().from('withdrawals').select('*').eq('id',id).maybeSingle();if(fetchError)throw fetchError;if(!current)throw new Error('WITHDRAWAL_NOT_FOUND');
+        if(current.status===status)return {idempotent:true,row:current,refundOrders:0};
+        if(current.status!=='pending')throw new Error(`WITHDRAWAL_ALREADY_${String(current.status||'processed').toUpperCase()}`);
+        const {data:rows,error}=await adminDb().from('withdrawals').update({status,reason:safeReason}).eq('id',id).eq('status','pending').select('*');if(error)throw error;
+        const row=rows?.[0];if(!row)throw new Error('WITHDRAWAL_RACE');
+        let refundOrders=0;
+        if(status==='rejected'||status==='refunded'){
+            refundOrders=Number(row.ordersAmount||0) || Math.floor(Number(row.amount||0)/1000)*10000;
+            if(refundOrders>0){
+                const mutation=await atomicWalletMutation(String(row.userId),{deltaOrders:refundOrders});
+                if(mutation.error){
+                    try{await adminDb().from('withdrawals').update({status:'pending',reason:'AUTO_ROLLBACK: refund wallet failed'}).eq('id',id).eq('status',status);}catch(_){}
+                    throw mutation.error;
+                }
+                void logTransaction(String(row.userId),'orders',refundOrders,`${actor} hoàn đơn rút #${row.txCode||row.id}`);
+            }
+            if(notify)void safeSendLocalizedMessage(row.userId,status==='rejected'?`❌ Yêu cầu rút tiền #${row.txCode||row.id} đã bị *HỦY*.\n📝 Lý do: ${safeReason}\n📦 Hoàn: ${refundOrders.toLocaleString()} Đơn Hàng`:`🔄 Yêu cầu rút tiền #${row.txCode||row.id} đã được HOÀN TRẢ.\n📦 Hoàn: ${refundOrders.toLocaleString()} Đơn Hàng`,status==='rejected'?`❌ Withdrawal #${row.txCode||row.id} was *REJECTED*.\n📝 Reason: ${safeReason}\n📦 Refunded: ${refundOrders.toLocaleString()} Orders`:`🔄 Withdrawal #${row.txCode||row.id} was REFUNDED.\n📦 Refunded: ${refundOrders.toLocaleString()} Orders`,{parse_mode:'Markdown'});
+        }else{
+            if(notify)void safeSendLocalizedMessage(row.userId,`✅ Yêu cầu rút tiền #${row.txCode||row.id} đã được *DUYỆT*!\n💰 Số tiền: ${Number(row.amount||0).toLocaleString()} VNĐ`,`✅ Withdrawal #${row.txCode||row.id} has been *APPROVED*!\n💰 Amount: ${Number(row.amount||0).toLocaleString()} VND`,{parse_mode:'Markdown'});
+            await notifyWithdrawalSuccessToGroup(row);
+        }
+        await writeAdminAudit(actor,`withdrawal_${status}`,String(row.id),{userId:String(row.userId),amount:Number(row.amount||0),refundOrders,reason:safeReason});
+        return {idempotent:false,row,refundOrders};
+    }finally{try{await release();}catch(_){}}
+}
+async function adminJobMailAction(mailId,action,reason,actor='admin'){
+    const id=Number(mailId);if(!Number.isSafeInteger(id)||id<=0)throw new Error('MAIL_ID_INVALID');
+    if(action==='approve'){
+        const result=await approveJobMailAtomic(id,actor);if(!result?.ok)throw new Error(String(result?.code||'MAIL_APPROVE_FAILED'));
+        if(!result.idempotent)void safeSendMessage(result.user_id,`✅ MAIL ĐÃ ĐƯỢC DUYỆT\n\n📧 ${result.email}\n📦 +${Number(result.reward_orders||JOB_MAIL_REWARD_ORDERS).toLocaleString('vi-VN')} Đơn Hàng\n🕐 ${vietnamTimeText()}\n\nCảm ơn bạn đã hoàn thành JOB MAIL.`);
+        await writeAdminAudit(actor,'job_mail_approve',String(id),{userId:String(result.user_id||''),idempotent:!!result.idempotent});return result;
+    }
+    if(action==='reject'){
+        const safeReason=adminSafeText(reason||'Không đạt yêu cầu',300);const result=await rejectJobMailAtomic(id,actor,safeReason);if(!result.row)throw new Error('MAIL_NOT_FOUND');
+        if(result.changed)void safeSendMessage(result.row.user_id,`❌ ĐÃ TỪ CHỐI\n\n📧 ${result.row.email_original}\n👤 ${result.row.user_id}\n📝 Lý do: ${safeReason}\n🕐 ${vietnamTimeText(new Date(result.row.reviewed_at||Date.now()))}`);
+        await writeAdminAudit(actor,'job_mail_reject',String(id),{userId:String(result.row.user_id||''),changed:!!result.changed,reason:safeReason});return result;
+    }
+    throw new Error('ACTION_INVALID');
+}
+async function adminSetJobMailBan(userId,banned,actor='admin'){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');const existing=await readUserRow(id);if(existing.error||!existing.data)throw new Error('USER_NOT_FOUND');
+    const mutation=await atomicWalletMutation(id,{setFields:{job_mail_banned:!!banned}});if(mutation.error)throw mutation.error;
+    await writeAdminAudit(actor,banned?'job_mail_ban':'job_mail_unban',id,{});return mutation.data;
+}
+async function adminAddSubAdmin(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id||id===String(ADMIN_ID))throw new Error('ADMIN_ID_INVALID');
+    const {error}=await adminDb().from('admins').upsert({id,addedBy:String(actor)});if(error)throw error;await loadAdmins();await writeAdminAudit(actor,'add_subadmin',id,{});return true;
+}
+async function adminRemoveSubAdmin(userId,actor='admin'){
+    const id=adminValidUserId(userId);if(!id||id===String(ADMIN_ID))throw new Error('ADMIN_ID_INVALID');
+    const {error}=await adminDb().from('admins').delete().eq('id',id);if(error)throw error;await loadAdmins();await writeAdminAudit(actor,'remove_subadmin',id,{});return true;
+}
+async function adminGetUserDetail(userId){
+    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
+    const {data:user,error}=await readUserRow(id);if(error||!user)throw new Error('USER_NOT_FOUND');
+    const [antiFraud,withdrawalsResult,mailStats,lastMailIp,linkStats,transactionsResult]=await Promise.all([
+        getAntiFraudState(id).catch(()=>({state:{},stats:{score:0,level:'LOW'}})),
+        adminDb().from('withdrawals').select('id,txCode,amount,status,createdAt,method,accountInfo,bankName,accountName,accountNumber').eq('userId',id).order('createdAt',{ascending:false}).limit(100),
+        getJobMailUserStats(id).catch(()=>({total:0,pending:0,approved:0,rejected:0,rewardOrders:0})),
+        getLatestJobMailSourceIp(id).catch(()=>''),getLinkTaskUserStats(id).catch(()=>null),
+        adminDb().from('transactions').select('*').eq('userId',id).limit(30)
+    ]);
+    const withdrawals=withdrawalsResult.data||[];const latestWithdrawal=withdrawals[0]||null;
+    const activeIp=normalizeIpForDuplicateCheck(user.ip)||normalizeIpForDuplicateCheck(antiFraud.state?.ip)||'';
+    const withdrawalIp=latestWithdrawal?await getStoredWithdrawalSourceIp(latestWithdrawal).catch(()=>''):'';
+    const duplicates=activeIp?await duplicateAccountsByReliableIp(id,activeIp):[];
+    const risk=calculateFraudRisk(antiFraud.state||{},duplicates.length,Number(antiFraud.state?.duplicateDeviceAccounts||0));
+    const successStatuses=new Set(['success','approved','completed']),cancelledStatuses=new Set(['cancelled','rejected','refunded']);
+    const totalWithdrawn=withdrawals.filter(w=>successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
+    const totalCancelled=withdrawals.filter(w=>cancelledStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
+    return {user:{...user,id},risk:{score:Math.max(0,Math.min(100,Number(risk.score||0))),level:risk.level||'LOW',reasons:risk.reasons||[]},duplicates,withdrawal:{totalWithdrawn,totalCancelled,latest:latestWithdrawal,latestIp:withdrawalIp},jobMail:{...mailStats,lastIp:lastMailIp||''},linkTask:linkStats,transactions:transactionsResult.data||[]};
+}
+async function adminDashboardStats(force=false){
+    if(!force&&adminDashboardCache&&Date.now()-adminDashboardCache.cachedAt<20000)return adminDashboardCache.value;
+    const db=adminDb();const bounds=vietnamDayBoundsIso();const cols=await getUserColumns();
+    const wanted=['id','coins','orders','adsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'];
+    const selectCols=wanted.filter(c=>cols.has(c));
+    const totals={totalUsers:0,totalCoins:0,totalOrders:0,totalAds:0,totalSmartlinks:0,totalChests:0,totalReferrals:0,adsToday:0,smartlinksToday:0,newUsersToday:0};
+    const countResult=await db.from('users').select('id',{count:'exact',head:true});totals.totalUsers=Number(countResult.count||0);
+    let offset=0;const pageSize=1000;
+    while(selectCols.length&&offset<200000){const {data,error}=await db.from('users').select(selectCols.join(',')).range(offset,offset+pageSize-1);if(error)break;if(!data?.length)break;for(const u of data){totals.totalCoins+=Number(u.coins||0);totals.totalOrders+=Number(u.orders||0);totals.totalAds+=Number(u.lifetimeAdsWatched||0);totals.totalSmartlinks+=Number(u.lifetimeSmartlinks||0);totals.totalChests+=Number(u.chestOpensTotal||0);totals.totalReferrals+=Number(u.validInvites||0);totals.adsToday+=Number(u.adsToday||0);totals.smartlinksToday+=Number(u.smartlinksToday||0);if(u.accountCreatedAt&&u.accountCreatedAt>=bounds.start&&u.accountCreatedAt<bounds.end)totals.newUsersToday++;}if(data.length<pageSize)break;offset+=pageSize;}
+    const [linkStats,jobStats,pendingWd,todayWd,todayLink]=await Promise.all([
+        getLinkTaskGlobalStats().catch(()=>({completed:0,rewardOrders:0})),getJobMailGlobalStats().catch(()=>({total:0,pending:0,approved:0,rejected:0,todaySubmitted:0,todayApproved:0,todayRejected:0,rewardOrders:0})),
+        db.from('withdrawals').select('id',{count:'exact',head:true}).eq('status','pending'),
+        db.from('withdrawals').select('id',{count:'exact',head:true}).gte('createdAt',bounds.start).lt('createdAt',bounds.end),
+        SUPABASE_SERVICE_ROLE_KEY?linkTaskDb().from('link_task_attempts').select('id',{count:'exact',head:true}).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end):Promise.resolve({count:0})
+    ]);
+    let totalWithdrawn=0,wdOffset=0;while(wdOffset<200000){const {data,error}=await db.from('withdrawals').select('amount').eq('status','success').range(wdOffset,wdOffset+999);if(error||!data?.length)break;totalWithdrawn+=data.reduce((s,w)=>s+Number(w.amount||0),0);if(data.length<1000)break;wdOffset+=1000;}
+    const value={...totals,totalLinkTasks:Number(linkStats.completed||0),linkRewardOrders:Number(linkStats.rewardOrders||0),totalWithdrawn,pendingWithdrawals:Number(pendingWd.count||0),withdrawalsToday:Number(todayWd.count||0),linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!BOT_LOCKED,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString()};
+    adminDashboardCache={cachedAt:Date.now(),value};return value;
+}
+async function adminStartBroadcast(message,actor='admin'){
+    const text=adminSafeText(message,3500);if(!text)throw new Error('MESSAGE_EMPTY');
+    const jobId=crypto.randomBytes(10).toString('hex');const state={id:jobId,status:'running',total:0,success:0,failed:0,startedAt:new Date().toISOString(),finishedAt:null};adminBroadcastJobs.set(jobId,state);
+    await writeAdminAudit(actor,'broadcast_start',jobId,{length:text.length});
+    setImmediate(async()=>{try{const {data:users,error}=await adminDb().from('users').select('id');if(error)throw error;state.total=users?.length||0;for(const u of users||[]){const sent=await safeSendMessage(u.id,`📢 *THÔNG BÁO TỪ ADMIN:*\n\n${text}`,{parse_mode:'Markdown'});if(sent)state.success++;else state.failed++;await new Promise(r=>setTimeout(r,50));}state.status='done';state.finishedAt=new Date().toISOString();await writeAdminAudit(actor,'broadcast_done',jobId,{total:state.total,success:state.success,failed:state.failed});}catch(e){state.status='failed';state.error='Broadcast failed';state.finishedAt=new Date().toISOString();console.error('Admin broadcast:',e?.message||e);}});
+    return state;
+}
+
+
+async function adminResetAllData(actor='admin'){
+    const release=await acquirePersistentLeaseLock(persistentEventKey('admin-reset-all-lock','global'),5*60*1000);if(!release)throw new Error('RESET_ALL_BUSY');
+    try{
+        const {known:resetRow}=await splitUserFields({...fullResetFields(),isBanned:false,walletUpdatedAt:new Date().toISOString()});
+        const {error}=await adminDb().from('users').update(resetRow).not('id','is',null);if(error)throw error;
+        await clearUserExtra(null);
+        await resetGiftcodeRedemptions(null);
+        const gc=await adminDb().from('giftcodes').delete().not('code','is',null);if(gc.error)throw gc.error;
+        const wd=await adminDb().from('withdrawals').delete().not('id','is',null);if(wd.error)throw wd.error;
+        const af=await adminDb().from('app_settings').delete().eq('key',antiFraudDeviceIndexKey);if(af.error)console.error('Reset all anti-fraud index:',af.error.message);
+        antiFraudDeviceIndexCache={};adminDashboardCache=null;
+        await writeAdminAudit(actor,'reset_all','global',{});return true;
+    }finally{try{await release();}catch(_){}}
+}
+
+app.post('/api/admin/login',async(req,res)=>{
+    res.setHeader('Cache-Control','no-store');
+    if(!adminWebConfigured())return res.status(503).json({success:false,error:'Admin Web chưa được cấu hình đầy đủ trên máy chủ.'});
+    if(!adminLoginAllowed(req))return res.status(429).json({success:false,error:'Đăng nhập thất bại quá nhiều lần. Vui lòng thử lại sau.'});
+    const username=adminSafeText(req.body?.username,120),password=String(req.body?.password??'');
+    const ok=timingSafeTextEqual(username,ADMIN_WEB_USERNAME)&&timingSafeTextEqual(password,ADMIN_WEB_PASSWORD);
+    if(!ok){recordAdminLoginFailure(req);await new Promise(r=>setTimeout(r,220+Math.floor(Math.random()*180)));return res.status(401).json({success:false,error:'Sai tài khoản hoặc mật khẩu.'});}
+    clearAdminLoginFailures(req);const sid=crypto.randomBytes(32).toString('base64url');const session={sid,username:ADMIN_WEB_USERNAME,csrfToken:crypto.randomBytes(24).toString('base64url'),createdAt:Date.now(),lastSeenAt:Date.now(),expiresAt:Date.now()+ADMIN_WEB_SESSION_TTL_MS,mutationWindowAt:Date.now(),mutationCount:0};adminWebSessions.set(sid,session);setAdminSessionCookie(req,res,sid);await writeAdminAudit(`web:${ADMIN_WEB_USERNAME}`,'login','admin_web',{ipHash:crypto.createHash('sha256').update(adminSecurityIp(req)).digest('hex').slice(0,16)});return res.json({success:true});
 });
+app.get('/api/admin/session',requireAdminWebSession,(req,res)=>res.json({success:true,username:req.adminWebSession.username,csrfToken:req.adminWebSession.csrfToken,expiresAt:new Date(req.adminWebSession.expiresAt).toISOString()}));
+app.post('/api/admin/logout',requireAdminWebMutation,async(req,res)=>{const sid=req.adminWebSession.sid;adminWebSessions.delete(sid);clearAdminSessionCookie(req,res);await writeAdminAudit(adminActor(req),'logout','admin_web',{});res.json({success:true});});
+app.get('/api/admin/dashboard',requireAdminWebSession,async(req,res)=>{try{return res.json({success:true,stats:await adminDashboardStats(req.query.force==='1')});}catch(e){console.error('Admin dashboard:',e);return res.status(500).json({success:false,error:'Không tải được thống kê.'});}});
+app.get('/api/admin/users',requireAdminWebSession,async(req,res)=>{
+    try{
+        const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,query=adminSafeText(req.query.q,100),banned=String(req.query.banned||'all');const cols=await getUserColumns();
+        const selected=['id','name','coins','orders','spins','truckLevel','validInvites','isBanned','ip','walletUpdatedAt','adsToday','smartlinksToday'].filter(c=>cols.has(c));
+        let q=adminDb().from('users').select(selected.join(','),{count:'exact'}).order('id',{ascending:false}).range(offset,offset+limit-1);
+        if(query){if(/^\d+$/.test(query))q=q.eq('id',query);else if(cols.has('name'))q=q.ilike('name',`%${query.replace(/[%_]/g,'\\$&')}%`);}
+        if(cols.has('isBanned')&&banned!=='all')q=q.eq('isBanned',banned==='true');
+        const {data,error,count}=await q;if(error)throw error;const rows=data||[];
+        const ips=[...new Set(rows.map(r=>normalizeIpForDuplicateCheck(r.ip)).filter(Boolean))];const duplicateCounts={};
+        await Promise.all(ips.slice(0,50).map(async ip=>{const c=await adminDb().from('users').select('id',{count:'exact',head:true}).eq('ip',ip);duplicateCounts[ip]=Number(c.count||0);}));
+        const enriched=await Promise.all(rows.map(async r=>{let riskScore=0,riskLevel='LOW';try{const af=await getAntiFraudState(String(r.id));riskScore=Number(af.stats?.score||0);riskLevel=String(af.stats?.level||'LOW');}catch(_){}const ip=normalizeIpForDuplicateCheck(r.ip);return {...r,riskScore,riskLevel,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};}));
+        return res.json({success:true,page,limit,total:Number(count||0),users:enriched});
+    }catch(e){console.error('Admin users:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được danh sách người dùng.'});}
+});
+app.get('/api/admin/users/:id',requireAdminWebSession,async(req,res)=>{try{return res.json({success:true,detail:await adminGetUserDetail(req.params.id)});}catch(e){return res.status(e.message==='USER_NOT_FOUND'?404:400).json({success:false,error:e.message==='USER_NOT_FOUND'?'Không tìm thấy người dùng.':'Không đọc được thông tin người dùng.'});}});
+app.post('/api/admin/users/:id/action',requireAdminWebMutation,async(req,res)=>{
+    const actor=adminActor(req),id=adminValidUserId(req.params.id),action=String(req.body?.action||'');if(!id)return res.status(400).json({success:false,error:'User ID không hợp lệ.'});
+    try{let result=null;const amount=adminPositiveInt(req.body?.amount,1_000_000_000);
+        if(action==='ban')result=await adminSetBan(id,true,actor);else if(action==='unban')result=await adminSetBan(id,false,actor);
+        else if(action==='addCoin'&&amount)result=await adminAdjustWallet(id,{coins:amount},actor);else if(action==='subCoin'&&amount)result=await adminAdjustWallet(id,{coins:-amount},actor,true);
+        else if(action==='addOrders'&&amount)result=await adminAdjustWallet(id,{orders:amount},actor);else if(action==='subOrders'&&amount)result=await adminAdjustWallet(id,{orders:-amount},actor,true);
+        else if(action==='addSpins'&&amount)result=await adminAdjustWallet(id,{spins:amount},actor);else if(action==='subSpins'&&amount)result=await adminAdjustWallet(id,{spins:-amount},actor,true);
+        else if(action==='addRef'&&amount)result=await adminAddValidInvites(id,amount,actor,true);else if(action==='setLevel')result=await adminSetTruckLevel(id,Number(req.body?.level),actor);
+        else if(action==='resetDaily')result=await adminResetDailyUser(id,actor);else if(action==='resetLinkTask')result=await adminResetLinkTaskUser(id,actor);else if(action==='rename')result=await adminRenameUser(id,req.body?.name,actor);
+        else if(action==='resetUser'){if(String(req.body?.confirmText||'')!==`RESET ${id}`)return res.status(400).json({success:false,error:`Nhập chính xác RESET ${id} để xác nhận.`});result=await adminResetUser(id,actor);}
+        else if(action==='deleteUser'){if(String(req.body?.confirmText||'')!==`DELETE ${id}`)return res.status(400).json({success:false,error:`Nhập chính xác DELETE ${id} để xác nhận.`});result=await adminDeleteUser(id,actor);}
+        else if(action==='banIp'){result=await adminBanIp(req.body?.ip,actor);}else return res.status(400).json({success:false,error:'Thao tác không hợp lệ hoặc thiếu dữ liệu.'});
+        adminDashboardCache=null;return res.json({success:true,result});
+    }catch(e){console.error('Admin user action:',action,e?.message||e);return res.status(409).json({success:false,error:String(e?.message||'Không thể thực hiện thao tác.').slice(0,240)});}
+});
+app.get('/api/admin/transactions/:id',requireAdminWebSession,async(req,res)=>{try{const id=adminValidUserId(req.params.id);if(!id)return res.status(400).json({success:false,error:'ID không hợp lệ.'});let q=adminDb().from('transactions').select('*').eq('userId',id).limit(100);const type=String(req.query.type||'');if(type==='coin')q=q.eq('type','coin');if(type==='orders')q=q.eq('type','orders');const {data,error}=await q;if(error)throw error;return res.json({success:true,transactions:data||[]});}catch(e){return res.status(500).json({success:false,error:'Không tải được sao kê.'});}});
+app.get('/api/admin/withdrawals',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,100);let q=adminDb().from('withdrawals').select('*',{count:'exact'}).order('createdAt',{ascending:false}).range(offset,offset+limit-1);if(['pending','success','rejected','refunded'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('userId',qtext);else q=q.eq('txCode',qtext);}const {data,error,count}=await q;if(error)throw error;const rows=await Promise.all((data||[]).map(async w=>{const ip=await getStoredWithdrawalSourceIp(w).catch(()=>'');const duplicates=ip?await duplicateAccountsByReliableIp(String(w.userId),ip).catch(()=>[]):[];return {...w,sourceIp:ip||'',duplicateAccounts:duplicates};}));return res.json({success:true,page,limit,total:Number(count||0),withdrawals:rows});}catch(e){console.error('Admin withdrawals:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được đơn rút.'});}});
+app.post('/api/admin/withdrawals/:id/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),map={approve:'success',reject:'rejected',refund:'refunded'},status=map[action];if(!status)return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});const result=await adminProcessWithdrawal(req.params.id,status,req.body?.reason,adminActor(req),true);adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được đơn rút.').slice(0,220)});}});
+app.get('/api/admin/link-tasks',requireAdminWebSession,async(req,res)=>{try{const [locks,dbReady]=await Promise.all([readLinkTaskAdminLockMap(),checkLinkTaskDatabaseReadiness({force:req.query.force==='1'})]);const bounds=vietnamDayBoundsIso();const tasks=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{let rewardedToday=0,activeAttempts=0,lastProviderError='';try{const db=linkTaskDb();const [r,a,last]=await Promise.all([db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end),db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).in('status',LINK_TASK_ACTIVE_STATUSES),db.from('link_task_attempts').select('metadata,created_at').eq('task_id',cfg.taskId).eq('status','cancelled').order('created_at',{ascending:false}).limit(1).maybeSingle()]);rewardedToday=Number(r.count||0);activeAttempts=Number(a.count||0);lastProviderError=adminSafeText(last.data?.metadata?.providerError||'',180);}catch(_){}return {id:cfg.taskId,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,requiresStrictNetwork:!!cfg.requiresStrictNetwork,rule:linkTaskRuleText(cfg),envConfigured:linkTaskProviderConfigured(cfg),adminLocked:!!locks[cfg.taskId]?.locked,rewardedToday,activeAttempts,lastProviderError};}));return res.json({success:true,tasks,diagnostic:{serviceRole:!!SUPABASE_SERVICE_ROLE_KEY,ipHashSecret:!!IP_HASH_SECRET,ipIntelligence:!!IP_INTELLIGENCE_API_KEY,database:dbReady,network:requestNetworkDiagnostic(req),webAppUrl:String(WEB_APP_URL||'')}});}catch(e){console.error('Admin link tasks:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được Link Task diagnostic.'});}});
+app.post('/api/admin/link-tasks/:id/lock',requireAdminWebMutation,async(req,res)=>{try{const id=String(req.params.id||''),locked=req.body?.locked===true;if(!LINK_TASK_CONFIG[id])return res.status(400).json({success:false,error:'Nhiệm vụ không hợp lệ.'});const state=await setLinkTaskAdminLock(id,locked,adminActor(req));await writeAdminAudit(adminActor(req),locked?'lock_link_task':'unlock_link_task',id,{});return res.json({success:true,state});}catch(e){return res.status(500).json({success:false,error:'Không cập nhật được trạng thái nhiệm vụ.'});}});
+app.get('/api/admin/job-mails',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,160);let q=jobMailDb().from('job_mails').select('*',{count:'exact'}).order('submitted_at',{ascending:false}).range(offset,offset+limit-1);if(['pending','approved','rejected'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('user_id',qtext);else q=q.ilike('email_original',`%${qtext.replace(/[%_]/g,'\\$&')}%`);}const [{data,error,count},stats,availability]=await Promise.all([q,getJobMailGlobalStats(),getJobMailAvailability()]);if(error)throw error;return res.json({success:true,page,limit,total:Number(count||0),mails:data||[],stats,availability});}catch(e){console.error('Admin job mail:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được JOB MAIL.'});}});
+app.post('/api/admin/job-mails/:id/action',requireAdminWebMutation,async(req,res)=>{try{const result=await adminJobMailAction(req.params.id,String(req.body?.action||''),req.body?.reason,adminActor(req));adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được JOB MAIL.').slice(0,220)});}});
+app.post('/api/admin/job-mail/user/:id',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),banned=action==='ban';if(!['ban','unban'].includes(action))return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});const result=await adminSetJobMailBan(req.params.id,banned,adminActor(req));return res.json({success:true,result});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không cập nhật được user.').slice(0,220)});}});
+app.post('/api/admin/job-mail/lock',requireAdminWebMutation,async(req,res)=>{try{const locked=req.body?.locked===true;await setJobMailManualLocked(locked);await writeAdminAudit(adminActor(req),locked?'lock_job_mail':'unlock_job_mail','job_mail',{});return res.json({success:true,availability:await getJobMailAvailability()});}catch(e){return res.status(500).json({success:false,error:'Không cập nhật được JOB MAIL.'});}});
+app.get('/api/admin/giftcodes',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,100),offset=(page-1)*limit,qtext=adminSafeText(req.query.q,80);let q=adminDb().from('giftcodes').select('*',{count:'exact'}).range(offset,offset+limit-1);if(qtext)q=q.ilike('code',`%${qtext.replace(/[%_]/g,'\\$&')}%`);const {data,error,count}=await q;if(error)throw error;return res.json({success:true,page,limit,total:Number(count||0),codes:data||[]});}catch(e){return res.status(500).json({success:false,error:'Không tải được Giftcode.'});}});
+app.post('/api/admin/giftcodes',requireAdminWebMutation,async(req,res)=>{try{const result=await adminCreateGiftcode(req.body,adminActor(req));return res.json({success:true,result});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không tạo được code.').slice(0,220)});}});
+app.post('/api/admin/giftcodes/:code/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||'');let result;if(action==='delete')result=await adminDeleteGiftcode(req.params.code,adminActor(req));else if(action==='revoke')result=await adminRevokeGiftcode(req.params.code,adminActor(req));else return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được code.').slice(0,220)});}});
+app.get('/api/admin/giftcodes/:code/redemptions',requireAdminWebSession,async(req,res)=>{try{let q=adminDb().from('giftcode_redemptions').select('*').eq('code',adminSafeText(req.params.code,60)).limit(200);const {data,error}=await q;if(error)throw error;return res.json({success:true,redemptions:data||[]});}catch(e){return res.status(500).json({success:false,error:'Không tải được lịch sử nhập code.'});}});
+app.get('/api/admin/admins',requireAdminWebSession,async(req,res)=>{try{const {data,error}=await adminDb().from('admins').select('*').order('createdAt',{ascending:false});if(error)throw error;return res.json({success:true,mainAdmin:String(ADMIN_ID),subAdmins:data||[]});}catch(e){return res.status(500).json({success:false,error:'Không tải được danh sách Admin.'});}});
+app.post('/api/admin/admins/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),id=req.body?.userId;if(action==='add')await adminAddSubAdmin(id,adminActor(req));else if(action==='remove')await adminRemoveSubAdmin(id,adminActor(req));else return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});return res.json({success:true});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không cập nhật được Admin.').slice(0,220)});}});
+app.post('/api/admin/broadcast',requireAdminWebMutation,async(req,res)=>{try{return res.json({success:true,job:await adminStartBroadcast(req.body?.message,adminActor(req))});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không bắt đầu được broadcast.').slice(0,220)});}});
+app.get('/api/admin/broadcast/:id',requireAdminWebSession,(req,res)=>{const job=adminBroadcastJobs.get(String(req.params.id||''));if(!job)return res.status(404).json({success:false,error:'Không tìm thấy broadcast job.'});return res.json({success:true,job});});
+app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{const db=await checkLinkTaskDatabaseReadiness({force:req.query.force==='1'}).catch(()=>({ready:false}));let supabaseOk=false;try{const x=await adminDb().from('users').select('id',{count:'exact',head:true});supabaseOk=!x.error;}catch(_){}let audit=[];try{const {data}=await adminDb().from('app_settings').select('key,value').like('key','admin_audit:%').order('key',{ascending:false}).limit(30);audit=(data||[]).map(r=>r.value);}catch(_){}return res.json({success:true,system:{botLocked:!!BOT_LOCKED,maintenanceMessage:MAINTENANCE_MESSAGE,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),supabaseOk,linkTaskDb:db,network:requestNetworkDiagnostic(req),adminWebConfigured:adminWebConfigured(),webAppUrl:String(WEB_APP_URL||''),audit}});}catch(e){return res.status(500).json({success:false,error:'Không tải được trạng thái hệ thống.'});}});
+app.post('/api/admin/system/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||'');if(action==='lockBot')await setBotLocked(true);else if(action==='unlockBot')await setBotLocked(false);else if(action==='banIp')return res.json({success:true,result:await adminBanIp(req.body?.ip,adminActor(req))});else if(action==='resetAll'){if(String(req.body?.confirmText||'')!=='RESET ALL DATA')return res.status(400).json({success:false,error:'Nhập chính xác RESET ALL DATA để xác nhận.'});await adminResetAllData(adminActor(req));return res.json({success:true,resetAll:true});}else return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});await writeAdminAudit(adminActor(req),action,'system',{});adminDashboardCache=null;return res.json({success:true,botLocked:!!BOT_LOCKED});}catch(e){return res.status(500).json({success:false,error:String(e?.message||'Không cập nhật được hệ thống.').slice(0,220)});}});
+
+function renderAdminWebHtml(nonce){
+return String.raw`<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Kho Hàng Admin</title>
+<style nonce="${nonce}">
+:root{color-scheme:dark;--bg:#07111f;--card:#101d31;--card2:#13243d;--line:#24405f;--text:#eef6ff;--muted:#8ca5c1;--cyan:#3ee7ff;--blue:#4c7dff;--gold:#ffc94a;--green:#47e6a1;--red:#ff6b7a;--radius:20px}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:radial-gradient(circle at 10% 0,#163458 0,transparent 28%),radial-gradient(circle at 90% 10%,#271a55 0,transparent 26%),var(--bg);color:var(--text);min-height:100vh}.hidden{display:none!important}button,input,select,textarea{font:inherit}.login{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(430px,100%);padding:30px;border:1px solid #2d4c70;border-radius:28px;background:linear-gradient(145deg,rgba(19,36,61,.96),rgba(8,19,34,.94));box-shadow:0 30px 90px #0008}.brand{font-size:25px;font-weight:900;letter-spacing:-.03em}.muted{color:var(--muted)}.field{width:100%;border:1px solid #2b496b;background:#091626;color:#fff;border-radius:14px;padding:12px 14px;outline:none}.field:focus{border-color:var(--cyan);box-shadow:0 0 0 3px #3ee7ff18}.btn{border:0;border-radius:13px;padding:10px 14px;background:#1d3553;color:#fff;font-weight:800;cursor:pointer}.btn:hover{filter:brightness(1.12)}.btn.primary{background:linear-gradient(135deg,#2475ff,#1ecde8)}.btn.good{background:#16734f}.btn.warn{background:#815c0c}.btn.danger{background:#842b3d}.btn.ghost{background:#14243a;border:1px solid #294966}.btn:disabled{opacity:.45;cursor:not-allowed}.layout{display:grid;grid-template-columns:240px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;padding:18px 14px;border-right:1px solid #203b58;background:#081525e8;backdrop-filter:blur(16px);overflow:auto}.side-brand{padding:10px 10px 18px;font-weight:900;font-size:18px}.nav-btn{display:flex;width:100%;gap:10px;align-items:center;text-align:left;border:0;color:#b8cce2;background:transparent;border-radius:13px;padding:10px 12px;margin:3px 0;font-weight:800;cursor:pointer}.nav-btn.active,.nav-btn:hover{background:#17304c;color:#fff}.main{min-width:0;padding:20px 24px 60px}.topbar{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:18px}.top-title{font-size:22px;font-weight:900}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #294b6c;background:#10233a;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:800}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid #203e5d;background:linear-gradient(145deg,#10213aee,#0c192bed);border-radius:var(--radius);padding:16px;box-shadow:0 14px 40px #0003}.stat .k{font-size:12px;color:var(--muted);font-weight:700}.stat .v{font-size:23px;font-weight:950;margin-top:5px}.section{display:none}.section.active{display:block}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.toolbar .field{width:auto;min-width:170px}.table-wrap{overflow:auto;border:1px solid #213f5d;border-radius:18px;background:#0c1a2c}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:11px 12px;border-bottom:1px solid #1e3852;text-align:left;font-size:12px;vertical-align:top}th{position:sticky;top:0;background:#10243d;color:#9db7d2;z-index:1}tr:hover td{background:#10223a}.tag{display:inline-block;border-radius:999px;padding:4px 8px;font-size:10px;font-weight:900;background:#18304c}.tag.good{color:#70f6bb;background:#153d34}.tag.bad{color:#ff9aa5;background:#472330}.tag.warn{color:#ffd96e;background:#473915}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions .btn{padding:6px 9px;font-size:11px}.modal{position:fixed;inset:0;z-index:30;background:#020814d9;display:grid;place-items:center;padding:18px}.modal-card{width:min(950px,100%);max-height:90vh;overflow:auto;border:1px solid #31567b;border-radius:24px;background:#0c1b2e;padding:20px;box-shadow:0 30px 100px #000b}.modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.mini{padding:11px;border:1px solid #23415d;border-radius:14px;background:#0c1a2a}.mini b{display:block;margin-top:4px}.toast{position:fixed;right:18px;top:18px;z-index:99;max-width:360px;padding:12px 14px;border-radius:14px;background:#15354c;border:1px solid #2f668b;box-shadow:0 16px 45px #0008;font-weight:800}.toast.err{background:#4b1d29;border-color:#8f384d}.link-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.link-card{border:1px solid #284b6b;border-radius:18px;background:#0d1e33;padding:14px}.link-card h3{margin:0 0 8px}.diag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap}.chart{width:100%;height:230px}.progress{height:9px;background:#11263f;border-radius:999px;overflow:hidden}.progress>span{display:block;height:100%;background:linear-gradient(90deg,#277cff,#3ee7ff);width:0}.empty{padding:30px;text-align:center;color:var(--muted)}
+@media(max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}.link-grid{grid-template-columns:repeat(2,1fr)}.detail-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.layout{grid-template-columns:1fr}.sidebar{position:fixed;z-index:20;left:0;right:0;bottom:0;top:auto;height:auto;display:flex;overflow:auto;padding:7px;border-right:0;border-top:1px solid #274761}.side-brand{display:none}.nav-btn{min-width:95px;justify-content:center;font-size:10px;flex-direction:column;padding:7px}.main{padding:15px 12px 95px}.grid,.link-grid,.detail-grid{grid-template-columns:1fr}.top-title{font-size:18px}.topbar{align-items:flex-start}.toolbar .field{width:100%}.card{padding:13px}}
+</style></head><body>
+<div id="toast" class="toast hidden"></div>
+<div id="loginView" class="login"><form id="loginForm" class="login-card"><div class="brand">👑 Kho Hàng Admin</div><p class="muted">Đăng nhập để quản lý Mini App và dữ liệu Supabase.</p><div style="display:grid;gap:10px;margin-top:18px"><input id="loginUser" class="field" autocomplete="username" placeholder="Tài khoản"><input id="loginPass" class="field" type="password" autocomplete="current-password" placeholder="Mật khẩu"><button class="btn primary" type="submit">ĐĂNG NHẬP AN TOÀN</button><div id="loginError" class="muted"></div></div></form></div>
+<div id="appView" class="layout hidden"><aside class="sidebar"><div class="side-brand">📦 KHO HÀNG<br><span class="muted">CONTROL CENTER</span></div>
+<button class="nav-btn active" data-tab="overview">📊 <span>Tổng quan</span></button><button class="nav-btn" data-tab="users">👥 <span>Người dùng</span></button><button class="nav-btn" data-tab="withdrawals">💸 <span>Rút tiền</span></button><button class="nav-btn" data-tab="links">🔗 <span>Vượt link</span></button><button class="nav-btn" data-tab="jobmail">📩 <span>JOB MAIL</span></button><button class="nav-btn" data-tab="giftcodes">🎁 <span>Giftcode</span></button><button class="nav-btn" data-tab="admins">👑 <span>Admin</span></button><button class="nav-btn" data-tab="broadcast">📢 <span>Broadcast</span></button><button class="nav-btn" data-tab="system">⚙️ <span>Hệ thống</span></button></aside>
+<main class="main"><header class="topbar"><div><div id="pageTitle" class="top-title">📊 Tổng quan</div><div class="muted" style="font-size:12px">Dữ liệu trực tiếp từ Supabase • Asia/Ho_Chi_Minh</div></div><div class="actions"><span id="adminUser" class="pill">👑 Admin</span><button id="logoutBtn" class="btn ghost">Đăng xuất</button></div></header>
+<section id="sec-overview" class="section active"><div id="statsGrid" class="grid"></div><div class="card" style="margin-top:12px"><canvas id="overviewChart" class="chart"></canvas></div></section>
+<section id="sec-users" class="section"><div class="toolbar"><input id="userSearch" class="field" placeholder="ID hoặc tên"><select id="userBanned" class="field"><option value="all">Tất cả</option><option value="false">Đang hoạt động</option><option value="true">Đã ban</option></select><button id="userSearchBtn" class="btn primary">Tìm</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Đơn Hàng</th><th>Risk</th><th>IP</th><th>Trạng thái</th><th></th></tr></thead><tbody id="usersBody"></tbody></table></div><div id="usersPager" class="toolbar"></div></section>
+<section id="sec-withdrawals" class="section"><div class="toolbar"><select id="wdStatus" class="field"><option value="pending">Chờ duyệt</option><option value="success">Đã duyệt</option><option value="rejected">Từ chối</option><option value="refunded">Hoàn trả</option><option value="all">Tất cả</option></select><input id="wdSearch" class="field" placeholder="User ID / txCode"><button id="wdLoad" class="btn primary">Tải</button></div><div class="table-wrap"><table><thead><tr><th>Mã</th><th>User</th><th>Số tiền</th><th>Thông tin</th><th>IP</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="wdBody"></tbody></table></div><div id="wdPager" class="toolbar"></div></section>
+<section id="sec-links" class="section"><div id="linkDiag" class="card diag">Đang tải...</div><div id="linkGrid" class="link-grid" style="margin-top:12px"></div></section>
+<section id="sec-jobmail" class="section"><div id="jmStats" class="grid"></div><div class="toolbar"><select id="jmStatus" class="field"><option value="pending">Chờ duyệt</option><option value="approved">Đã duyệt</option><option value="rejected">Từ chối</option></select><input id="jmSearch" class="field" placeholder="Gmail hoặc User ID"><button id="jmLoad" class="btn primary">Tải</button><button id="jmLock" class="btn warn">Khóa nhận mail</button><button id="jmUnlock" class="btn good">Mở nhận mail</button></div><div class="toolbar"><input id="jmUserId" class="field" placeholder="User ID JOB MAIL"><button id="jmBanUser" class="btn danger">Ban JOB MAIL</button><button id="jmUnbanUser" class="btn good">Unban JOB MAIL</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Email</th><th>User</th><th>IP</th><th>Thời gian</th><th>Trạng thái</th><th>Hành động</th></tr></thead><tbody id="jmBody"></tbody></table></div></section>
+<section id="sec-giftcodes" class="section"><div class="card"><div class="toolbar"><input id="gcCode" class="field" placeholder="Mã code"><input id="gcCoin" class="field" type="number" placeholder="Coin"><input id="gcOrders" class="field" type="number" placeholder="Đơn Hàng"><input id="gcSpins" class="field" type="number" placeholder="Spin"><input id="gcLimit" class="field" type="number" placeholder="Giới hạn"><select id="gcScope" class="field"><option value="nguoidung">Người dùng</option><option value="admin">Chỉ Admin</option></select><button id="gcCreate" class="btn primary">Tạo code</button></div></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>Code</th><th>Coin</th><th>Đơn</th><th>Spin</th><th>Đã dùng</th><th>Scope</th><th></th></tr></thead><tbody id="gcBody"></tbody></table></div></section>
+<section id="sec-admins" class="section"><div class="card"><div class="toolbar"><input id="subAdminId" class="field" placeholder="Telegram User ID"><button id="subAdminAdd" class="btn primary">Thêm Admin phụ</button></div><div id="adminsList"></div></div></section>
+<section id="sec-broadcast" class="section"><div class="card"><h3>📢 Gửi thông báo toàn bộ người dùng</h3><textarea id="broadcastText" class="field" style="min-height:170px" placeholder="Nội dung thông báo..."></textarea><div class="toolbar"><button id="broadcastSend" class="btn danger">GỬI BROADCAST</button></div><div id="broadcastState" class="muted"></div><div class="progress"><span id="broadcastProgress"></span></div></div></section>
+<section id="sec-system" class="section"><div id="systemInfo" class="card diag">Đang tải...</div><div class="toolbar"><button id="botLock" class="btn danger">🔒 Khóa Bot</button><button id="botUnlock" class="btn good">🔓 Mở Bot</button><input id="banIpInput" class="field" placeholder="IP public"><button id="banIpBtn" class="btn danger">Ban IP</button><button id="resetAllBtn" class="btn danger">☢ RESET TOÀN BỘ</button></div><div class="card"><h3>🧾 Audit gần nhất</h3><div id="auditList" class="diag"></div></div></section>
+</main></div>
+<div id="userModal" class="modal hidden"><div class="modal-card"><div class="modal-head"><div><h2 id="userModalTitle" style="margin:0">User</h2><div id="userModalSub" class="muted"></div></div><button id="userModalClose" class="btn ghost">✕</button></div><div id="userDetailGrid" class="detail-grid" style="margin-top:14px"></div><div class="card" style="margin-top:12px"><h3>🛠 Thao tác</h3><div class="toolbar"><input id="userAmount" class="field" type="number" placeholder="Số lượng"><button class="btn good userAct" data-action="addCoin">+ Coin</button><button class="btn danger userAct" data-action="subCoin">- Coin</button><button class="btn good userAct" data-action="addOrders">+ Đơn</button><button class="btn danger userAct" data-action="subOrders">- Đơn</button><button class="btn good userAct" data-action="addSpins">+ Spin</button><button class="btn danger userAct" data-action="subSpins">- Spin</button><button class="btn primary userAct" data-action="addRef">+ Referral</button></div><div class="toolbar"><input id="userLevel" class="field" type="number" placeholder="Level"><button class="btn userAct" data-action="setLevel">Set Level</button><input id="userNewName" class="field" placeholder="Tên mới"><button class="btn userAct" data-action="rename">Đổi tên</button></div><div class="toolbar"><button class="btn danger userAct" data-action="ban">Ban</button><button class="btn good userAct" data-action="unban">Unban</button><button class="btn warn userAct" data-action="resetDaily">Reset Daily</button><button class="btn warn userAct" data-action="resetLinkTask">Reset Vượt Link</button><button class="btn danger userAct" data-action="resetUser">Reset User</button><button class="btn danger userAct" data-action="deleteUser">Delete User</button></div></div><div class="card" style="margin-top:12px"><h3>🧾 Sao kê server</h3><div id="userTransactions" class="diag"></div></div></div></div>
+<script nonce="${nonce}">
+(function(){'use strict';var csrf='',currentUserId='',userPage=1,wdPage=1,broadcastTimer=null;var titles={overview:'📊 Tổng quan',users:'👥 Người dùng',withdrawals:'💸 Rút tiền',links:'🔗 Vượt link',jobmail:'📩 JOB MAIL',giftcodes:'🎁 Giftcode',admins:'👑 Admin',broadcast:'📢 Broadcast',system:'⚙️ Hệ thống'};
+function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function toast(msg,err){var t=$('toast');t.textContent=msg;t.className='toast'+(err?' err':'');setTimeout(function(){t.classList.add('hidden')},3200)}
+async function api(path,opt){opt=opt||{};opt.headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});if((opt.method||'GET')!=='GET')opt.headers['x-csrf-token']=csrf;var r=await fetch(path,opt);var j=await r.json().catch(function(){return {success:false,error:'Phản hồi máy chủ không hợp lệ.'}});if(r.status===401){showLogin();throw new Error(j.error||'Hết phiên đăng nhập.')}if(!r.ok||j.success===false)throw new Error(j.error||'Thao tác thất bại.');return j}
+function showLogin(){$('loginView').classList.remove('hidden');$('appView').classList.add('hidden')}function showApp(){$('loginView').classList.add('hidden');$('appView').classList.remove('hidden')}
+function statCard(k,v,icon){return '<div class="card stat"><div class="k">'+esc(icon+' '+k)+'</div><div class="v">'+esc(num(v))+'</div></div>'}function tag(text,kind){return '<span class="tag '+(kind||'')+'">'+esc(text)+'</span>'}
+async function init(){try{var s=await api('/api/admin/session');csrf=s.csrfToken;$('adminUser').textContent='👑 '+s.username;showApp();bind();switchTab('overview')}catch(e){showLogin()}}
+$('loginForm').addEventListener('submit',async function(e){e.preventDefault();$('loginError').textContent='';try{var r=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('loginUser').value,password:$('loginPass').value})});var j=await r.json();if(!r.ok)throw new Error(j.error||'Đăng nhập thất bại.');$('loginPass').value='';await init()}catch(err){$('loginError').textContent=err.message}});
+function bind(){if(document.body.dataset.bound)return;document.body.dataset.bound='1';document.querySelectorAll('.nav-btn').forEach(function(b){b.addEventListener('click',function(){switchTab(b.dataset.tab)})});$('logoutBtn').onclick=async function(){try{await api('/api/admin/logout',{method:'POST',body:'{}'})}catch(_){}csrf='';showLogin()};$('userSearchBtn').onclick=function(){userPage=1;loadUsers()};$('userBanned').onchange=function(){userPage=1;loadUsers()};$('wdLoad').onclick=function(){wdPage=1;loadWithdrawals()};$('wdStatus').onchange=function(){wdPage=1;loadWithdrawals()};$('jmLoad').onclick=loadJobMail;$('jmStatus').onchange=loadJobMail;$('jmLock').onclick=function(){setJobMailLock(true)};$('jmUnlock').onclick=function(){setJobMailLock(false)};$('jmBanUser').onclick=function(){setJobMailUserBan(true)};$('jmUnbanUser').onclick=function(){setJobMailUserBan(false)};$('gcCreate').onclick=createGiftcode;$('subAdminAdd').onclick=addSubAdmin;$('broadcastSend').onclick=sendBroadcast;$('botLock').onclick=function(){systemAction('lockBot')};$('botUnlock').onclick=function(){systemAction('unlockBot')};$('banIpBtn').onclick=function(){systemAction('banIp',{ip:$('banIpInput').value})};$('resetAllBtn').onclick=resetAllWeb;$('userModalClose').onclick=function(){$('userModal').classList.add('hidden')};document.querySelectorAll('.userAct').forEach(function(b){b.onclick=function(){userAction(b.dataset.action)}})}
+function switchTab(tab){document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.toggle('active',b.dataset.tab===tab)});document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active')});$('sec-'+tab).classList.add('active');$('pageTitle').textContent=titles[tab]||tab;if(tab==='overview')loadOverview();if(tab==='users')loadUsers();if(tab==='withdrawals')loadWithdrawals();if(tab==='links')loadLinks();if(tab==='jobmail')loadJobMail();if(tab==='giftcodes')loadGiftcodes();if(tab==='admins')loadAdmins();if(tab==='system')loadSystem()}
+async function loadOverview(){try{var s=(await api('/api/admin/dashboard')).stats;$('statsGrid').innerHTML=[statCard('Tổng User',s.totalUsers,'👥'),statCard('Tổng Coin',s.totalCoins,'🪙'),statCard('Tổng Đơn Hàng',s.totalOrders,'📦'),statCard('Tổng QC',s.totalAds,'📺'),statCard('Tổng SmartLink',s.totalSmartlinks,'🔗'),statCard('Vượt Link',s.totalLinkTasks,'🌐'),statCard('Mở rương',s.totalChests,'🎁'),statCard('Referral',s.totalReferrals,'🤝'),statCard('Đã rút VNĐ',s.totalWithdrawn,'💸'),statCard('Đơn rút chờ',s.pendingWithdrawals,'⏳'),statCard('JOB MAIL chờ',s.jobMail&&s.jobMail.pending,'📩'),statCard('User mới hôm nay',s.newUsersToday,'✨')].join('');drawChart([s.adsToday,s.smartlinksToday,s.linkTasksToday,s.withdrawalsToday,s.jobMail&&s.jobMail.todaySubmitted])}catch(e){toast(e.message,true)}}
+function drawChart(vals){var c=$('overviewChart'),dpr=devicePixelRatio||1,w=c.clientWidth||700,h=c.clientHeight||230;c.width=w*dpr;c.height=h*dpr;var x=c.getContext('2d');x.scale(dpr,dpr);x.clearRect(0,0,w,h);var labels=['QC hôm nay','SmartLink','Vượt link','Rút tiền','JOB MAIL'],m=Math.max.apply(null,[1].concat(vals.map(Number))),gap=w/(vals.length*2+1),bw=gap;for(var i=0;i<vals.length;i++){var bh=(Number(vals[i]||0)/m)*(h-55),px=gap+i*gap*2,py=h-28-bh;x.fillStyle='#224867';x.fillRect(px,25,bw,h-53);var g=x.createLinearGradient(0,py,0,h);g.addColorStop(0,'#3ee7ff');g.addColorStop(1,'#3975ff');x.fillStyle=g;x.fillRect(px,py,bw,bh);x.fillStyle='#dfefff';x.font='11px system-ui';x.fillText(String(vals[i]||0),px,Math.max(18,py-6));x.fillStyle='#8ca5c1';x.fillText(labels[i],px,h-10)}}
+async function loadUsers(){try{var j=await api('/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value));$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td>'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td>'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Xem</button></td></tr>'}).join('')||'<tr><td colspan="8" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(p){userPage=p;loadUsers()})}catch(e){toast(e.message,true)}}
+function pager(id,page,total,limit,fn){var pages=Math.max(1,Math.ceil(total/limit));$(id).innerHTML='<button class="btn ghost" id="'+id+'Prev">◀</button><span class="pill">Trang '+page+'/'+pages+' • '+num(total)+'</span><button class="btn ghost" id="'+id+'Next">▶</button>';$(id+'Prev').disabled=page<=1;$(id+'Next').disabled=page>=pages;$(id+'Prev').onclick=function(){fn(page-1)};$(id+'Next').onclick=function(){fn(page+1)}}
+async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100';var items=[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Level',num(d.user.truckLevel)],['QC hôm nay',num(d.user.adsToday)],['SmartLink hôm nay',num(d.user.smartlinksToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)],['Vượt Link',d.linkTask?num(d.linkTask.completed):'N/A'],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Referral',num(d.user.validInvites)],['Đã rút',num(d.withdrawal.totalWithdrawn)+' VNĐ'],['Bị hủy',num(d.withdrawal.totalCancelled)+' VNĐ'],['IP',d.user.ip||'Chưa có'],['Trùng IP',d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không'],['JOB MAIL',num(d.jobMail.total)+' / duyệt '+num(d.jobMail.approved)],['Risk',d.risk.score+'/100 '+d.risk.level],['Banned',d.user.isBanned?'Có':'Không']];$('userDetailGrid').innerHTML=items.map(function(x){return '<div class="mini"><span class="muted">'+esc(x[0])+'</span><b>'+esc(x[1])+'</b></div>'}).join('');$('userTransactions').textContent=(d.transactions||[]).map(function(t){return String(t.type||'')+' '+String(t.amount||'')+' • '+String(t.reason||'')}).join('\n')||'Chưa có sao kê server.';$('userModal').classList.remove('hidden')}catch(e){toast(e.message,true)}}
+async function userAction(action){if(!currentUserId)return;var body={action:action};if(['addCoin','subCoin','addOrders','subOrders','addSpins','subSpins','addRef'].indexOf(action)>=0)body.amount=Number($('userAmount').value);if(action==='setLevel')body.level=Number($('userLevel').value);if(action==='rename')body.name=$('userNewName').value;if(action==='resetUser'){var c=prompt('Nhập chính xác RESET '+currentUserId);if(c===null)return;body.confirmText=c}if(action==='deleteUser'){var d=prompt('CẢNH BÁO: xóa vĩnh viễn. Nhập DELETE '+currentUserId);if(d===null)return;body.confirmText=d}if(!confirm('Xác nhận thao tác '+action+' với user '+currentUserId+'?'))return;try{await api('/api/admin/users/'+currentUserId+'/action',{method:'POST',body:JSON.stringify(body)});toast('✅ Thao tác thành công');if(action==='deleteUser'){$('userModal').classList.add('hidden');loadUsers()}else openUser(currentUserId)}catch(e){toast(e.message,true)}}
+async function loadWithdrawals(){try{var j=await api('/api/admin/withdrawals?page='+wdPage+'&limit=25&status='+encodeURIComponent($('wdStatus').value)+'&q='+encodeURIComponent($('wdSearch').value));$('wdBody').innerHTML=j.withdrawals.map(function(w){var info=[w.method,w.bankName,w.accountName,w.accountNumber||w.accountInfo].filter(Boolean).join(' • ');var acts=w.status==='pending'?'<div class="actions"><button class="btn good wd-act" data-id="'+esc(w.id)+'" data-a="approve">Duyệt</button><button class="btn danger wd-act" data-id="'+esc(w.id)+'" data-a="reject">Hủy</button><button class="btn warn wd-act" data-id="'+esc(w.id)+'" data-a="refund">Hoàn</button></div>':'';return '<tr><td>#'+esc(w.txCode||w.id)+'</td><td>'+esc(w.userId)+'</td><td>'+num(w.amount)+' VNĐ</td><td>'+esc(info)+'</td><td>'+esc(w.sourceIp||'Chưa lưu')+(w.duplicateAccounts&&w.duplicateAccounts.length?' '+tag('TRÙNG','bad'):'')+'</td><td>'+tag(w.status,w.status==='success'?'good':w.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có đơn</td></tr>';document.querySelectorAll('.wd-act').forEach(function(b){b.onclick=function(){withdrawAction(b.dataset.id,b.dataset.a)}});pager('wdPager',wdPage,j.total,j.limit,function(p){wdPage=p;loadWithdrawals()})}catch(e){toast(e.message,true)}}
+async function withdrawAction(id,a){var reason='';if(a==='reject')reason=prompt('Lý do hủy:')||'';if(!confirm('Xác nhận '+a+' đơn '+id+'?'))return;try{await api('/api/admin/withdrawals/'+encodeURIComponent(id)+'/action',{method:'POST',body:JSON.stringify({action:a,reason:reason})});toast('✅ Đã xử lý đơn');loadWithdrawals()}catch(e){toast(e.message,true)}}
+async function loadLinks(){try{var j=await api('/api/admin/link-tasks');var d=j.diagnostic,n=d.network;$('linkDiag').textContent='SYSTEM DIAGNOSTIC\nSUPABASE SERVICE ROLE: '+(d.serviceRole?'✅':'❌')+'\nIP HASH SECRET: '+(d.ipHashSecret?'✅':'❌')+'\nIP INTELLIGENCE: '+(d.ipIntelligence?'✅':'❌')+'\nDATABASE: '+(d.database&&d.database.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+n.trustProxy+'\nX-FORWARDED-FOR: '+(n.forwardedForPresent?'✅ '+n.forwardedHopCount+' hop':'❌')+'\nREQUEST PUBLIC IP: '+(n.publicIpAvailable?'✅ '+n.resolvedPublicIp:'❌ UNAVAILABLE')+'\nWEB_APP_URL: '+d.webAppUrl;$('linkGrid').innerHTML=j.tasks.map(function(t){return '<div class="link-card"><h3>🔗 '+esc(t.name)+'</h3><div>'+tag(t.envConfigured?'ENV ✅':'ENV ❌',t.envConfigured?'good':'bad')+' '+tag(t.adminLocked?'🔒 LOCKED':'🔓 ENABLED',t.adminLocked?'bad':'good')+'</div><p class="muted">💰 +'+num(t.rewardOrders)+' Đơn • '+esc(t.rule)+'</p><p class="muted">IP '+t.maxPerIp+' • Device '+t.maxPerDevice+' • Dev/IP '+t.maxPerDeviceIp+' • Strict '+(t.requiresStrictNetwork?'Có':'Không')+'</p><p>✅ Hôm nay: <b>'+num(t.rewardedToday)+'</b> • ⏳ Active: <b>'+num(t.activeAttempts)+'</b></p>'+(t.lastProviderError?'<p class="muted">Lỗi gần nhất: '+esc(t.lastProviderError)+'</p>':'')+'<button class="btn '+(t.adminLocked?'good':'danger')+' link-toggle" data-id="'+esc(t.id)+'" data-lock="'+(t.adminLocked?'0':'1')+'">'+(t.adminLocked?'🔓 Mở nhiệm vụ':'🔒 Khóa nhiệm vụ')+'</button></div>'}).join('');document.querySelectorAll('.link-toggle').forEach(function(b){b.onclick=function(){toggleLink(b.dataset.id,b.dataset.lock==='1')}})}catch(e){toast(e.message,true)}}
+async function toggleLink(id,locked){if(!confirm((locked?'Khóa ':'Mở ')+id+'?'))return;try{await api('/api/admin/link-tasks/'+encodeURIComponent(id)+'/lock',{method:'POST',body:JSON.stringify({locked:locked})});toast('✅ Đã cập nhật');loadLinks()}catch(e){toast(e.message,true)}}
+async function loadJobMail(){try{var j=await api('/api/admin/job-mails?status='+encodeURIComponent($('jmStatus').value)+'&q='+encodeURIComponent($('jmSearch').value));var s=j.stats;$('jmStats').innerHTML=[statCard('Tổng mail',s.total,'📩'),statCard('Chờ duyệt',s.pending,'⏳'),statCard('Đã duyệt',s.approved,'✅'),statCard('Từ chối',s.rejected,'❌')].join('');$('jmBody').innerHTML=j.mails.map(function(m){var acts=m.status==='pending'?'<div class="actions"><button class="btn good jm-act" data-id="'+m.id+'" data-a="approve">Duyệt</button><button class="btn danger jm-act" data-id="'+m.id+'" data-a="reject">Từ chối</button></div>':'';return '<tr><td>'+m.id+'</td><td>'+esc(m.email_original)+'</td><td>'+esc(m.user_id)+'</td><td>'+esc(m.source_ip||'')+'</td><td>'+esc(m.submitted_at||'')+'</td><td>'+tag(m.status,m.status==='approved'?'good':m.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Không có mail</td></tr>';document.querySelectorAll('.jm-act').forEach(function(b){b.onclick=function(){mailAction(b.dataset.id,b.dataset.a)}});$('jmLock').disabled=!!j.availability.jobMailManualLocked;$('jmUnlock').disabled=!j.availability.jobMailManualLocked}catch(e){toast(e.message,true)}}
+async function mailAction(id,a){var reason='';if(a==='reject')reason=prompt('Lý do từ chối:')||'';if(!confirm('Xác nhận '+a+' mail #'+id+'?'))return;try{await api('/api/admin/job-mails/'+id+'/action',{method:'POST',body:JSON.stringify({action:a,reason:reason})});toast('✅ Đã xử lý mail');loadJobMail()}catch(e){toast(e.message,true)}}async function setJobMailUserBan(banned){var id=$('jmUserId').value.trim();if(!id)return;if(!confirm((banned?'Ban':'Unban')+' JOB MAIL user '+id+'?'))return;try{await api('/api/admin/job-mail/user/'+encodeURIComponent(id),{method:'POST',body:JSON.stringify({action:banned?'ban':'unban'})});toast('✅ Đã cập nhật quyền JOB MAIL')}catch(e){toast(e.message,true)}}async function setJobMailLock(locked){try{await api('/api/admin/job-mail/lock',{method:'POST',body:JSON.stringify({locked:locked})});toast('✅ Đã cập nhật JOB MAIL');loadJobMail()}catch(e){toast(e.message,true)}}
+async function loadGiftcodes(){try{var j=await api('/api/admin/giftcodes');$('gcBody').innerHTML=j.codes.map(function(c){return '<tr><td><b>'+esc(c.code)+'</b></td><td>'+num(c.rewardAmount)+'</td><td>'+num(c.orders)+'</td><td>'+num(c.spins)+'</td><td>'+num(c.usedCount)+'/'+num(c.limitUses)+'</td><td>'+esc(c.scope||'nguoidung')+'</td><td><div class="actions"><button class="btn ghost gc-act" data-c="'+esc(c.code)+'" data-a="history">Lịch sử</button><button class="btn warn gc-act" data-c="'+esc(c.code)+'" data-a="revoke">Thu hồi</button><button class="btn danger gc-act" data-c="'+esc(c.code)+'" data-a="delete">Xóa</button></div></td></tr>'}).join('')||'<tr><td colspan="7" class="empty">Chưa có code</td></tr>';document.querySelectorAll('.gc-act').forEach(function(b){b.onclick=function(){giftAction(b.dataset.c,b.dataset.a)}})}catch(e){toast(e.message,true)}}
+async function createGiftcode(){try{await api('/api/admin/giftcodes',{method:'POST',body:JSON.stringify({code:$('gcCode').value,coin:Number($('gcCoin').value||0),orders:Number($('gcOrders').value||0),spins:Number($('gcSpins').value||0),limit:Number($('gcLimit').value||0),scope:$('gcScope').value})});toast('✅ Đã tạo Giftcode');$('gcCode').value='';loadGiftcodes()}catch(e){toast(e.message,true)}}async function giftAction(code,a){try{if(a==='history'){var j=await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/redemptions');alert(j.redemptions.map(function(r){return r.userId+' • '+(r.userName||'')+' • '+(r.createdAt||'')}).join('\n')||'Chưa có ai nhập');return}if(!confirm((a==='revoke'?'Thu hồi toàn bộ thưởng từ ':'Xóa code ')+code+'?'))return;await api('/api/admin/giftcodes/'+encodeURIComponent(code)+'/action',{method:'POST',body:JSON.stringify({action:a})});toast('✅ Đã xử lý Giftcode');loadGiftcodes()}catch(e){toast(e.message,true)}}
+async function loadAdmins(){try{var j=await api('/api/admin/admins');$('adminsList').innerHTML='<p>👑 Main Admin: <b>'+esc(j.mainAdmin)+'</b></p>'+(j.subAdmins.length?j.subAdmins.map(function(a){return '<div class="mini" style="margin:6px 0">👤 '+esc(a.id)+' <button class="btn danger sub-remove" data-id="'+esc(a.id)+'" style="float:right">Xóa</button></div>'}).join(''):'<p class="muted">Chưa có Admin phụ.</p>');document.querySelectorAll('.sub-remove').forEach(function(b){b.onclick=function(){subAdminAction('remove',b.dataset.id)}})}catch(e){toast(e.message,true)}}async function addSubAdmin(){subAdminAction('add',$('subAdminId').value)}async function subAdminAction(a,id){if(!id)return;if(!confirm((a==='add'?'Thêm ':'Xóa ')+'Admin '+id+'?'))return;try{await api('/api/admin/admins/action',{method:'POST',body:JSON.stringify({action:a,userId:id})});toast('✅ Đã cập nhật Admin');$('subAdminId').value='';loadAdmins()}catch(e){toast(e.message,true)}}
+async function sendBroadcast(){var msg=$('broadcastText').value;if(!msg.trim())return;if(!confirm('Bạn chắc chắn muốn gửi cho TOÀN BỘ người dùng?'))return;try{var j=await api('/api/admin/broadcast',{method:'POST',body:JSON.stringify({message:msg})});$('broadcastState').textContent='Đã bắt đầu job '+j.job.id;pollBroadcast(j.job.id)}catch(e){toast(e.message,true)}}function pollBroadcast(id){if(broadcastTimer)clearInterval(broadcastTimer);broadcastTimer=setInterval(async function(){try{var j=await api('/api/admin/broadcast/'+id),x=j.job,p=x.total?Math.round((x.success+x.failed)*100/x.total):0;$('broadcastState').textContent='Trạng thái: '+x.status+' • '+x.success+'/'+x.total+' thành công • '+x.failed+' lỗi';$('broadcastProgress').style.width=p+'%';if(x.status!=='running')clearInterval(broadcastTimer)}catch(_){clearInterval(broadcastTimer)}},1200)}
+async function resetAllWeb(){var first=prompt('Thao tác này sẽ reset dữ liệu toàn bộ hệ thống. Nhập RESET ALL DATA để tiếp tục:');if(first!=='RESET ALL DATA')return;var second=confirm('XÁC NHẬN LẦN 2: Bạn chắc chắn muốn reset toàn bộ dữ liệu?');if(!second)return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify({action:'resetAll',confirmText:first})});toast('✅ Đã reset toàn bộ dữ liệu');loadSystem();loadOverview()}catch(e){toast(e.message,true)}}
+async function loadSystem(){try{var s=(await api('/api/admin/system')).system,n=s.network;$('systemInfo').textContent='BOT: '+(s.botLocked?'🔒 MAINTENANCE':'🔓 RUNNING')+'\nUPTIME: '+s.uptimeSeconds+'s\nSTARTED: '+s.startedAt+'\nSUPABASE: '+(s.supabaseOk?'✅':'❌')+'\nLINK TASK DB: '+(s.linkTaskDb&&s.linkTaskDb.ready?'✅':'❌')+'\nTRUST PROXY: '+n.trustProxy+'\nPUBLIC REQUEST IP: '+(n.publicIpAvailable?'✅ '+n.resolvedPublicIp:'❌ UNAVAILABLE')+'\nWEB_APP_URL: '+s.webAppUrl;$('auditList').textContent=(s.audit||[]).map(function(a){return (a.at||'')+' • '+(a.actor||'')+' • '+(a.action||'')+' • '+(a.target||'')}).join('\n')||'Chưa có audit.';$('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked}catch(e){toast(e.message,true)}}async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem()}catch(e){toast(e.message,true)}}
+init();})();
+</script></body></html>`;
+}
+app.get('/admin',(req,res)=>{
+    const nonce=crypto.randomBytes(18).toString('base64url');
+    res.setHeader('Cache-Control','no-store, no-cache, must-revalidate');res.setHeader('Pragma','no-cache');res.setHeader('X-Frame-Options','DENY');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');res.setHeader('Content-Security-Policy',`default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; connect-src 'self'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'`);
+    return res.type('html').send(renderAdminWebHtml(nonce));
+});
+
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
