@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
     <script src="https://www.youtube.com/iframe_api"></script>
@@ -1254,7 +1255,7 @@
                     <template x-for="task in linkTasks" :key="task.id">
                         <div class="p-3 rounded-2xl bg-slate-800/50 border border-white/5">
                             <div class="flex items-start justify-between gap-2">
-                                <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' Đơn Hàng'"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+task.rule"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+task.unavailableReason"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':task.status==='expired'||task.status==='cancelled'?'text-amber-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p><p x-show="linkTaskIsActive(task)" class="text-[9px] text-amber-300 font-black mt-1" x-text="'⏳ Còn '+linkTaskCountdownText(task)"></p></div>
+                                <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' Đơn Hàng'"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+task.rule"></p><p x-show="task.warning" x-cloak class="text-[8px] leading-relaxed text-red-300 font-bold mt-1" x-text="'⚠️ '+task.warning"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+task.unavailableReason"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':task.status==='expired'||task.status==='cancelled'?'text-amber-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p><p x-show="linkTaskIsActive(task)" class="text-[9px] text-amber-300 font-black mt-1" x-text="'⏳ Còn '+linkTaskCountdownText(task)"></p></div>
                                 <div class="text-right flex-shrink-0"><p class="text-[9px] font-black text-cyan-300" x-text="'Còn '+Math.max(0,Number(task.remaining||0))+' lượt'"></p></div>
                             </div>
                             <button x-show="!linkTaskIsActive(task) && !task.shortUrl" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':'BẮT ĐẦU'"></span></button>
@@ -1381,6 +1382,14 @@
                         </div>
                     </div>
                 </div>
+                <div class="glass p-3 rounded-[25px] space-y-2 card-padding border border-cyan-500/15">
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="text-sm font-black uppercase text-cyan-300">📺 XEM QC ADSGRAM</h3>
+                        <span class="text-[10px] font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
+                    </div>
+                    <p class="text-[9px] text-slate-400 leading-relaxed">Xem một AdsGram Interstitial hợp lệ. Dùng chung giới hạn <b class="text-white">15 lượt/ngày</b> và thời gian chờ <b class="text-white">5 phút</b> với nhiệm vụ QC nhận thưởng. Phần thưởng: <b class="text-yellow-400">10–25 Coin + 10–25 Đơn</b>.</p>
+                    <button @click="watchAdsGramTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _adsgramRunning || _rewardedRunning" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
+                </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
                         <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.watchAdRewardTitle"></h3>
@@ -1391,7 +1400,7 @@
                         <span class="text-cyan-300 font-black">Nếu Monetag xác minh click: ngẫu nhiên 1–70 Coin + 1–70 Đơn.</span>
                         <span x-text="texts.maxPerDay"></span>
                     </p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning || _adsgramRunning" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -2302,7 +2311,9 @@
                 _pendingDeliveryClaim: false, _deliveryClaimInFlight: false, _deliveryAdToken: '', _deliveryRetryTimer: null,
                 _deliveryResultApplied: false, _deliveryDeliveredProducts: 0, _deliveryRewardedOrders: 0, _deliveryGoldenHourActive: false, _deliveryAnimationTimers: [], _lastAppliedDeliveryToken: '', _deliveryActionId: '', deliveryServerLimit: 5,
                 goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
-                _rewardedRunning: false, _rewardedActionId: '', _rewardedActiveToken: '', _rewardedPurpose: '', _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
+                _rewardedRunning: false, _rewardedActionId: '', _rewardedActiveToken: '', _rewardedPurpose: '',
+                _adsgramRunning:false, _adsgramInterstitialController:null, _adsgramRewardController:null, _adsgramActionId:'', _adsgramActiveToken:'', _adsgramPendingRecovery:false,
+                _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
                 _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
@@ -4293,6 +4304,222 @@
                             .catch(() => {});
                     }
                 },
+                getAdsGramController(format = 'interstitial') {
+                    const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
+                    const cacheKey = normalized === 'reward' ? '_adsgramRewardController' : '_adsgramInterstitialController';
+                    if (this[cacheKey]) return this[cacheKey];
+                    if (!window.Adsgram || typeof window.Adsgram.init !== 'function') return null;
+                    try {
+                        const blockId = normalized === 'reward' ? '46075' : 'int-46420';
+                        this[cacheKey] = window.Adsgram.init({ blockId });
+                        return this[cacheKey] || null;
+                    } catch (e) {
+                        console.warn('AdsGram init error:', e);
+                        this[cacheKey] = null;
+                        return null;
+                    }
+                },
+                adsgramButtonText() {
+                    this.updateBonusAdCooldown();
+                    if ((this.bonusAdsToday || 0) >= 15) return this.language === 'en' ? 'DAILY LIMIT REACHED' : 'ĐÃ HẾT 15 LƯỢT HÔM NAY';
+                    if (this.bonusAdCooldown > 0) {
+                        const m = Math.floor(this.bonusAdCooldown / 60), s = this.bonusAdCooldown % 60;
+                        return `⏳ ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+                    }
+                    if (this._adsgramRunning) return '⏳ ĐANG XỬ LÝ ADSGRAM...';
+                    return '▶️ XEM QC ADSGRAM';
+                },
+                adsgramActionId() {
+                    try {
+                        if (window.crypto?.randomUUID) return `${this.user?.id || 'user'}:${window.crypto.randomUUID()}`;
+                        if (window.crypto?.getRandomValues) {
+                            const bytes = new Uint8Array(12); window.crypto.getRandomValues(bytes);
+                            return `${this.user?.id || 'user'}:${Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('')}`;
+                        }
+                    } catch (_) {}
+                    return `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2,12)}`;
+                },
+                applyAdsGramBonusResult(result = {}) {
+                    if (typeof result.adsToday === 'number') this.adsToday = Number(result.adsToday);
+                    if (typeof result.rewardedAdsToday === 'number') this.rewardedAdsToday = Number(result.rewardedAdsToday);
+                    if (typeof result.lifetimeAdsWatched === 'number') this.lifetimeAdsWatched = Number(result.lifetimeAdsWatched);
+                    if (typeof result.bonusAdsToday === 'number') this.bonusAdsToday = Number(result.bonusAdsToday);
+                    if (result.bonusAdNextAllowedAt != null) this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || 0);
+                    if (result.coins != null) this.coins = Number(result.coins);
+                    if (result.orders != null) this.orders = Number(result.orders);
+                    if (result.spins != null) this.spins = Number(result.spins);
+                    if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
+                    if (result.tutorial) this.applyNewUserStatus({tutorial:result.tutorial,spins:result.spins,walletUpdatedAt:result.walletUpdatedAt});
+                    this.updateBonusAdCooldown();
+                },
+                readPendingAdsGramRecovery() {
+                    try {
+                        const raw=localStorage.getItem('shipper_adsgram_pending');
+                        if(!raw)return null;
+                        const value=JSON.parse(raw);
+                        if(!value || !value.token || !value.actionId)return null;
+                        return value;
+                    } catch (_) { return null; }
+                },
+                writePendingAdsGramRecovery(value) {
+                    try { localStorage.setItem('shipper_adsgram_pending',JSON.stringify(value||{})); } catch (_) {}
+                },
+                clearPendingAdsGramRecovery() {
+                    try { localStorage.removeItem('shipper_adsgram_pending'); } catch (_) {}
+                    this._adsgramPendingRecovery=false;
+                },
+                async reconcilePendingAdsGram({silent=false}={}) {
+                    const pending=this.readPendingAdsGramRecovery();
+                    if(!pending || this._adsgramRunning || this._rewardedRunning)return false;
+                    this._adsgramRunning=true; this._adsgramPendingRecovery=true;
+                    try{
+                        let res=null,data=null;
+                        for(let attempt=0;attempt<5;attempt++){
+                            try{
+                                res=await fetch(`${API_URL}/api/adsgram/session/complete`,{
+                                    method:'POST',headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify({userId:this.user.id,token:String(pending.token),sessionId:String(pending.sessionId||this.securitySessionId||''),actionId:String(pending.actionId)})
+                                });
+                                data=await res.json().catch(()=>({}));
+                            }catch(_){res=null;data={success:false,retry:true};}
+                            if(res?.ok&&data?.success)break;
+                            if(res && [400,401,403,410].includes(res.status) && !data?.verified)break;
+                            if(!(data?.retry||data?.verified||!res||[408,409,429,500,502,503,504].includes(res.status)))break;
+                            await new Promise(r=>setTimeout(r,Math.min(2200,350*Math.pow(2,attempt))));
+                        }
+                        if(res?.ok&&data?.success){
+                            this.applyAdsGramBonusResult(data);
+                            this.clearPendingAdsGramRecovery();
+                            if(!silent){
+                                const rc=Number(data.rewardCoins||0),ro=Number(data.rewardOrders||0);
+                                this.showNotification(`✅ Đã đồng bộ AdsGram: +${rc} Coin +${ro} Đơn Hàng`);
+                            }
+                            this.syncDailyTasksFromServer().catch(()=>false); this.checkReferralNow();
+                            return true;
+                        }
+                        if(res && [400,401,403,410].includes(res.status) && !data?.verified){
+                            this.clearPendingAdsGramRecovery();
+                            if(!silent)this.showNotification(data?.error||'Phiên AdsGram cũ không còn hợp lệ.');
+                            return false;
+                        }
+                        if(!silent)this.showNotification('🔄 Lượt AdsGram trước vẫn đang đồng bộ. Vui lòng thử lại sau.');
+                        return true;
+                    }finally{
+                        this._adsgramRunning=false;this._adsgramPendingRecovery=false;
+                    }
+                },
+                async playAdsGramBonus(format = 'interstitial') {
+                    const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
+                    if (this._adsgramRunning || this._rewardedRunning) return false;
+                    if (this.readPendingAdsGramRecovery()) {
+                        await this.reconcilePendingAdsGram();
+                        return false;
+                    }
+                    this.updateBonusAdCooldown();
+                    if ((this.bonusAdsToday || 0) >= 15) {
+                        this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily ad limit.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.');
+                        return false;
+                    }
+                    if (this.bonusAdCooldown > 0) {
+                        this.showNotification(this.bonusAdButtonText());
+                        return false;
+                    }
+                    const controller = this.getAdsGramController(normalized);
+                    if (!controller || typeof controller.show !== 'function') {
+                        this.showNotification('⚠️ AdsGram chưa sẵn sàng. Vui lòng thử lại sau.');
+                        return false;
+                    }
+                    const actionId = this.adsgramActionId();
+                    const blockId = normalized === 'reward' ? '46075' : 'int-46420';
+                    this._adsgramRunning = true;
+                    this._adsgramActionId = actionId;
+                    let token = '';
+                    let sdkCompleted = false;
+                    let serverCompleted = false;
+                    try {
+                        let startRes = null, startData = null;
+                        for (let attempt = 0; attempt < 4; attempt++) {
+                            try {
+                                startRes = await fetch(`${API_URL}/api/adsgram/session/start`, {
+                                    method:'POST', headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify({userId:this.user.id,format:normalized,blockId,sessionId:this.securitySessionId,actionId})
+                                });
+                                startData = await startRes.json().catch(() => ({}));
+                            } catch (_) { startRes = null; startData = {success:false,retry:true}; }
+                            if (startRes?.ok && startData?.success && startData?.token) break;
+                            if (startData?.cooldown) {
+                                this.bonusAdNextAllowedAt = Number(startData.nextAllowedAt || (Date.now()+Number(startData.retryAfterMs||0)) || 0);
+                                this.updateBonusAdCooldown(); this.showNotification(this.bonusAdButtonText()); return false;
+                            }
+                            if (startData?.limitReached) {
+                                this.bonusAdsToday = Number(startData.bonusAdsToday ?? this.bonusAdsToday);
+                                this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.'); return false;
+                            }
+                            if (!(startData?.retry || !startRes || [408,409,429,500,502,503,504].includes(startRes.status))) break;
+                            await new Promise(r=>setTimeout(r,250*(attempt+1)));
+                        }
+                        token = String(startData?.token || '');
+                        if (!token) throw new Error(startData?.error || 'Không tạo được phiên AdsGram hợp lệ.');
+                        this._adsgramActiveToken = token;
+
+                        // AdsGram SDK resolve is the client-side completion signal for the configured block.
+                        // Server still owns wallet, replay protection, cooldown and counters.
+                        await Promise.resolve(controller.show());
+                        sdkCompleted = true;
+                        if (this._adsgramActionId !== actionId) return false;
+
+                        let completeRes = null, completeData = null;
+                        for (let attempt = 0; attempt < 6; attempt++) {
+                            try {
+                                completeRes = await fetch(`${API_URL}/api/adsgram/session/complete`, {
+                                    method:'POST', headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify({userId:this.user.id,token,sessionId:this.securitySessionId,actionId})
+                                });
+                                completeData = await completeRes.json().catch(() => ({}));
+                            } catch (_) { completeRes = null; completeData = {success:false,retry:true}; }
+                            if (completeRes?.ok && completeData?.success) break;
+                            if (!completeData?.success && completeData?.verified && completeData?.adToken) {
+                                // Same token must be reconciled; never show another ad while server says reward was already verified.
+                                await new Promise(r=>setTimeout(r,Math.min(2200,300*Math.pow(2,attempt))));
+                                continue;
+                            }
+                            if (!(completeData?.retry || !completeRes || [408,409,429,500,502,503,504].includes(completeRes.status))) break;
+                            await new Promise(r=>setTimeout(r,Math.min(2200,300*Math.pow(2,attempt))));
+                        }
+                        if (!completeData?.success) throw new Error(completeData?.error || 'Không thể đồng bộ lượt AdsGram. Vui lòng thử lại.');
+                        serverCompleted = true;
+                        this.clearPendingAdsGramRecovery();
+                        this.applyAdsGramBonusResult(completeData);
+                        const rewardCoins=Number(completeData.rewardCoins||0),rewardOrders=Number(completeData.rewardOrders||0);
+                        this.showNotification(`📺 AdsGram hợp lệ: +${rewardCoins} Coin +${rewardOrders} Đơn Hàng (${this.bonusAdsToday}/15)`);
+                        this.syncDailyTasksFromServer().catch(()=>false);
+                        this.checkReferralNow();
+                        this.saveState();
+                        return true;
+                    } catch (e) {
+                        console.warn('AdsGram:', e);
+                        if (token && !sdkCompleted) {
+                            fetch(`${API_URL}/api/adsgram/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId})}).catch(()=>{});
+                        }
+                        if (sdkCompleted && !serverCompleted) {
+                            this.writePendingAdsGramRecovery({token,actionId,sessionId:this.securitySessionId,format:normalized,savedAt:Date.now()});
+                            this.showNotification('⚠️ QC AdsGram đã hoàn tất nhưng máy chủ đang đồng bộ. Lần bấm tiếp theo sẽ đồng bộ đúng phiên này, không cần xem lại QC.');
+                        } else {
+                            this.showNotification(e?.message || 'QC AdsGram đang hết hoặc lỗi. Vui lòng thử lại sau.');
+                        }
+                        return false;
+                    } finally {
+                        if (this._adsgramActionId === actionId) this._adsgramActionId = '';
+                        if (this._adsgramActiveToken === token) this._adsgramActiveToken = '';
+                        this._adsgramRunning = false;
+                    }
+                },
+                watchAdsGramTask() {
+                    return this.playAdsGramBonus('interstitial');
+                },
+                watchAdsGramRewardTask() {
+                    return this.playAdsGramBonus('reward');
+                },
                 // Card XEM QC NHẬN THƯỞNG: server random phần thưởng; click chỉ tính khi postback server-side xác minh.
                 watchBonusAdTask() {
                     this.updateBonusAdCooldown();
@@ -4302,6 +4529,15 @@
                     }
                     if (this.bonusAdCooldown > 0) {
                         this.showNotification(this.bonusAdButtonText());
+                        return;
+                    }
+                    if (this._rewardedRunning || this._adsgramRunning) return;
+                    if (this.readPendingAdsGramRecovery()) { this.reconcilePendingAdsGram(); return; }
+                    // Một thao tác chủ động của user chọn ngẫu nhiên 1 provider. Không tạo hai timer quảng cáo
+                    // độc lập và không cho Monetag + AdsGram mở chồng lên nhau.
+                    const adsgramAvailable = !!(window.Adsgram && typeof window.Adsgram.init === 'function');
+                    if (adsgramAvailable && Math.random() < 0.5) {
+                        this.watchAdsGramRewardTask();
                         return;
                     }
                     this.playRewardedAd((result = {}) => {
@@ -5243,7 +5479,7 @@
                 async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', purpose = 'generic') {
                     // Lifecycle quảng cáo và lifecycle nghiệp vụ là 2 bước độc lập:
                     // SDK/verification success không được biến thành "QC lỗi" chỉ vì callback Delivery/Upgrade/X2 lỗi.
-                    if (this._rewardedRunning) return false;
+                    if (this._rewardedRunning || this._adsgramRunning) return false;
                     this._rewardedRunning = true;
                     const actionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._rewardedActionId = actionId;
