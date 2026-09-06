@@ -1069,29 +1069,6 @@
         </div>
 
         <main class="ui-main-content p-2 space-y-3">
-            <!-- QUẢNG CÁO DÙNG CHUNG CHO MỌI TAB: chỉ có 1 instance/script cho mỗi format trong toàn page session. -->
-            <section class="shared-ad-rail space-y-3 mb-4" aria-label="Quảng cáo">
-                <div class="glass p-2 rounded-[20px] overflow-hidden min-h-[90px]">
-                    <div class="text-[7px] uppercase tracking-widest text-slate-500 text-center mb-1">Quảng cáo</div>
-                    <script async="async" data-cfasync="false" src="https://thatlobster.com/438249657045cce5877fa802ad6ef949/invoke.js"></script>
-                    <div id="container-438249657045cce5877fa802ad6ef949"></div>
-                </div>
-                <div class="glass p-2 rounded-[20px] flex-col justify-center overflow-hidden min-h-[78px] items-center">
-                    <div class="text-[7px] uppercase tracking-widest text-slate-500 text-center mb-1">Quảng cáo</div>
-                    <div style="width:320px;max-width:100%;overflow:hidden;margin:0 auto;">
-                        <script>
-                          atOptions = {
-                            'key' : '06614de8b0449426a8ef60d24e757dc4',
-                            'format' : 'iframe',
-                            'height' : 50,
-                            'width' : 320,
-                            'params' : {}
-                          };
-                        </script>
-                        <script src="https://thatlobster.com/06614de8b0449426a8ef60d24e757dc4/invoke.js"></script>
-                    </div>
-                </div>
-            </section>
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter ui-tab ui-home space-y-3 relative">
                 <div x-show="coinBoxVisible" @click="showCoinBoxModal = true" class="coin-float" :style="'top: ' + coinBoxY + 'px; left: ' + coinBoxX + 'px;'">🎁</div>
@@ -1387,8 +1364,8 @@
                         <h3 class="text-sm font-black uppercase text-cyan-300">📺 XEM QC ADSGRAM</h3>
                         <span class="text-[10px] font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
                     </div>
-                    <p class="text-[9px] text-slate-400 leading-relaxed">Xem một AdsGram Interstitial hợp lệ. Dùng chung giới hạn <b class="text-white">15 lượt/ngày</b> và thời gian chờ <b class="text-white">5 phút</b> với nhiệm vụ QC nhận thưởng. Phần thưởng: <b class="text-yellow-400">10–25 Coin + 10–25 Đơn</b>.</p>
-                    <button @click="watchAdsGramTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _adsgramRunning || _rewardedRunning" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
+                    <p class="text-[9px] text-slate-400 leading-relaxed">Xem một AdsGram Interstitial hợp lệ. Giữ giới hạn hiện tại <b class="text-white">15 lượt/ngày</b>; riêng card này có thời gian chờ <b class="text-white">10 phút</b> sau mỗi lượt thành công. Phần thưởng giữ nguyên: <b class="text-yellow-400">10–25 Coin + 10–25 Đơn</b>.</p>
+                    <button @click="watchAdsGramTask()" :disabled="(bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
@@ -1400,7 +1377,7 @@
                         <span class="text-cyan-300 font-black">Nếu Monetag xác minh click: ngẫu nhiên 1–70 Coin + 1–70 Đơn.</span>
                         <span x-text="texts.maxPerDay"></span>
                     </p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning || _adsgramRunning" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -1914,6 +1891,16 @@
 
     <script>
         const API_URL = window.location.origin;
+        // Centralized ad cadence. Manual Monetag keeps its existing 5-minute pool;
+        // the manual AdsGram Interstitial has its own persistent 10-minute server cooldown.
+        const BONUS_AD_MANUAL_COOLDOWN_MS = 5 * 60 * 1000;
+        const AUTO_AD_MONETAG_WEIGHT = 50;
+        const AUTO_AD_ADSGRAM_WEIGHT = 50;
+        const AUTO_AD_FIRST_DELAY_MIN_MS = 90 * 1000;
+        const AUTO_AD_FIRST_DELAY_MAX_MS = 120 * 1000;
+        const AUTO_AD_MIN_COOLDOWN_MS = 3 * 60 * 1000;
+        const AUTO_AD_TAB_THRESHOLD_MIN = 4;
+        const AUTO_AD_TAB_THRESHOLD_MAX = 7;
         // FIX LỖI "KẸT Ở MÀN LOADING": bọc fetch với AbortController để tự huỷ request nếu server không
         // phản hồi kịp (vd Render free tier "ngủ" cần thời gian khởi động lại), thay vì để request treo
         // vô thời hạn rồi phải chờ tới hạn watchdog mới thoát được màn loading.
@@ -1950,14 +1937,24 @@
         // SmartLink URL is server-authoritative; frontend never rotates providers.
 
         // ==================== UI CRITICAL-ACTION GUARD ====================
-        // Shared UI guard used by non-ad features (for example the timed coin box).
-        // Automatic/passive fullscreen Rewarded has been removed completely.
+        // One shared guard for the automatic-ad scheduler. A natural breakpoint is never allowed
+        // to interrupt wallet/transaction flows, Link Task verification, another ad, or onboarding.
         function isCriticalActionActive() {
             try {
                 const data = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
                 if (!data) return true;
+                const hasLinkCode = Object.values(data.linkTaskCodeInputs || {}).some(v => String(v || '').trim().length > 0);
+                const verifyingLinkCode = Object.values(data._linkCodeVerifying || {}).some(Boolean);
+                const activeLinkTask = Array.isArray(data.linkTasks)
+                    && data.tab === 'tasks'
+                    && data.linkTasks.some(t => typeof data.linkTaskIsActive === 'function' && data.linkTaskIsActive(t));
                 return !!(
+                    data.isAppLoading ||
+                    !data.joinedGroups ||
+                    data.accessBlocked ||
+                    data.maintenanceLocked ||
                     data._rewardedRunning ||
+                    data._adsgramRunning ||
                     data._deliveryClaimInFlight ||
                     data.isShipping ||
                     data._pendingDeliveryClaim ||
@@ -1966,6 +1963,7 @@
                     data.isShaking ||
                     data._taskClaimInFlight ||
                     data._smartlinkSaving ||
+                    data.smartlinkAttemptId ||
                     data.captchaShow ||
                     data.quizModalShow ||
                     data.showCoinBoxModal ||
@@ -1975,6 +1973,10 @@
                     data.jobMailSubmitting ||
                     data.jobMailLoading ||
                     data._saveInFlight ||
+                    data._linkTaskStarting ||
+                    verifyingLinkCode ||
+                    hasLinkCode ||
+                    activeLinkTask ||
                     ['chest', 'withdraw', 'giftcode', 'jobmail'].includes(data.tab)
                 );
             } catch (_) { return true; }
@@ -2313,6 +2315,8 @@
                 goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
                 _rewardedRunning: false, _rewardedActionId: '', _rewardedActiveToken: '', _rewardedPurpose: '',
                 _adsgramRunning:false, _adsgramInterstitialController:null, _adsgramRewardController:null, _adsgramActionId:'', _adsgramActiveToken:'', _adsgramPendingRecovery:false,
+                _autoAdInFlight:false, _autoAdEarliestAt:0, _autoAdTabCount:0, _autoAdTabThreshold:0, _autoAdLastTab:'',
+
                 _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
                 _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
@@ -2328,7 +2332,7 @@
                     {rank:7,orders:5000,spins:1,min:5},{rank:8,orders:4000,spins:0,min:5},{rank:9,orders:3000,spins:0,min:5},{rank:10,orders:2000,spins:0,min:5}
                 ],
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 5,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 newUserWelcome:{eligible:false,claimed:false},
                 newUserTutorial:{eligible:false,ads:0,adGoal:3,smartlinks:0,smartlinkGoal:2,completed:false,rewardClaimed:false},
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
@@ -2936,6 +2940,7 @@
                         await fetch(`${API_URL}/api/save-ip/${this.user.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
                     } catch (e) { console.error('Lỗi lưu IP:', e); }
                     await this.syncLinkTasks();
+                    await this.syncAdsGramManualState().catch(() => false);
                     
                     if (!this.rankList || this.rankList.length === 0) this.initRankList();
                     this.applyLevelStats(); // Đồng bộ thời gian sản xuất / sản lượng / kho theo cấp xe hiện tại
@@ -3010,12 +3015,14 @@
                         this.saveState();
                         if (nextTab === 'tasks') { this.syncDailyTasksFromServer().catch(() => {}); this.syncLinkTasks().catch(() => {}); }
                         if (nextTab === 'jobmail') this.loadJobMail(1).catch(() => {});
+                        this.onAutomaticAdBreakpoint(nextTab, previousTab);
                     });
                     if (this._uiSecondTimer) clearInterval(this._uiSecondTimer);
                     this._uiSecondTimer = setInterval(() => {
                         this.tick++;
                         this.updateSmartlinkCooldown();
                         this.updateBonusAdCooldown();
+                        this.updateAdsGramManualCooldown();
                         this.updateGoldenHourCountdown();
                         if(this.tab==='tasks'&&!this._linkTaskExpirySyncing&&Array.isArray(this.linkTasks)&&this.linkTasks.some(t=>this.linkTaskIsActive(t)&&this.linkTaskSecondsRemaining(t)<=0)){
                             this._linkTaskExpirySyncing=true;
@@ -3034,6 +3041,7 @@
                     this.loadQuizLocal();
                     this.initSecurityHeartbeat();
                     this.preloadRewardedAd().catch(() => {});
+                    this.initAutomaticAdScheduler();
                     // Nếu có Rewarded delivery hợp lệ nhưng claim chưa xong, phục hồi token và retry.
                     const pendingDeliveryToken = localStorage.getItem('shipper_pending_delivery_claim_token');
                     if (localStorage.getItem('shipper_pending_delivery_claim') === '1' && pendingDeliveryToken) {
@@ -3131,13 +3139,12 @@
                         const res=await fetchWithTimeout(`${API_URL}/api/access-check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})},9000);
                         const data=await res.json().catch(()=>({}));
                         if(res.ok&&data.success&&data.allowed){
-                            // IP Intelligence có thể chưa cấu hình/tạm lỗi; server vẫn cho phép truy cập global.
-                            // Các task nhạy cảm IP/VPN sẽ tự fail-closed ở endpoint riêng.
+                            // Server only validates the Telegram/mobile access gate here and captures its
+                            // canonical public request IP. NO1SHARE VPN/Proxy policy belongs to its provider.
                             this.accessBlocked=false;this.accessBlockTitle='';this.accessBlockMessage='';return true;
                         }
                         this.accessBlocked=true;
                         if(data.desktopBlocked){this.accessBlockIcon='📱';this.accessBlockTitle='MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';this.accessBlockMessage='Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';}
-                        else if(data.vpnBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle='PHÁT HIỆN VPN/PROXY';this.accessBlockMessage='Vui lòng tắt VPN/Proxy và mở lại Mini App để tiếp tục.';}
                         else if(data.accountBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle='TÀI KHOẢN BỊ KHÓA';this.accessBlockMessage='Tài khoản hiện không thể sử dụng Mini App.';}
                         else if(data.authBlocked||res.status===401){this.accessBlockIcon='🔐';this.accessBlockTitle='PHIÊN ĐĂNG NHẬP KHÔNG HỢP LỆ';this.accessBlockMessage='Vui lòng đóng Mini App và mở lại từ Telegram Bot.';}
                         else{this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ XÁC MINH PHIÊN';this.accessBlockMessage='Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.';}
@@ -3285,6 +3292,12 @@
                 updateBonusAdCooldown() {
                     const nextAllowedAt = Math.max(0, Number(this.bonusAdNextAllowedAt || 0));
                     this.bonusAdCooldown = Date.now() < nextAllowedAt
+                        ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
+                        : 0;
+                },
+                updateAdsGramManualCooldown() {
+                    const nextAllowedAt = Math.max(0, Number(this.adsgramManualNextAllowedAt || 0));
+                    this.adsgramManualCooldown = Date.now() < nextAllowedAt
                         ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
                         : 0;
                 },
@@ -4095,7 +4108,6 @@
                     if(task.adminLocked && this.linkTaskIsActive(task))return '🔒 Admin đã khóa lượt mới — attempt hiện tại vẫn có thể hoàn thành';
                     if(!task.available){
                         if(task.unavailableCode==='task_admin_locked')return '🔒 Admin đang tạm khóa nhận nhiệm vụ mới';
-                        if(task.unavailableCode==='missing_ip_intelligence')return '🛡 Đang chờ hệ thống xác minh VPN/Proxy';
                         if(task.unavailableCode==='ip_unavailable')return '🌐 Chưa nhận được IP public từ reverse proxy';
                         if(task.unavailableCode==='missing_provider_token')return '🔑 Nhà cung cấp chưa được cấu hình';
                         if(task.unavailableCode==='link_task_db_not_ready'||task.unavailableCode==='link_task_db_access_denied')return '🗄 Database nhiệm vụ chưa sẵn sàng';
@@ -4312,6 +4324,96 @@
                             .catch(() => {});
                     }
                 },
+                autoAdRandomInt(min, max) {
+                    const lo = Math.ceil(Number(min || 0)), hi = Math.floor(Number(max || lo));
+                    if (hi <= lo) return lo;
+                    try {
+                        if (window.crypto?.getRandomValues) {
+                            const buf = new Uint32Array(1); window.crypto.getRandomValues(buf);
+                            return lo + (buf[0] % (hi - lo + 1));
+                        }
+                    } catch (_) {}
+                    return lo + Math.floor(Math.random() * (hi - lo + 1));
+                },
+                chooseAutomaticAdProvider() {
+                    const monetag = Math.max(0, Number(AUTO_AD_MONETAG_WEIGHT || 0));
+                    const adsgram = Math.max(0, Number(AUTO_AD_ADSGRAM_WEIGHT || 0));
+                    const total = monetag + adsgram;
+                    if (total <= 0) return '';
+                    const roll = this.autoAdRandomInt(1, total);
+                    return roll <= monetag ? 'monetag' : 'adsgram';
+                },
+                resetAutomaticAdBreakpoint({afterSuccess=false} = {}) {
+                    this._autoAdTabCount = 0;
+                    this._autoAdTabThreshold = this.autoAdRandomInt(AUTO_AD_TAB_THRESHOLD_MIN, AUTO_AD_TAB_THRESHOLD_MAX);
+                    const now = Date.now();
+                    if (afterSuccess) {
+                        this._autoAdEarliestAt = Math.max(now + AUTO_AD_MIN_COOLDOWN_MS, Number(this.autoAdNextAllowedAt || 0));
+                    } else if (!Number(this._autoAdEarliestAt || 0)) {
+                        this._autoAdEarliestAt = now + this.autoAdRandomInt(AUTO_AD_FIRST_DELAY_MIN_MS, AUTO_AD_FIRST_DELAY_MAX_MS);
+                    }
+                },
+                initAutomaticAdScheduler() {
+                    this._autoAdInFlight = false;
+                    this._autoAdLastTab = String(this.tab || '');
+                    this._autoAdEarliestAt = Date.now() + this.autoAdRandomInt(AUTO_AD_FIRST_DELAY_MIN_MS, AUTO_AD_FIRST_DELAY_MAX_MS);
+                    this.resetAutomaticAdBreakpoint();
+                },
+                onAutomaticAdBreakpoint(nextTab, previousTab) {
+                    if (!nextTab || nextTab === previousTab) return;
+                    if (!this.joinedGroups || this.isAppLoading || this.accessBlocked || this.maintenanceLocked) return;
+                    this._autoAdLastTab = String(nextTab);
+                    this._autoAdTabCount = Number(this._autoAdTabCount || 0) + 1;
+                    if (!Number(this._autoAdTabThreshold || 0)) this.resetAutomaticAdBreakpoint();
+                    if (this._autoAdTabCount < this._autoAdTabThreshold) return;
+                    if (Date.now() < Math.max(Number(this._autoAdEarliestAt || 0), Number(this.autoAdNextAllowedAt || 0))) return;
+                    this.maybeRunAutomaticAd().catch(() => false);
+                },
+                async maybeRunAutomaticAd() {
+                    if (this._autoAdInFlight || this._rewardedRunning || this._adsgramRunning || isCriticalActionActive()) return false;
+                    if (Date.now() < Math.max(Number(this._autoAdEarliestAt || 0), Number(this.autoAdNextAllowedAt || 0))) return false;
+                    this._autoAdInFlight = true;
+                    let success = false;
+                    try {
+                        const provider = this.chooseAutomaticAdProvider();
+                        if (provider === 'adsgram') {
+                            success = await this.playAdsGramBonus('reward', {auto:true, silent:true});
+                        } else if (provider === 'monetag') {
+                            success = await this.playRewardedAd(() => {}, '', 'auto-ad', {auto:true, silent:true});
+                        }
+                        if (success) {
+                            this.autoAdNextAllowedAt = Math.max(Number(this.autoAdNextAllowedAt || 0), Date.now() + AUTO_AD_MIN_COOLDOWN_MS);
+                            this.resetAutomaticAdBreakpoint({afterSuccess:true});
+                        } else {
+                            this._autoAdTabCount = 0;
+                            this._autoAdTabThreshold = this.autoAdRandomInt(AUTO_AD_TAB_THRESHOLD_MIN, AUTO_AD_TAB_THRESHOLD_MAX);
+                            this._autoAdEarliestAt = Date.now() + 60 * 1000;
+                        }
+                        return !!success;
+                    } catch (e) {
+                        console.warn('AutomaticAdScheduler:', e);
+                        this._autoAdTabCount = 0;
+                        this._autoAdTabThreshold = this.autoAdRandomInt(AUTO_AD_TAB_THRESHOLD_MIN, AUTO_AD_TAB_THRESHOLD_MAX);
+                        this._autoAdEarliestAt = Date.now() + 60 * 1000;
+                        return false;
+                    } finally {
+                        this._autoAdInFlight = false;
+                    }
+                },
+                async syncAdsGramManualState() {
+                    try {
+                        const res = await fetch(`${API_URL}/api/adsgram/manual/state`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id})
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || !data?.success) return false;
+                        this.adsgramManualNextAllowedAt = Number(data.adsgramManualNextAllowedAt || data.nextAllowedAt || 0);
+                        if (typeof data.bonusAdsToday === 'number') this.bonusAdsToday = Number(data.bonusAdsToday);
+                        this.updateAdsGramManualCooldown();
+                        return true;
+                    } catch (_) { return false; }
+                },
                 getAdsGramController(format = 'interstitial') {
                     const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
                     const cacheKey = normalized === 'reward' ? '_adsgramRewardController' : '_adsgramInterstitialController';
@@ -4328,13 +4430,12 @@
                     }
                 },
                 adsgramButtonText() {
-                    this.updateBonusAdCooldown();
+                    this.updateAdsGramManualCooldown();
                     if ((this.bonusAdsToday || 0) >= 15) return this.language === 'en' ? 'DAILY LIMIT REACHED' : 'ĐÃ HẾT 15 LƯỢT HÔM NAY';
-                    if (this.bonusAdCooldown > 0) {
-                        const m = Math.floor(this.bonusAdCooldown / 60), s = this.bonusAdCooldown % 60;
-                        return `⏳ ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+                    if (this.adsgramManualCooldown > 0) {
+                        return `⏳ ${this.formatCooldownSeconds(this.adsgramManualCooldown)}`;
                     }
-                    if (this._adsgramRunning) return '⏳ ĐANG XỬ LÝ ADSGRAM...';
+                    if (this._adsgramRunning || this._autoAdInFlight) return '⏳ ĐANG XỬ LÝ ADSGRAM...';
                     return '▶️ XEM QC ADSGRAM';
                 },
                 adsgramActionId() {
@@ -4353,12 +4454,15 @@
                     if (typeof result.lifetimeAdsWatched === 'number') this.lifetimeAdsWatched = Number(result.lifetimeAdsWatched);
                     if (typeof result.bonusAdsToday === 'number') this.bonusAdsToday = Number(result.bonusAdsToday);
                     if (result.bonusAdNextAllowedAt != null) this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || 0);
+                    if (result.adsgramManualNextAllowedAt != null) this.adsgramManualNextAllowedAt = Number(result.adsgramManualNextAllowedAt || 0);
+                    if (result.autoAdNextAllowedAt != null) this.autoAdNextAllowedAt = Number(result.autoAdNextAllowedAt || 0);
                     if (result.coins != null) this.coins = Number(result.coins);
                     if (result.orders != null) this.orders = Number(result.orders);
                     if (result.spins != null) this.spins = Number(result.spins);
                     if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
                     if (result.tutorial) this.applyNewUserStatus({tutorial:result.tutorial,spins:result.spins,walletUpdatedAt:result.walletUpdatedAt});
                     this.updateBonusAdCooldown();
+                    this.updateAdsGramManualCooldown();
                 },
                 readPendingAdsGramRecovery() {
                     try {
@@ -4416,25 +4520,35 @@
                         this._adsgramRunning=false;this._adsgramPendingRecovery=false;
                     }
                 },
-                async playAdsGramBonus(format = 'interstitial') {
-                    const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
-                    if (this._adsgramRunning || this._rewardedRunning) return false;
+                async playAdsGramBonus(format = 'interstitial', options = {}) {
+                    const auto = options?.auto === true;
+                    const silent = options?.silent === true;
+                    const normalized = auto ? 'reward' : (String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial');
+                    const purpose = auto ? 'auto-ad' : (normalized === 'interstitial' ? 'adsgram-manual' : 'bonus-task');
+                    if (this._adsgramRunning || this._rewardedRunning || (this._autoAdInFlight && !auto)) return false;
                     if (this.readPendingAdsGramRecovery()) {
-                        await this.reconcilePendingAdsGram();
+                        await this.reconcilePendingAdsGram({silent});
                         return false;
                     }
+
                     this.updateBonusAdCooldown();
+                    this.updateAdsGramManualCooldown();
                     if ((this.bonusAdsToday || 0) >= 15) {
-                        this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily ad limit.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.');
+                        if (!silent) this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily ad limit.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.');
                         return false;
                     }
-                    if (this.bonusAdCooldown > 0) {
-                        this.showNotification(this.bonusAdButtonText());
+                    if (!auto && normalized === 'interstitial' && this.adsgramManualCooldown > 0) {
+                        if (!silent) this.showNotification(this.adsgramButtonText());
                         return false;
                     }
+                    if (!auto && normalized === 'reward' && this.bonusAdCooldown > 0) {
+                        if (!silent) this.showNotification(this.bonusAdButtonText());
+                        return false;
+                    }
+
                     const controller = this.getAdsGramController(normalized);
                     if (!controller || typeof controller.show !== 'function') {
-                        this.showNotification('⚠️ AdsGram chưa sẵn sàng. Vui lòng thử lại sau.');
+                        if (!silent) this.showNotification('⚠️ AdsGram chưa sẵn sàng. Vui lòng thử lại sau.');
                         return false;
                     }
                     const actionId = this.adsgramActionId();
@@ -4450,18 +4564,30 @@
                             try {
                                 startRes = await fetch(`${API_URL}/api/adsgram/session/start`, {
                                     method:'POST', headers:{'Content-Type':'application/json'},
-                                    body:JSON.stringify({userId:this.user.id,format:normalized,blockId,sessionId:this.securitySessionId,actionId})
+                                    body:JSON.stringify({userId:this.user.id,format:normalized,blockId,purpose,sessionId:this.securitySessionId,actionId})
                                 });
                                 startData = await startRes.json().catch(() => ({}));
                             } catch (_) { startRes = null; startData = {success:false,retry:true}; }
                             if (startRes?.ok && startData?.success && startData?.token) break;
                             if (startData?.cooldown) {
-                                this.bonusAdNextAllowedAt = Number(startData.nextAllowedAt || (Date.now()+Number(startData.retryAfterMs||0)) || 0);
-                                this.updateBonusAdCooldown(); this.showNotification(this.bonusAdButtonText()); return false;
+                                const nextAllowedAt = Number(startData.nextAllowedAt || (Date.now()+Number(startData.retryAfterMs||0)) || 0);
+                                if (purpose === 'adsgram-manual') {
+                                    this.adsgramManualNextAllowedAt = nextAllowedAt;
+                                    this.updateAdsGramManualCooldown();
+                                    if (!silent) this.showNotification(this.adsgramButtonText());
+                                } else if (purpose === 'bonus-task') {
+                                    this.bonusAdNextAllowedAt = nextAllowedAt;
+                                    this.updateBonusAdCooldown();
+                                    if (!silent) this.showNotification(this.bonusAdButtonText());
+                                } else {
+                                    this.autoAdNextAllowedAt = nextAllowedAt;
+                                }
+                                return false;
                             }
                             if (startData?.limitReached) {
                                 this.bonusAdsToday = Number(startData.bonusAdsToday ?? this.bonusAdsToday);
-                                this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.'); return false;
+                                if (!silent) this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.');
+                                return false;
                             }
                             if (!(startData?.retry || !startRes || [408,409,429,500,502,503,504].includes(startRes.status))) break;
                             await new Promise(r=>setTimeout(r,250*(attempt+1)));
@@ -4470,8 +4596,7 @@
                         if (!token) throw new Error(startData?.error || 'Không tạo được phiên AdsGram hợp lệ.');
                         this._adsgramActiveToken = token;
 
-                        // AdsGram SDK resolve is the client-side completion signal for the configured block.
-                        // Server still owns wallet, replay protection, cooldown and counters.
+                        // Official AdsGram SDK completion signal only. No timeout/focus/visibility shortcut and no synthetic click.
                         await Promise.resolve(controller.show());
                         sdkCompleted = true;
                         if (this._adsgramActionId !== actionId) return false;
@@ -4487,7 +4612,6 @@
                             } catch (_) { completeRes = null; completeData = {success:false,retry:true}; }
                             if (completeRes?.ok && completeData?.success) break;
                             if (!completeData?.success && completeData?.verified && completeData?.adToken) {
-                                // Same token must be reconciled; never show another ad while server says reward was already verified.
                                 await new Promise(r=>setTimeout(r,Math.min(2200,300*Math.pow(2,attempt))));
                                 continue;
                             }
@@ -4498,8 +4622,9 @@
                         serverCompleted = true;
                         this.clearPendingAdsGramRecovery();
                         this.applyAdsGramBonusResult(completeData);
+
                         const rewardCoins=Number(completeData.rewardCoins||0),rewardOrders=Number(completeData.rewardOrders||0);
-                        this.showNotification(`📺 AdsGram hợp lệ: +${rewardCoins} Coin +${rewardOrders} Đơn Hàng (${this.bonusAdsToday}/15)`);
+                        if (!silent) this.showNotification(`📺 AdsGram hợp lệ: +${rewardCoins} Coin +${rewardOrders} Đơn Hàng (${this.bonusAdsToday}/15)`);
                         this.syncDailyTasksFromServer().catch(()=>false);
                         this.checkReferralNow();
                         this.saveState();
@@ -4510,9 +4635,9 @@
                             fetch(`${API_URL}/api/adsgram/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId})}).catch(()=>{});
                         }
                         if (sdkCompleted && !serverCompleted) {
-                            this.writePendingAdsGramRecovery({token,actionId,sessionId:this.securitySessionId,format:normalized,savedAt:Date.now()});
-                            this.showNotification('⚠️ QC AdsGram đã hoàn tất nhưng máy chủ đang đồng bộ. Lần bấm tiếp theo sẽ đồng bộ đúng phiên này, không cần xem lại QC.');
-                        } else {
+                            this.writePendingAdsGramRecovery({token,actionId,sessionId:this.securitySessionId,format:normalized,purpose,savedAt:Date.now()});
+                            if (!silent) this.showNotification('⚠️ QC AdsGram đã hoàn tất nhưng máy chủ đang đồng bộ. Lần bấm tiếp theo sẽ đồng bộ đúng phiên này, không cần xem lại QC.');
+                        } else if (!silent) {
                             this.showNotification(e?.message || 'QC AdsGram đang hết hoặc lỗi. Vui lòng thử lại sau.');
                         }
                         return false;
@@ -4551,7 +4676,7 @@
                     this.playRewardedAd((result = {}) => {
                         this.bonusAdsToday = Number(result.bonusAdsToday ?? this.bonusAdsToday);
                         this.rewardedAdsToday = Number(result.rewardedAdsToday ?? this.rewardedAdsToday);
-                        this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || (Date.now() + 5 * 60 * 1000));
+                        this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || (Date.now() + BONUS_AD_MANUAL_COOLDOWN_MS));
                         this.updateBonusAdCooldown();
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
@@ -5484,10 +5609,12 @@
                         return false;
                     }
                 },
-                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', purpose = 'generic') {
+                async playRewardedAd(onDone, failMessage = 'QC Đang Hết Hoặc Lỗi, Vui Lòng Thử Lại Sau!!', purpose = 'generic', options = {}) {
                     // Lifecycle quảng cáo và lifecycle nghiệp vụ là 2 bước độc lập:
                     // SDK/verification success không được biến thành "QC lỗi" chỉ vì callback Delivery/Upgrade/X2 lỗi.
-                    if (this._rewardedRunning || this._adsgramRunning) return false;
+                    const autoAd = purpose === 'auto-ad' || options?.auto === true;
+                    const silent = options?.silent === true;
+                    if (this._rewardedRunning || this._adsgramRunning || (this._autoAdInFlight && !autoAd)) return false;
                     this._rewardedRunning = true;
                     const actionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._rewardedActionId = actionId;
@@ -5497,7 +5624,7 @@
                     let adVerified = false;
                     try {
                         if (typeof show_11457064 !== 'function' || window.__adBlockLikely) {
-                            this.showNotification(this.texts.adBlocked || '🚫 Vui lòng tắt trình chặn quảng cáo để nhận thưởng.');
+                            if (!silent) this.showNotification(this.texts.adBlocked || '🚫 Vui lòng tắt trình chặn quảng cáo để nhận thưởng.');
                             return false;
                         }
 
@@ -5549,6 +5676,10 @@
                                 this.updateBonusAdCooldown();
                                 this.showNotification(this.bonusAdButtonText());
                                 return false; // chưa có token -> Monetag SDK tuyệt đối không mở
+                            }
+                            if (purpose === 'auto-ad' && sessionData?.cooldown) {
+                                this.autoAdNextAllowedAt = Number(sessionData.nextAllowedAt || (Date.now() + Number(sessionData.retryAfterMs || 0)) || 0);
+                                return false;
                             }
                             if (purpose === 'bonus-task' && sessionData?.limitReached) {
                                 this.bonusAdsToday = Number(sessionData.bonusAdsToday ?? this.bonusAdsToday);
@@ -5618,14 +5749,18 @@
                         }
 
                         adVerified = true;
-                        this.onAdWatched('rewarded', completeData);
-                        await this.syncDailyTasksFromServer().catch(() => false);
+                        if (purpose === 'auto-ad') {
+                            this.autoAdNextAllowedAt = Number(completeData.autoAdNextAllowedAt || (Date.now() + AUTO_AD_MIN_COOLDOWN_MS));
+                        } else {
+                            this.onAdWatched('rewarded', completeData);
+                            await this.syncDailyTasksFromServer().catch(() => false);
+                        }
                         try {
                             // Không kiểm tra truthy/falsy của return value: callback async trả undefined vẫn là hợp lệ.
                             await Promise.resolve(onDone?.(completeData));
                         } catch (actionError) {
                             console.error('Rewarded action failed after verified ad:', actionError);
-                            this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.');
+                            if (!silent) this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.');
                             return true;
                         }
 
@@ -5643,10 +5778,10 @@
                             }).catch(() => {});
                         }
                         if (adVerified) {
-                            this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác phía máy chủ chưa hoàn tất.');
+                            if (!silent) this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác phía máy chủ chưa hoàn tất.');
                             return true;
                         }
-                        this.showNotification(e?.message || failMessage);
+                        if (!silent) this.showNotification(e?.message || failMessage);
                         return false;
                     } finally {
                         if (this._rewardedActionId === actionId) this._rewardedActionId = '';
