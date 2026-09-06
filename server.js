@@ -893,13 +893,6 @@ const NEW_USER_WELCOME_COINS = 300;
 const NEW_USER_WELCOME_ORDERS = 300;
 const NEW_USER_TUTORIAL_AD_GOAL = 3;
 const NEW_USER_TUTORIAL_SMARTLINK_GOAL = 2;
-const PASSIVE_AD_DAILY_LIMIT = 7;
-const PASSIVE_AD_MIN_COOLDOWN_MS = 3 * 60 * 1000;
-const PASSIVE_AD_MAX_COOLDOWN_MS = 5 * 60 * 1000;
-const PASSIVE_AFTER_MANUAL_MS = 3 * 60 * 1000;
-function randomPassiveCooldownMs() {
-    return PASSIVE_AD_MIN_COOLDOWN_MS + crypto.randomInt(PASSIVE_AD_MAX_COOLDOWN_MS - PASSIVE_AD_MIN_COOLDOWN_MS + 1);
-}
 function newUserFeatureState() {
     return {
         newUserWelcomeEligible: true,
@@ -960,7 +953,7 @@ function parseUserExtraValue(value) {
 }
 
 async function readUserExtraAllFresh() {
-    const { data, error } = await supabase.from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
+    const { data, error } = await (jobMailSupabase || supabase).from('app_settings').select('value').eq('key', USER_EXTRA_KEY).maybeSingle();
     if (error) {
         userExtraLoadHealthy = false;
         throw error;
@@ -1039,7 +1032,7 @@ async function flushUserExtra() {
             }
             let latest = await readUserExtraAllFresh();
             for (const op of opsToFlush) latest = applyUserExtraOp(latest, op);
-            const { error } = await supabase.from('app_settings').upsert({ key:USER_EXTRA_KEY, value:latest }, { onConflict:'key' });
+            const { error } = await (jobMailSupabase || supabase).from('app_settings').upsert({ key:USER_EXTRA_KEY, value:latest }, { onConflict:'key' });
             if (error) {
                 userExtraDirty = true;
                 console.error('Không lưu được user_extra_state:', error.message);
@@ -5875,6 +5868,14 @@ const SMARTLINK_REWARD_ORDERS = 25;
 const SMARTLINK_MIN_ELAPSED_MS = 5000;
 const SMARTLINK_COOLDOWN_MS = 30 * 1000;
 const SMARTLINK_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+async function flushSmartlinkStateWithRetry(maxAttempts = 3) {
+    const attempts = Math.max(1, Math.min(4, Number(maxAttempts || 1)));
+    for (let i = 0; i < attempts; i++) {
+        if (await flushUserExtra()) return true;
+        if (i < attempts - 1) await new Promise(resolve => setTimeout(resolve, 180 * Math.pow(2, i)));
+    }
+    return false;
+}
 const SMARTLINK_MONETAG_POOL = Object.freeze(["https://omg10.com/4/10406572", "https://omg10.com/4/10406571", "https://omg10.com/4/10406596", "https://omg10.com/4/10406591", "https://omg10.com/4/10406568", "https://omg10.com/4/10406576", "https://omg10.com/4/10406590", "https://omg10.com/4/10406566", "https://omg10.com/4/10406574", "https://omg10.com/4/10406589", "https://omg10.com/4/10406570", "https://omg10.com/4/10406586", "https://omg10.com/4/10406538", "https://omg10.com/4/10406567", "https://omg10.com/4/10406588", "https://omg10.com/4/10406587", "https://omg10.com/4/10406592", "https://omg10.com/4/10406575", "https://omg10.com/4/10406598", "https://omg10.com/4/10406577"]);
 function isAllowedSmartlinkUrl(value) {
     try {
@@ -5902,7 +5903,20 @@ app.post('/api/smartlink/start', async (req, res) => {
         const user = await loadCurrentDailyUser(userId);
         if (!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if (user.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-        const count = Math.max(0, Number(user.smartlinksToday || user.smartlinkCount || 0));
+        const count = Math.max(0, Number(user.smartlinksToday ?? user.smartlinkCount ?? 0));
+        const previousAttemptId = String(user.lastSmartlinkAttemptId || '');
+        if (previousAttemptId) {
+            const previousAttempt = await readPersistentEvent(smartlinkAttemptKey(previousAttemptId));
+            if (previousAttempt && String(previousAttempt.userId || '') === userId
+                && previousAttempt.status === 'processing'
+                && (!previousAttempt.expiresAt || Date.now() < Number(previousAttempt.expiresAt))) {
+                return res.status(409).json({
+                    success:false,retry:true,pendingAttempt:true,attemptId:previousAttemptId,
+                    startedAt:Number(previousAttempt.startedAt || Date.now()),expiresAt:Number(previousAttempt.expiresAt || 0),
+                    error:'SmartLink trước đang được đồng bộ. Ứng dụng sẽ khôi phục đúng phiên này.'
+                });
+            }
+        }
         if (count >= SMARTLINK_DAILY_LIMIT) {
             return res.status(429).json({success:false,limitReached:true,smartlinksToday:count,error:'Đã hết 20 lượt SmartLink hôm nay.'});
         }
@@ -6064,7 +6078,7 @@ app.post('/api/smartlink/complete', async (req, res) => {
                     }
                 });
                 if (repair.error) return res.status(409).json({success:false,retry:true,error:repair.error.message});
-                const flushed = await flushUserExtra();
+                const flushed = await flushSmartlinkStateWithRetry();
                 if (!flushed) return res.status(503).json({success:false,retry:true,error:'SmartLink đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại.'});
                 const recovered = await readUserRow(userId);
                 if (!recovered.data) return res.status(503).json({success:false,retry:true,error:'Chưa đọc lại được trạng thái SmartLink.'});
@@ -6111,7 +6125,7 @@ app.post('/api/smartlink/complete', async (req, res) => {
         });
         if (mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
 
-        const flushed = await flushUserExtra();
+        const flushed = await flushSmartlinkStateWithRetry();
         if (!flushed) return res.status(503).json({success:false,retry:true,error:'SmartLink đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại.'});
         let fresh = await readUserRow(userId);
         if (!fresh.data) return res.status(503).json({success:false,retry:true,error:'Chưa đọc lại được trạng thái SmartLink.'});
@@ -6137,7 +6151,7 @@ app.post('/api/smartlink/complete', async (req, res) => {
                 }
             });
             if (repair.error) return res.status(409).json({success:false,retry:true,error:repair.error.message});
-            if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,error:'SmartLink đang đồng bộ trạng thái. Vui lòng thử lại.'});
+            if (!(await flushSmartlinkStateWithRetry())) return res.status(503).json({success:false,retry:true,error:'SmartLink đang đồng bộ trạng thái. Vui lòng thử lại.'});
             fresh = await readUserRow(userId);
             stateCommitted = !!fresh.data && String(fresh.data.lastSmartlinkAttemptId || '') === attemptId
                 && Number(fresh.data.smartlinkCount || 0) >= Number(claim.targetSmartlinkCount)
@@ -10109,7 +10123,7 @@ async function startPromoPostScheduler() {
     promoWatchdogTimer=setInterval(()=>queuePromoReconcile(),PROMO_WATCHDOG_MS);
 }
 
-const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive']);
+const PERSISTENT_AD_ACTION_PURPOSES = new Set(['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin']);
 
 function completedAdEventKey(token) {
     return persistentEventKey('ad-completed', token);
@@ -10185,7 +10199,10 @@ app.post('/api/ad/session/start', async (req, res) => {
         const { userId, adType, purpose, sessionId, actionId, deliveryCaptchaToken } = req.body || {};
         if (!userId || !['rewarded','inapp'].includes(adType)) return res.status(400).json({success:false,error:'Invalid ad session'});
         if (purpose === 'extra-delivery') return res.status(410).json({success:false,limitReached:true,error:'Hệ thống chỉ cho phép tối đa 5 lượt giao hàng/ngày; không còn lượt giao thêm bằng quảng cáo.'});
-        const allowedPurposes = ['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin','passive'];
+        if (String(purpose || '') === 'passive') {
+            return res.status(410).json({success:false,code:'passive_ads_disabled',error:'Automatic fullscreen ads are disabled.'});
+        }
+        const allowedPurposes = ['generic','delivery','x2','truck-upgrade','coinbox','streak-recovery','bonus-task','quiz-unlock','quiz-skip','chest-spin'];
         const sessionPurpose = allowedPurposes.includes(purpose) ? purpose : 'generic';
         const normalizedUserId = String(userId);
         const normalizedActionId = String(actionId || '');
@@ -10280,21 +10297,6 @@ app.post('/api/ad/session/start', async (req, res) => {
                     nextAllowedAt,
                     bonusAdsToday:bonusCount
                 });
-            }
-        }
-        if (sessionPurpose === 'passive') {
-            const passiveUser = await loadCurrentDailyUser(normalizedUserId);
-            if (!passiveUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-            if (passiveUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-            const passiveCount = Math.max(0, Number(passiveUser.passiveAdsToday || 0));
-            if (passiveCount >= PASSIVE_AD_DAILY_LIMIT) {
-                return res.status(429).json({success:false,limitReached:true,passiveAdsToday:passiveCount,limit:PASSIVE_AD_DAILY_LIMIT,error:'Đã đạt giới hạn QC fullscreen tự động hôm nay.'});
-            }
-            const passiveNext = Math.max(0, Number(passiveUser.passiveAdNextAllowedAt || 0));
-            const afterManual = Math.max(0, Number(passiveUser.lastManualRewardedCompletedAt || 0)) + PASSIVE_AFTER_MANUAL_MS;
-            const nextAllowedAt = Math.max(passiveNext, afterManual);
-            if (Date.now() < nextAllowedAt) {
-                return res.status(429).json({success:false,cooldown:true,retryAfterMs:Math.max(1,nextAllowedAt-Date.now()),nextAllowedAt,passiveAdsToday:passiveCount});
             }
         }
 
@@ -10535,6 +10537,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
         }
         const { userId, token, adType, sessionId } = req.body || {};
         const existingCompleted = await loadCompletedAdEvent(String(token));
+        if (existingCompleted?.purpose === 'passive') {
+            await releasePersistentAdSession(String(userId), String(token), 'cancelled').catch(() => false);
+            return res.status(410).json({success:false,code:'passive_ads_disabled',error:'Automatic fullscreen ads are disabled.'});
+        }
         if (existingCompleted && existingCompleted.userId === String(userId) && existingCompleted.adType === adType) {
             if (existingCompleted.completionResult) {
                 const released = await releasePersistentAdSession(String(userId), String(token), 'completed').catch(() => false);
@@ -10571,6 +10577,10 @@ app.post('/api/ad/session/complete', async (req, res) => {
             return res.status(400).json({success:false,error:'Telegram Mini App session không khớp.'});
         }
         const elapsed=Date.now()-s.startedAt; const purpose=s.purpose||'generic';
+        if (purpose === 'passive') {
+            await releasePersistentAdSession(String(userId), String(token), 'cancelled').catch(() => false);
+            return res.status(410).json({success:false,code:'passive_ads_disabled',error:'Automatic fullscreen ads are disabled.'});
+        }
         if (purpose === 'extra-delivery') return res.status(410).json({success:false,limitReached:true,error:'Hệ thống chỉ cho phép tối đa 5 lượt giao hàng/ngày; không còn lượt giao thêm bằng quảng cáo.'});
         let deliveryPersistentKey = null;
         if (purpose === 'delivery') {
@@ -10609,60 +10619,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
             }
         }
         const preRisk=await recordAntiFraudEvent(String(userId),'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
-        if (purpose!=='passive' && preRisk.blockedReward) return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,riskLevel:preRisk.level,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
-        if (purpose==='passive') {
-            let passiveUser = await loadCurrentDailyUser(String(userId));
-            if (!passiveUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
-
-            // Durable reservation first; target counter is absolute, so retry/restart cannot increment twice.
-            const passiveMarkerKey = completedAdEventKey(String(token));
-            let passiveMarker = await readPersistentEvent(passiveMarkerKey);
-            const alreadySameToken = String(passiveUser.lastPassiveAdToken || '') === String(token);
-            if (!passiveMarker || passiveMarker.completionResult) {
-                if (!passiveMarker?.completionResult) {
-                    const count = Math.max(0, Number(passiveUser.passiveAdsToday || 0));
-                    if (!alreadySameToken && count >= PASSIVE_AD_DAILY_LIMIT) {
-                        return res.status(429).json({success:false,limitReached:true,verified:true,adToken:String(token),purpose,passiveAdsToday:count,error:'Đã đạt giới hạn 7 QC fullscreen tự động hôm nay.'});
-                    }
-                    const targetCount = alreadySameToken ? count : count + 1;
-                    const nextAllowedAt = Math.max(Number(passiveUser.passiveAdNextAllowedAt || 0), Date.now() + randomPassiveCooldownMs());
-                    const reservation = {
-                        userId:String(userId),adType,purpose,status:'passive-mutating',completedAt:Date.now(),used:true,passive:true,
-                        targetPassiveAdsToday:targetCount,nextAllowedAt,completionResult:null,expiresAt:Date.now()+30*60*1000
-                    };
-                    const once = await createPersistentEventOnce(passiveMarkerKey,reservation);
-                    if (once.error) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Không lưu được marker QC tự động.'});
-                    passiveMarker = once.value || reservation;
-                }
-            }
-            if (passiveMarker?.completionResult) {
-                await releasePersistentAdSession(String(userId),String(token),'completed').catch(()=>false);
-                return res.json({...passiveMarker.completionResult,idempotent:true,recovered:true});
-            }
-            const targetCount = Math.min(PASSIVE_AD_DAILY_LIMIT, Math.max(1, Number(passiveMarker?.targetPassiveAdsToday || (Number(passiveUser.passiveAdsToday||0)+1))));
-            const nextAllowedAt = Math.max(Date.now(), Number(passiveMarker?.nextAllowedAt || (Date.now()+randomPassiveCooldownMs())));
-            const passiveMutation = await atomicWalletMutation(String(userId), {
-                setFields:{
-                    passiveAdsToday:targetCount,
-                    passiveAdsDayKey:vietnamDayKey(),
-                    passiveAdNextAllowedAt:nextAllowedAt,
-                    lastPassiveAdToken:String(token),
-                    lastResetDate:vietnamDayKey()
-                }
-            });
-            if (passiveMutation.error) return res.status(409).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:passiveMutation.error.message});
-            if (!(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'QC tự động đã xác minh nhưng counter đang đồng bộ.'});
-            passiveUser=(await readUserRow(String(userId))).data || passiveUser;
-            insertRowSafe('ad_events',{user_id:String(userId),ad_type:'rewarded',purpose,status:'passive_success',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
-            const passiveResponse={success:true,adToken:String(token),purpose,passive:true,passiveAdsToday:Number(passiveUser.passiveAdsToday||targetCount),limit:PASSIVE_AD_DAILY_LIMIT,nextAllowedAt:Number(passiveUser.passiveAdNextAllowedAt||nextAllowedAt),elapsed};
-            const passiveCompleted={...passiveMarker,status:'completed',userId:String(userId),adType,purpose,completedAt:Date.now(),used:true,passive:true,completionResult:passiveResponse,expiresAt:Date.now()+30*60*1000};
-            completedAdEvents.set(String(token),passiveCompleted);
-            const completedSaved=await persistCompletedAdEvent(String(token),passiveCompleted,{expiresAt:Date.now()+30*60*1000});
-            const released=await releasePersistentAdSession(String(userId),String(token),'completed');
-            if (!completedSaved || !released) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,passive:true,error:'QC tự động đã hoàn tất nhưng máy chủ đang đồng bộ cleanup. Không cần xem lại quảng cáo.'});
-            setTimeout(()=>completedAdEvents.delete(String(token)),120000);
-            return res.json(passiveResponse);
-        }
+        if (preRisk.blockedReward) return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,riskLevel:preRisk.level,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
         let user=await loadCurrentDailyUser(String(userId)); if(!user) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if (purpose==='delivery') {
             const reserved = await writePersistentEvent(deliveryPersistentKey, {
