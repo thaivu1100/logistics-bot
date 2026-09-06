@@ -6,6 +6,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 const crypto = require('crypto');
+const net = require('net');
 
 function readSecretEnv(name, fallback = '') {
     const raw = String(process.env[name] ?? fallback ?? '').trim();
@@ -19,8 +20,20 @@ function readSecretEnv(name, fallback = '') {
 }
 
 const app = express();
-// Render/other reverse proxies: trust exactly the immediate proxy hop so req.ip is canonicalized by Express.
-app.set('trust proxy', 1);
+// Reverse-proxy trust MUST match the actual deployment. Direct VPS defaults to no trusted proxy so a client
+// cannot spoof X-Forwarded-For. Render defaults to one trusted ingress hop; deployments with nginx/Cloudflare
+// in front can explicitly set TRUST_PROXY_HOPS to the exact hop count.
+const IS_RENDER_RUNTIME = String(process.env.RENDER || '').toLowerCase() === 'true'
+    || !!process.env.RENDER_SERVICE_ID || !!process.env.RENDER_EXTERNAL_URL;
+const TRUST_PROXY_HOPS_RAW = String(process.env.TRUST_PROXY_HOPS || '').trim();
+let TRUST_PROXY_SETTING = false;
+if (/^\d+$/.test(TRUST_PROXY_HOPS_RAW)) {
+    TRUST_PROXY_SETTING = Math.max(0, Math.min(10, Number(TRUST_PROXY_HOPS_RAW)));
+} else if (IS_RENDER_RUNTIME) {
+    TRUST_PROXY_SETTING = 1;
+}
+app.set('trust proxy', TRUST_PROXY_SETTING);
+const TRUST_CF_CONNECTING_IP = /^(1|true|yes)$/i.test(String(process.env.TRUST_CF_CONNECTING_IP || ''));
 app.use(cors());
 app.use(bodyParser.json({ limit: '5mb' })); // Không giới hạn số Gmail theo nghiệp vụ; tăng trần payload để batch lớn không bị chặn ở 100KB mặc định.
 
@@ -1275,6 +1288,7 @@ const BBMKTS_API_TOKEN = readSecretEnv('BBMKTS_API_TOKEN');
 const LAYMA_API_TOKEN = readSecretEnv('LAYMA_API_TOKEN');
 const SITE2S_API_TOKEN = readSecretEnv('SITE2S_API_TOKEN');
 const UPTOLINK_API_TOKEN = readSecretEnv('UPTOLINK_API_TOKEN');
+const NO1SHARE_API_TOKEN = readSecretEnv('NO1SHARE_API_TOKEN');
 const MONETAG_POSTBACK_SECRET = readSecretEnv('MONETAG_POSTBACK_SECRET');
 const MONETAG_ZONE_ID = readSecretEnv('MONETAG_ZONE_ID', '11457064');
 
@@ -1286,12 +1300,15 @@ for (const [provider, envName, configured] of [
     ['BBMKTS', 'BBMKTS_API_TOKEN', !!BBMKTS_API_TOKEN],
     ['LAYMA', 'LAYMA_API_TOKEN', !!LAYMA_API_TOKEN],
     ['UPTOLINK', 'UPTOLINK_API_TOKEN', !!UPTOLINK_API_TOKEN],
-    ['SITE2S', 'SITE2S_API_TOKEN', !!SITE2S_API_TOKEN]
+    ['SITE2S', 'SITE2S_API_TOKEN', !!SITE2S_API_TOKEN],
+    ['NO1SHARE', 'NO1SHARE_API_TOKEN', !!NO1SHARE_API_TOKEN]
 ]) {
     console.log(`${configured ? '✅' : '❌'} LINK TASK ${provider}: ${configured ? 'configured' : `missing ${envName}`}`);
 }
 console.log(`${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} LINK TASK DB: ${SUPABASE_SERVICE_ROLE_KEY ? 'service role configured' : 'missing SUPABASE_SERVICE_ROLE_KEY'}`);
 console.log(`${IP_HASH_SECRET ? '✅' : '❌'} LINK TASK HASH: ${IP_HASH_SECRET ? 'IP hash secret configured' : 'missing IP_HASH_SECRET'}`);
+console.log(`${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE: ${IP_INTELLIGENCE_API_KEY ? 'configured' : 'missing IP_INTELLIGENCE_API_KEY'}`);
+console.log(`🌐 TRUST PROXY: ${TRUST_PROXY_SETTING === false ? 'direct/no proxy' : `${TRUST_PROXY_SETTING} hop(s)`}${TRUST_CF_CONNECTING_IP ? ' + trusted CF-Connecting-IP' : ''}`);
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -1767,7 +1784,7 @@ async function persistOnboardingVerified(userId) {
 function normalizeIpForDuplicateCheck(ip) {
     const value = String(ip ?? '').trim();
     if (!value || /^(chưa có|unknown|null|undefined|n\/a)$/i.test(value)) return '';
-    return value;
+    return normalizePublicRequestIp(value);
 }
 async function checkDuplicateIP(userId, ip) {
     const normalizedIp = normalizeIpForDuplicateCheck(ip);
@@ -1808,14 +1825,62 @@ const antiFraudAlertLocks = new Set();
 function normalizeRequestIp(value) {
     let ip = String(value || '').trim();
     if (!ip) return '';
-    if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+    ip = ip.replace(/^['"]|['"]$/g, '').trim();
+    const bracketed = ip.match(/^\[([^\]]+)\](?::\d+)?$/);
+    if (bracketed) ip = bracketed[1];
+    else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(ip)) ip = ip.replace(/:\d+$/, '');
+    if (ip.toLowerCase().startsWith('::ffff:')) ip = ip.slice(7);
     const zone = ip.indexOf('%');
     if (zone >= 0) ip = ip.slice(0, zone);
-    return ip;
+    ip = ip.trim().toLowerCase();
+    return net.isIP(ip) ? ip : '';
+}
+function isPublicRoutableIp(value) {
+    const ip = normalizeRequestIp(value);
+    const kind = net.isIP(ip);
+    if (!kind) return false;
+    if (kind === 4) {
+        const [a,b,c] = ip.split('.').map(Number);
+        if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+        if (a === 100 && b >= 64 && b <= 127) return false;
+        if (a === 169 && b === 254) return false;
+        if (a === 172 && b >= 16 && b <= 31) return false;
+        if (a === 192 && b === 168) return false;
+        if (a === 192 && b === 0 && c === 0) return false;
+        if (a === 192 && b === 0 && c === 2) return false;
+        if (a === 192 && b === 88 && c === 99) return false;
+        if (a === 198 && (b === 18 || b === 19)) return false;
+        if (a === 198 && b === 51 && c === 100) return false;
+        if (a === 203 && b === 0 && c === 113) return false;
+        return true;
+    }
+    const v6 = ip.toLowerCase();
+    if (v6 === '::' || v6 === '::1') return false;
+    if (/^(fc|fd)/.test(v6)) return false;
+    if (/^fe[89ab]/.test(v6)) return false;
+    if (/^ff/.test(v6)) return false;
+    if (/^2001:db8(?::|$)/.test(v6)) return false;
+    return true;
+}
+function normalizePublicRequestIp(value) {
+    const ip = normalizeRequestIp(value);
+    return isPublicRoutableIp(ip) ? ip : '';
 }
 function requestIp(req) {
-    // Express resolves req.ip through the configured trusted proxy hop. Never accept an IP from req.body.
-    return normalizeRequestIp(req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '');
+    // Never trust an IP sent in JSON/body. Candidate headers are only considered when the deployment itself
+    // says a reverse proxy is trusted. Private proxy addresses (10.x/172.16-31/192.168/CGNAT/etc.) are rejected.
+    const candidates = [];
+    if (TRUST_CF_CONNECTING_IP) candidates.push(req.get('cf-connecting-ip'));
+    candidates.push(req.ip);
+    if (Array.isArray(req.ips)) candidates.push(...req.ips);
+    // Do not parse raw X-Forwarded-For/X-Real-IP here. Express has already applied the configured
+    // trust-proxy boundary to req.ip/req.ips; parsing the raw header again would re-introduce spoofable hops.
+    candidates.push(req.socket?.remoteAddress, req.connection?.remoteAddress);
+    for (const candidate of candidates) {
+        const ip = normalizePublicRequestIp(candidate);
+        if (ip) return ip;
+    }
+    return '';
 }
 function hashNetworkValue(value, purpose = 'ip') {
     if (!IP_HASH_SECRET) return '';
@@ -1893,6 +1958,15 @@ async function checkIpRisk(ip) {
 }
 function networkRiskBlocked(risk) {
     return risk?.isVpn === true || risk?.isProxy === true || risk?.isTor === true || risk?.isHosting === true;
+}
+async function checkLinkTaskStrictNetwork(cfg, ip) {
+    if (!cfg?.requiresStrictNetwork) return {ok:true,risk:null};
+    const canonical = normalizePublicRequestIp(ip);
+    if (!canonical) return {ok:false,status:503,code:'ip_unavailable',error:'Tạm thời chưa xác định được IP công khai cho nhiệm vụ này.'};
+    const risk = await checkIpRisk(canonical);
+    if (!risk?.available) return {ok:false,status:503,code:'ip_intelligence_unavailable',error:'Tạm thời chưa xác minh được VPN/Proxy. Vui lòng thử lại sau.'};
+    if (networkRiskBlocked(risk)) return {ok:false,status:403,code:'network_not_allowed',error:'NO1SHARE không hỗ trợ VPN/Proxy/Tor/Datacenter. Vui lòng dùng mạng thật.'};
+    return {ok:true,risk};
 }
 
 function hashDeviceFingerprint(signals = {}) {
@@ -2276,6 +2350,9 @@ async function recordAntiFraudEvent(userId, eventType, meta = {}) {
             state.session = { id: String(meta.sessionId || ''), startedAt: now, lastHeartbeat: now };
         }
 
+        const canonicalEventIp = normalizePublicRequestIp(meta.ip);
+        if (canonicalEventIp) state.ip = canonicalEventIp;
+
         const payload = meta.device || {};
         if (payload.platform || payload.webView || payload.browser || payload.language || payload.timezone) {
             state.platform = String(payload.platform || state.platform || '');
@@ -2289,7 +2366,7 @@ async function recordAntiFraudEvent(userId, eventType, meta = {}) {
             const newDeviceHash = hashDeviceFingerprint(payload);
             const shouldRefreshDeviceIndex = !state.deviceHash || state.deviceHash !== newDeviceHash;
             state.deviceHash = newDeviceHash;
-            state.ip = String(meta.ip || state.ip || '');
+            if (canonicalEventIp) state.ip = canonicalEventIp;
             if (shouldRefreshDeviceIndex) {
                 const duplicates = await updateAntiFraudDeviceIndex(state.deviceHash, id);
                 state.duplicateDeviceAccounts = duplicates.length;
@@ -3043,6 +3120,24 @@ async function getLatestJobMailSourceIp(userId) {
         return '';
     }
 }
+function withdrawalSourceIpEventKey(withdrawal = {}) {
+    const identity = String(withdrawal.txCode ?? withdrawal.tx_code ?? withdrawal.id ?? '').trim();
+    return identity ? persistentEventKey('withdraw-source-ip', identity) : '';
+}
+async function persistWithdrawalSourceIp(withdrawal, userId, ip) {
+    const key = withdrawalSourceIpEventKey(withdrawal);
+    const canonical = normalizePublicRequestIp(ip);
+    if (!key || !canonical) return false;
+    return writePersistentEvent(key, {userId:String(userId||''),ip:canonical,recordedAt:new Date().toISOString()}, 3);
+}
+async function getStoredWithdrawalSourceIp(withdrawal = {}) {
+    const key = withdrawalSourceIpEventKey(withdrawal);
+    if (!key) return '';
+    try {
+        const event = await readPersistentEvent(key);
+        return normalizePublicRequestIp(event?.ip || '');
+    } catch (_) { return ''; }
+}
 async function rejectJobMailAtomic(mailId, adminId, reason) {
     const reviewedAt = new Date().toISOString();
     const { data, error } = await jobMailDb().from('job_mails')
@@ -3060,25 +3155,10 @@ async function approveJobMailAtomic(mailId, adminId) {
     return data && typeof data === 'object' ? data : { ok:false, code:'invalid_rpc_response' };
 }
 async function duplicateAccountsByReliableIp(userId, ip) {
-    const map = new Map();
-    for (const row of await checkDuplicateIP(String(userId), ip)) map.set(String(row.id), { id:String(row.id), name:row.name || 'User' });
-    if (!ip) return [...map.values()];
-    try {
-        const { data, error } = await jobMailDb().from('job_mails').select('user_id,username').eq('source_ip', ip).neq('user_id', String(userId)).limit(50);
-        if (!error) {
-            const ids = [...new Set((data || []).map(row => String(row.user_id)).filter(Boolean))];
-            const names = new Map();
-            if (ids.length) {
-                const { data:userRows } = await supabase.from('users').select('id,name').in('id', ids);
-                for (const row of userRows || []) names.set(String(row.id), row.name || 'User');
-            }
-            for (const row of data || []) {
-                const id = String(row.user_id);
-                map.set(id, { id, name:names.get(id) || row.username || 'User' });
-            }
-        }
-    } catch (_) {}
-    return [...map.values()].slice(0,20);
+    const canonical = normalizeIpForDuplicateCheck(ip);
+    if (!canonical) return [];
+    const rows = await checkDuplicateIP(String(userId), canonical);
+    return (rows || []).map(row => ({ id:String(row.id), name:row.name || 'User' })).slice(0,50);
 }
 function jobMailAdminSummaryText(stats, availability) {
     const openText = availability?.jobMailOpen ? '🟢 Nhận mail: ĐANG MỞ' : '🔴 Nhận mail: ĐANG ĐÓNG';
@@ -3544,6 +3624,52 @@ bot.command('unban', async (ctx) => {
     if (!targetId) return ctx.reply("❌ Sử dụng: /unban <userId>");
     await touchWallet(targetId, { isBanned: false });
     ctx.reply(`✅ Đã unban user ${targetId}`);
+});
+
+
+// /listban — ADMIN ONLY. Query trực tiếp Supabase để phản ánh toàn bộ user HIỆN isBanned=true.
+bot.command('listban', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+    try {
+        const rows = [];
+        const pageSize = 1000;
+        for (let offset = 0; ; offset += pageSize) {
+            const { data, error } = await supabase.from('users')
+                .select('id,name,orders,coins,ip')
+                .eq('isBanned', true)
+                .order('id', { ascending:true })
+                .range(offset, offset + pageSize - 1);
+            if (error) throw error;
+            rows.push(...(data || []));
+            if (!data || data.length < pageSize) break;
+        }
+        if (!rows.length) return ctx.reply('✅ Hiện không có tài khoản nào đang bị ban.');
+        const entries = rows.map((u, i) => {
+            const ip = normalizeIpForDuplicateCheck(u.ip);
+            return `${i + 1}. 🚫 ID: ${u.id}
+👤 Tên: ${u.name || 'User'}
+📦 Orders: ${Number(u.orders || 0).toLocaleString('vi-VN')}
+🪙 Coin: ${Number(u.coins || 0).toLocaleString('vi-VN')}${ip ? `
+🌐 IP gần nhất: ${ip}` : ''}`;
+        });
+        const pages = [];
+        let current = `🚫 DANH SÁCH USER ĐANG BỊ BAN
+Tổng: ${rows.length.toLocaleString('vi-VN')}
+
+`;
+        for (const entry of entries) {
+            const block = `${entry}\n\n`;
+            if ((current + block).length > 3400) { pages.push(current.trim()); current = block; }
+            else current += block;
+        }
+        if (current.trim()) pages.push(current.trim());
+        for (let i = 0; i < pages.length; i++) await ctx.reply(`${pages[i]}
+
+📄 Trang ${i + 1}/${pages.length}`);
+    } catch (e) {
+        console.error('/listban:', e?.message || e);
+        return ctx.reply('❌ Không thể tải danh sách ban từ Supabase lúc này.');
+    }
 });
 
 // /congcoin
@@ -4128,7 +4254,8 @@ bot.command('linkconfig', async (ctx) => {
         `BBMKTS\nENV: ${envText(!!BBMKTS_API_TOKEN)}\nTASK: ${lockText('bbmkts')}`,
         `LAYMA\nENV: ${envText(!!LAYMA_API_TOKEN)}\nTASK: ${lockText('layma')}`,
         `UPTOLINK\nENV: ${envText(!!UPTOLINK_API_TOKEN)}\nBƯỚC 2: ${lockText('uptolink_step2')}\nBƯỚC 3: ${lockText('uptolink_step3')}\nBƯỚC 4: ${lockText('uptolink_step4')}`,
-        `SITE2S\nENV: ${envText(!!SITE2S_API_TOKEN)}\nTASK: ${lockText('site2s')}`
+        `SITE2S\nENV: ${envText(!!SITE2S_API_TOKEN)}\nTASK: ${lockText('site2s')}`,
+        `NO1SHARE\nENV: ${envText(!!NO1SHARE_API_TOKEN)}\nTASK: ${lockText('no1share')}`
     ];
 
     const db = await checkLinkTaskDatabaseReadiness({force:true}).catch(() => ({
@@ -4145,6 +4272,7 @@ bot.command('linkconfig', async (ctx) => {
         `🔗 LINK TASK CONFIG\n\n${sections.join('\n\n')}\n\n` +
         `${SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'} SUPABASE SERVICE ROLE\n` +
         `${IP_HASH_SECRET ? '✅' : '❌'} IP HASH SECRET\n` +
+        `${IP_INTELLIGENCE_API_KEY ? '✅' : '❌'} IP INTELLIGENCE\n` +
         `🌐 WEB_APP_URL: ${webAppUrlState}\n\n` +
         `🗄 DATABASE\n${tableLine}\n${columnsLine}\n${rewardRpcLine}\n${verifyRpcLine}\n${accessLine}\n\n` +
         'ℹ️ Chỉ hiển thị trạng thái cấu hình/diagnostic an toàn, không hiển thị giá trị secret.'
@@ -4157,12 +4285,12 @@ bot.hears(/^\/(khoanv|mokhoanv)(?:@[A-Za-z0-9_]+)?\s*([A-Za-z0-9._-]*)\s*$/i, as
     const command = String(ctx.match?.[1] || '').toLowerCase();
     const rawName = String(ctx.match?.[2] || '').trim();
     if (!rawName) {
-        return ctx.reply('❌ Sử dụng: /khoanv <TÊN_NHIỆM_VỤ> hoặc /mokhoanv <TÊN_NHIỆM_VỤ>\nVí dụ: /khoanv SITE2S\nHợp lệ: SHRINKPE, CUTY, BBMKTS, LAYMA, UPTOLINK2, UPTOLINK3, UPTOLINK4, SITE2S');
+        return ctx.reply('❌ Sử dụng: /khoanv <TÊN_NHIỆM_VỤ> hoặc /mokhoanv <TÊN_NHIỆM_VỤ>\nVí dụ: /khoanv SITE2S\nHợp lệ: SHRINKPE, CUTY, BBMKTS, LAYMA, UPTOLINK2, UPTOLINK3, UPTOLINK4, SITE2S, NO1SHARE');
     }
     const taskId = normalizeLinkTaskAdminAlias(rawName);
     const cfg = taskId ? LINK_TASK_CONFIG[taskId] : null;
     if (!cfg) {
-        return ctx.reply('❌ Không tìm thấy nhiệm vụ.\nHợp lệ: SHRINKPE, CUTY, BBMKTS, LAYMA, UPTOLINK2, UPTOLINK3, UPTOLINK4, SITE2S');
+        return ctx.reply('❌ Không tìm thấy nhiệm vụ.\nHợp lệ: SHRINKPE, CUTY, BBMKTS, LAYMA, UPTOLINK2, UPTOLINK3, UPTOLINK4, SITE2S, NO1SHARE');
     }
     const shouldLock = command === 'khoanv';
     try {
@@ -4419,7 +4547,7 @@ bot.command('checkID', async (ctx) => {
 
         const [antiFraud, withdrawalsResult, mailStatsResult, lastMailResult, linkTaskStats] = await Promise.all([
             getAntiFraudState(targetId),
-            supabase.from('withdrawals').select('amount,status').eq('userId',targetId),
+            supabase.from('withdrawals').select('id,txCode,amount,status,createdAt').eq('userId',targetId),
             getJobMailUserStats(targetId).catch(() => ({ total:0,pending:0,approved:0,rejected:0,rewardOrders:0 })),
             getLatestJobMailSourceIp(targetId),
             getLinkTaskUserStats(targetId).catch(() => null)
@@ -4431,8 +4559,11 @@ bot.command('checkID', async (ctx) => {
         const totalWithdrawn = withdrawals.filter(w => successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
         const totalCancelled = withdrawals.filter(w => cancelledStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
         const fraudState = antiFraud.state || {};
-        const ip = fraudState.ip || lastMailResult || user.ip || 'Chưa có';
-        const duplicates = ip === 'Chưa có' ? [] : await duplicateAccountsByReliableIp(targetId, ip);
+        const activeIp = normalizeIpForDuplicateCheck(user.ip) || normalizeIpForDuplicateCheck(fraudState.ip) || '';
+        const jobMailIp = normalizeIpForDuplicateCheck(lastMailResult) || '';
+        const latestWithdrawal = [...withdrawals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0))[0] || null;
+        const withdrawalIp = latestWithdrawal ? await getStoredWithdrawalSourceIp(latestWithdrawal) : '';
+        const duplicates = activeIp ? await duplicateAccountsByReliableIp(targetId, activeIp) : [];
         const currentRisk = calculateFraudRisk(fraudState, duplicates.length, Number(fraudState.duplicateDeviceAccounts || 0));
         const riskScore = Math.max(0, Math.min(100, Number(currentRisk.score || fraudState.riskScore || 0)));
         const duplicateText = duplicates.length
@@ -4455,8 +4586,10 @@ bot.command('checkID', async (ctx) => {
             `💸 Tổng tiền đã rút: ${totalWithdrawn.toLocaleString('vi-VN')} VNĐ\n` +
             `❌ Tổng tiền bị hủy: ${totalCancelled.toLocaleString('vi-VN')} VNĐ\n\n` +
             `👥 Bạn bè mời thành công: ${Number(user.validInvites || 0).toLocaleString('vi-VN')}\n\n` +
-            `🌐 IP: ${ip}\n` +
-            `♻️ Trùng IP với:${duplicateText}\n\n` +
+            `🌐 IP gần nhất ghi nhận: ${activeIp || 'Chưa có'}\n` +
+            `📩 IP JOB MAIL gần nhất: ${jobMailIp || 'Chưa có'}\n` +
+            `💸 IP đơn rút gần nhất: ${withdrawalIp || (latestWithdrawal ? 'Chưa lưu IP lúc rút (legacy)' : 'Chưa có')}\n` +
+            `♻️ Trùng IP hoạt động với:${duplicateText}\n\n` +
             `💳 Shared Withdrawal Destination: ${sharedWithdrawal.shared ? 'Có' : 'Không'}${sharedWithdrawal.shared ? `\n👥 Số Telegram account dùng chung: ${sharedWithdrawal.count}\n🆔 ID liên quan: ${sharedWithdrawal.relatedIds.slice(0,5).join(', ')}` : ''}\n\n` +
             `📩 Tổng Mail đã gửi: ${Number(mailStatsResult.total || 0).toLocaleString('vi-VN')}\n` +
             `✅ Mail được duyệt: ${Number(mailStatsResult.approved || 0).toLocaleString('vi-VN')}\n` +
@@ -4585,7 +4718,7 @@ bot.command('huy', async (ctx) => {
 bot.command('donrutall', async (ctx) => {
     if (!isAdmin(ctx)) return;
     
-    const { data, error } = await supabase.from('withdrawals').select('id, userId, amount, ordersAmount, method, accountInfo, bankName, accountName, accountNumber, status, createdAt').eq('status', 'pending').order('createdAt', { ascending: true });
+    const { data, error } = await supabase.from('withdrawals').select('id, txCode, userId, amount, ordersAmount, method, accountInfo, bankName, accountName, accountNumber, status, createdAt').eq('status', 'pending').order('createdAt', { ascending: true });
     if (error) {
         console.error("Lỗi lấy danh sách đơn rút:", error);
         return ctx.reply("❌ Lỗi lấy danh sách đơn rút.");
@@ -4601,14 +4734,14 @@ bot.command('donrutall', async (ctx) => {
             continue;
         }
 
-        const ip = userData?.ip || 'Chưa có';
+        const ip = await getStoredWithdrawalSourceIp(w) || 'Chưa lưu IP lúc rút (legacy)';
         const ordersDeducted = w.ordersAmount || (Math.floor((w.amount || 0) / 1000) * 10000);
         const stkSdt = w.accountNumber || w.accountInfo || 'N/A';
         const chuTK = w.accountName || 'Không có';
         const thoiGian = w.createdAt ? new Date(w.createdAt).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'N/A';
         
         // Check IP trùng
-        const duplicates = await checkDuplicateIP(w.userId, userData?.ip);
+        const duplicates = ip.startsWith('Chưa ') ? [] : await checkDuplicateIP(w.userId, ip);
         const dupText = duplicates.length > 0 ? `\n⚠️ *IP TRÙNG:* ${duplicates.map(d => `${d.name} (${d.id})`).join(', ')}` : '';
         
         msg += `\n🆔 ID: ${w.userId}\n👤 Tên: ${userData?.name || 'N/A'}\n💳 Phương Thức: ${w.method}\n📱 STK/SĐT: ${stkSdt}\n👤 Chủ TK: ${chuTK}\n💰 Số Tiền: ${w.amount.toLocaleString()} VNĐ\n📦 Đơn Hàng Đã Trừ: ${ordersDeducted.toLocaleString()}\n🌐 IP: ${ip}\n🕒 Thời Gian Rút Tiền: ${thoiGian}${dupText}\n---\n`;
@@ -8570,7 +8703,8 @@ const LINK_TASK_CONFIG = Object.freeze({
     uptolink_step2:Object.freeze({key:'uptolink_step2',provider:'UPTOLINK — BƯỚC 2',taskId:'uptolink_step2',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'4'}),
     uptolink_step3:Object.freeze({key:'uptolink_step3',provider:'UPTOLINK — BƯỚC 3',taskId:'uptolink_step3',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'3'}),
     uptolink_step4:Object.freeze({key:'uptolink_step4',provider:'UPTOLINK — BƯỚC 4',taskId:'uptolink_step4',rewardOrders:3000,quotaType:'vietnamDay',maxPerIp:0,maxPerDevice:0,maxPerDeviceIp:3,uptolinkType:'5'}),
-    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:2500,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0})
+    site2s:Object.freeze({key:'site2s',provider:'SITE2S',taskId:'site2s',rewardOrders:2500,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:2,maxPerDeviceIp:0}),
+    no1share:Object.freeze({key:'no1share',provider:'NO1SHARE',taskId:'no1share',rewardOrders:2000,quotaType:'rolling24h',maxPerIp:2,maxPerDevice:0,maxPerDeviceIp:0,requiresStrictNetwork:true,ruleText:'2 View/IP/24h',warning:'Nghiêm cấm VPN, Proxy, Tool Auto hoặc bất kỳ hình thức gian lận nào.'})
 });
 function linkTaskDb(){ return jobMailDb(); }
 const LINK_TASK_ADMIN_LOCK_PREFIX='link_task_admin_lock:';
@@ -8578,7 +8712,7 @@ function linkTaskAdminLockKey(taskId){return `${LINK_TASK_ADMIN_LOCK_PREFIX}${St
 function normalizeLinkTaskAdminAlias(raw){
     const key=String(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
     return ({
-        SHRINKPE:'shrinkpe',CUTY:'cuty',BBMKTS:'bbmkts',LAYMA:'layma',SITE2S:'site2s',
+        SHRINKPE:'shrinkpe',CUTY:'cuty',BBMKTS:'bbmkts',LAYMA:'layma',SITE2S:'site2s',NO1SHARE:'no1share',NO1:'no1share',
         UPTOLINK2:'uptolink_step2',UPTOLINKSTEP2:'uptolink_step2',
         UPTOLINK3:'uptolink_step3',UPTOLINKSTEP3:'uptolink_step3',
         UPTOLINK4:'uptolink_step4',UPTOLINKSTEP4:'uptolink_step4'
@@ -8654,6 +8788,7 @@ function linkTaskProviderConfigured(cfg){
     if(cfg.key==='bbmkts') return !!BBMKTS_API_TOKEN;
     if(cfg.key==='layma') return !!LAYMA_API_TOKEN;
     if(cfg.key==='site2s') return !!SITE2S_API_TOKEN;
+    if(cfg.key==='no1share') return !!NO1SHARE_API_TOKEN;
     if(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4') return !!UPTOLINK_API_TOKEN;
     return false;
 }
@@ -8667,6 +8802,7 @@ function linkTaskUnavailableState(cfg,runtime={}){
     // device_hash trong schema hiện tại cũng dùng cùng secret HMAC, vì vậy Link Task cần secret này ngay cả
     // khi provider chỉ giới hạn theo thiết bị.
     if(!IP_HASH_SECRET) return {code:'missing_ip_hash_secret',message:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'};
+    if(cfg.requiresStrictNetwork && !IP_INTELLIGENCE_API_KEY) return {code:'missing_ip_intelligence',message:'Nhiệm vụ này đang chờ cấu hình hệ thống xác minh VPN/Proxy. Vui lòng thử lại sau.'};
     if(linkTaskNeedsRequestIp(cfg) && runtime.ipAvailable === false) return {code:'ip_unavailable',message:'Tạm thời chưa xác định được IP kết nối cho nhiệm vụ này.'};
     return {code:'',message:''};
 }
@@ -8871,6 +9007,7 @@ async function checkLinkTaskDatabaseReadiness({force=false}={}){
     }
 }
 function linkTaskRuleText(cfg){
+    if(cfg?.ruleText)return String(cfg.ruleText);
     const suffix=cfg.quotaType==='rolling24h'?'/24H':'/ngày';
     const out=[];
     if(cfg.maxPerIp>0) out.push(`${cfg.maxPerIp} lần/IP${suffix}`);
@@ -8888,7 +9025,7 @@ function linkTaskPublicConfig(cfg,remaining=null,latest=null,runtime={}){
     return {
         id:cfg.key,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,
         maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,
-        rule:linkTaskRuleText(cfg),
+        rule:linkTaskRuleText(cfg),warning:String(cfg.warning||''),
         available:!state.message,adminLocked:!!runtime.adminLocked,unavailableCode:state.code||'',unavailableReason:state.message||'',
         remaining:remaining===null?(cfg.maxPerIp||cfg.maxPerDevice||cfg.maxPerDeviceIp||0):Math.max(0,Number(remaining||0)),
         status,shortUrl,expiresAt,rewardedAt:latest?.rewarded_at||null
@@ -8932,7 +9069,7 @@ function validateShortUrl(raw,hosts){
 }
 function safeProviderDiagnostic(error){
     let text=String(error?.message||error||'provider_error');
-    for(const secret of [SHRINKPE_API_TOKEN,CUTY_API_TOKEN,BBMKTS_API_TOKEN,LAYMA_API_TOKEN,SITE2S_API_TOKEN,UPTOLINK_API_TOKEN]){
+    for(const secret of [SHRINKPE_API_TOKEN,CUTY_API_TOKEN,BBMKTS_API_TOKEN,LAYMA_API_TOKEN,SITE2S_API_TOKEN,UPTOLINK_API_TOKEN,NO1SHARE_API_TOKEN]){
         if(secret)text=text.split(secret).join('[REDACTED]');
     }
     text=text.replace(/https?:\/\/[^\s]+/gi,'[URL_REDACTED]').replace(/[\r\n\t]+/g,' ').trim();
@@ -9080,6 +9217,24 @@ async function createProviderShortUrl(cfg,destination,nonce){
         }
         return {shortUrl,slug,baseline};
     }
+    if(cfg.key==='no1share'){
+        const endpoint=new URL('https://taskdaily.app/api/v1/shortlink');
+        const r=await fetchProviderWithRetry(endpoint,{
+            method:'POST',
+            headers:{'X-API-Key':NO1SHARE_API_TOKEN,'Content-Type':'application/json','Accept':'application/json'},
+            body:JSON.stringify({url:destination})
+        },8000,1);
+        const raw=await r.text();
+        let data=null;
+        try{data=raw?JSON.parse(raw):null;}catch(_){data=null;}
+        if(r.status!==201 || data?.success!==true){
+            const providerCode=String(data?.error||data?.code||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,60);
+            throw new Error(`NO1SHARE HTTP ${r.status}${providerCode?` ${providerCode}`:''}`);
+        }
+        const shortUrl=validateShortUrl(data?.shortUrl,['no1share.com']);
+        if(!shortUrl)throw new Error('NO1SHARE invalid short URL');
+        return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
+    }
     throw new Error('Provider chưa được hỗ trợ.');
 }
 async function linkTaskCountFor(cfg,{ipHash='',deviceHash='',userId='',resetAt=null}={}){
@@ -9179,7 +9334,7 @@ function linkTaskAttemptClientPayload(cfg,attempt,{reused=false,processing=false
         task:linkTaskPublicConfig(cfg,null,attempt)
     };
 }
-async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
+async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk=null}){
     const quotaReset=await readLinkTaskQuotaReset(userId).catch(()=>null);
     const quota=await linkTaskCountFor(cfg,{ipHash,deviceHash,userId,resetAt:quotaReset?.resetAt||''});
     if(quota.remaining<=0){
@@ -9195,7 +9350,7 @@ async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
         nonce,user_id:userId,provider:cfg.provider,task_id:cfg.taskId,status:'created',
         reward_orders:cfg.rewardOrders,day_key:vietnamDayKey(),
         issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
-        country_code:null,is_vpn:false,
+        country_code:networkRisk?.countryCode||null,is_vpn:networkRisk?networkRiskBlocked(networkRisk):false,
         created_at:now.toISOString(),expires_at:expiresAt,
         metadata:{
             quotaType:cfg.quotaType,
@@ -9203,6 +9358,7 @@ async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
             maxPerDevice:cfg.maxPerDevice,
             maxPerDeviceIp:cfg.maxPerDeviceIp||0,
             ...(cfg.key==='layma'?{safeProviderFallback:true}:{}),
+            ...(cfg.key==='no1share'?{strictNetworkVerified:true,networkCheckedAt:new Date().toISOString()}:{}),
             ...(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4'
                 ?{uptolinkType:String(cfg.uptolinkType||'')}
                 :{})
@@ -9357,6 +9513,8 @@ app.post('/api/link-task/start',async(req,res)=>{
     const runtime={ipAvailable:!!ip};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
+    const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
+    if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,providerUnavailable:true,code:strictNetwork.code,error:strictNetwork.error});
     const ipHash=ip?hashNetworkValue(ip,'ip'):'',deviceHash=hashNetworkValue(deviceId,'device');
     if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash)return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
 
@@ -9381,7 +9539,7 @@ app.post('/api/link-task/start',async(req,res)=>{
             if(active){const payload=linkTaskAttemptClientPayload(cfg,active,{reused:true});return res.status(payload.creating?202:200).json(payload);}
             // Re-check sau khi có lease: khóa admin bật trong lúc chờ lease không được tạo attempt mới.
             if((await readLinkTaskAdminLock(taskId)).locked)return linkTaskAdminLockedResponse(res);
-            const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
+            const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk:strictNetwork.risk});
             if(!created.ok)return res.status(created.httpStatus||503).json({success:false,providerUnavailable:!!created.providerUnavailable,limitReached:!!created.limitReached,code:created.code||'link_task_error',error:created.error||'Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.'});
             const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
             return res.status(payload.creating?202:200).json(payload);
@@ -9405,6 +9563,8 @@ app.post('/api/link-task/change',async(req,res)=>{
     const runtime={ipAvailable:!!ip};
     const unavailable=linkTaskUnavailableState(cfg,runtime);
     if(unavailable.message)return res.status(503).json({success:false,providerUnavailable:true,code:unavailable.code,error:unavailable.message});
+    const strictNetwork=await checkLinkTaskStrictNetwork(cfg,ip);
+    if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,providerUnavailable:true,code:strictNetwork.code,error:strictNetwork.error});
     const ipHash=ip?hashNetworkValue(ip,'ip'):'',deviceHash=hashNetworkValue(deviceId,'device');
     if((linkTaskNeedsRequestIp(cfg)&&!ipHash)||!deviceHash)return res.status(503).json({success:false,providerUnavailable:true,code:'hash_unavailable',error:'Hệ thống xác minh lượt nhiệm vụ đang được cấu hình. Vui lòng thử lại sau.'});
     const dbReadiness=await checkLinkTaskDatabaseReadiness();
@@ -9432,7 +9592,7 @@ app.post('/api/link-task/change',async(req,res)=>{
                 if(fresh?.status==='rewarded')return res.status(409).json({success:false,code:'already_rewarded',error:'Nhiệm vụ vừa được xác nhận thưởng nên không thể đổi.'});
             }
         }
-        const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash});
+        const created=await createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash,networkRisk:strictNetwork.risk});
         if(!created.ok)return res.status(created.httpStatus||503).json({success:false,providerUnavailable:!!created.providerUnavailable,limitReached:!!created.limitReached,code:created.code||'link_task_error',error:created.error||'Không thể đổi nhiệm vụ vượt link. Vui lòng thử lại sau.'});
         const payload=linkTaskAttemptClientPayload(cfg,created.attempt,{reused:!!created.reused});
         return res.status(payload.creating?202:200).json({...payload,changed:true});
@@ -9544,11 +9704,16 @@ app.get('/api/link-task/landing/:nonce',async(req,res)=>{
         if((linkTaskNeedsRequestIp(cfg)&&!landingIpHash)||!a.device_hash){
             return res.status(503).send('<h2>⚠️ Hệ thống xác minh lượt nhiệm vụ đang tạm thời chưa sẵn sàng.</h2>');
         }
+        const strictNetwork=await checkLinkTaskStrictNetwork(cfg,landingIp);
+        if(!strictNetwork.ok){
+            const status=strictNetwork.status||503;
+            return res.status(status).send(`<h2>🚫 MẠNG KHÔNG ĐỦ ĐIỀU KIỆN</h2><p>${safeHtml(strictNetwork.error)}</p>`);
+        }
         const deviceIpHash=a.device_hash&&landingIpHash?hashNetworkValue(`${a.device_hash}:${landingIpHash}`,'device-ip'):'';
         const nowIso=new Date().toISOString();
         const {data:landed,error:ue}=await db.from('link_task_attempts').update({
             status:'landed',landing_ip_hash:landingIpHash||null,device_ip_hash:deviceIpHash||null,
-            country_code:null,is_vpn:false,landed_at:nowIso
+            country_code:strictNetwork.risk?.countryCode||null,is_vpn:strictNetwork.risk?networkRiskBlocked(strictNetwork.risk):false,landed_at:nowIso
         })
             .eq('id',a.id)
             .in('status',LINK_TASK_ACTIVE_STATUSES)
@@ -9608,6 +9773,9 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
         if(attempt.status!=='landed' && attempt.status!=='rewarded'){
             return res.status(409).json({success:false,code:'not_landed',error:'Chưa ghi nhận hoàn thành quá trình vượt link. Nếu bạn vừa hoàn thành, vui lòng quay lại Mini App và bấm LÀM MỚI.'});
         }
+        const verifyRequestIp=requestIp(req);
+        const strictNetwork=await checkLinkTaskStrictNetwork(cfg,verifyRequestIp);
+        if(!strictNetwork.ok)return res.status(strictNetwork.status||503).json({success:false,code:strictNetwork.code,error:strictNetwork.error});
         const expectedCode=linkTaskVerificationCode(attempt);
         const codeValid=submittedCodeFormatValid && /^\d{6}$/.test(expectedCode) && timingSafeEqualDigits(submittedCode,expectedCode);
         const {data:rpc,error:rpcError}=await db.rpc('link_task_verify_code_atomic',{
@@ -9630,7 +9798,7 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             return res.status(409).json({success:false,code,error:'Chưa thể xác nhận nhiệm vụ. Vui lòng thử lại.'});
         }
         if(!result.idempotent){
-            await recordAntiFraudEvent(userId,'link-task',{rewardEvent:true,orders:Number(result.reward_orders||cfg.rewardOrders)});
+            await recordAntiFraudEvent(userId,'link-task',{rewardEvent:true,orders:Number(result.reward_orders||cfg.rewardOrders),ip:verifyRequestIp,checkDuplicateIp:true});
             logTransaction(userId,'orders',Number(result.reward_orders||cfg.rewardOrders),`Vượt link ${cfg.provider}`);
         }
         const fresh=await readUserRow(userId);
@@ -10189,6 +10357,166 @@ async function releasePersistentAdSession(userId, token, terminalStatus = 'relea
     return ok;
 }
 
+
+// ==================== ADSGRAM — SERVER-AUTHORITATIVE ONE-TIME SESSIONS ====================
+// Blocks are public placement IDs, not secrets. Rewards reuse the existing XEM QC NHẬN THƯỞNG economy:
+// one shared pool (15/day), one shared 5-minute cooldown, random 10–25 Coin + 10–25 Orders.
+const ADSGRAM_INTERSTITIAL_BLOCK_ID = 'int-46420';
+const ADSGRAM_REWARD_BLOCK_ID = '46075';
+const ADSGRAM_SESSION_TTL_MS = 8 * 60 * 1000;
+const ADSGRAM_BONUS_DAILY_LIMIT = 15;
+const ADSGRAM_BONUS_COOLDOWN_MS = 5 * 60 * 1000;
+function adsgramSessionKey(token){return persistentEventKey('adsgram-session',String(token||''));}
+function adsgramCompletedKey(token){return persistentEventKey('adsgram-completed',String(token||''));}
+function adsgramActiveKey(userId){return persistentEventKey('adsgram-active-user',String(userId||''));}
+function adsgramBlockForFormat(format){return String(format||'')==='reward'?ADSGRAM_REWARD_BLOCK_ID:ADSGRAM_INTERSTITIAL_BLOCK_ID;}
+async function releaseAdsgramActive(userId,token,status='released'){
+    const active=await readPersistentEvent(adsgramActiveKey(userId));
+    if(String(active?.token||'')===String(token||'')){
+        await writePersistentEvent(adsgramActiveKey(userId),{...active,status,releasedAt:Date.now(),expiresAt:Date.now()-1},2).catch(()=>false);
+    }
+}
+function adsgramBonusResponseFromUser(user,token,rewardCoins,rewardOrders,format){
+    return {
+        success:true,provider:'adsgram',format:String(format||''),adToken:String(token||''),purpose:'bonus-task',
+        adsToday:Number(user?.adsToday||0),rewardedAdsToday:Number(user?.rewardedAdsToday||0),
+        lifetimeAdsWatched:Number(user?.lifetimeAdsWatched||0),bonusAdsToday:Number(user?.bonusAdsToday||0),
+        bonusAdNextAllowedAt:Number(user?.bonusAdNextAllowedAt||0),rewardCoins:Number(rewardCoins||0),rewardOrders:Number(rewardOrders||0),
+        coins:Number(user?.coins||0),orders:Number(user?.orders||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||null
+    };
+}
+app.post('/api/adsgram/session/start',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    const format=String(req.body?.format||'interstitial').toLowerCase()==='reward'?'reward':'interstitial';
+    const expectedBlock=adsgramBlockForFormat(format);
+    const blockId=String(req.body?.blockId||expectedBlock);
+    if(blockId!==expectedBlock)return res.status(400).json({success:false,code:'invalid_adsgram_block',error:'AdsGram block không hợp lệ.'});
+    const actionId=String(req.body?.actionId||'').slice(0,180),sessionId=String(req.body?.sessionId||'').slice(0,180);
+    if(!actionId)return res.status(400).json({success:false,error:'Thiếu actionId.'});
+    let release=null;
+    try{
+        release=await acquirePersistentLeaseLock(persistentEventKey('ad-start-user-lock',userId),30*1000);
+        if(!release)return res.status(409).json({success:false,retry:true,error:'Đang tạo phiên AdsGram cho tài khoản này.'});
+        const user=await loadCurrentDailyUser(userId);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
+        if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
+        const nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,bonusAdsToday:bonusCount});
+
+        const monetagActive=await readPersistentEvent(persistentEventKey('ad-active-user',userId));
+        if(monetagActive?.status==='active'&&Number(monetagActive.expiresAt||0)>Date.now()){
+            return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo Monetag khác đang được xử lý.'});
+        }
+        const active=await readPersistentEvent(adsgramActiveKey(userId));
+        if(active&&String(active.status||'')==='active'&&Number(active.expiresAt||0)>Date.now()){
+            const oldSession=await readPersistentEvent(adsgramSessionKey(active.token));
+            if(oldSession&&String(oldSession.actionId||'')===actionId&&String(oldSession.format||'')===format){
+                return res.json({success:true,token:String(active.token),blockId:expectedBlock,format,idempotent:true,recovered:true});
+            }
+            return res.status(409).json({success:false,retry:true,active:true,error:'Một phiên AdsGram khác đang hoạt động.'});
+        }
+        const token=crypto.randomBytes(24).toString('base64url');
+        const startedAt=Date.now(),expiresAt=startedAt+ADSGRAM_SESSION_TTL_MS;
+        const session={status:'started',userId,token,blockId:expectedBlock,format,purpose:'bonus-task',actionId,sessionId,startedAt,expiresAt};
+        if(!(await writePersistentEvent(adsgramSessionKey(token),session,3)))return res.status(503).json({success:false,retry:true,error:'Không lưu được phiên AdsGram.'});
+        if(!(await writePersistentEvent(adsgramActiveKey(userId),{status:'active',userId,token,actionId,format,startedAt,expiresAt},3))){
+            await writePersistentEvent(adsgramSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},1).catch(()=>false);
+            return res.status(503).json({success:false,retry:true,error:'Không khóa được phiên AdsGram.'});
+        }
+        return res.json({success:true,token,blockId:expectedBlock,format});
+    }catch(e){
+        console.error('AdsGram session start:',e?.message||e);
+        return res.status(503).json({success:false,retry:true,error:'Không tạo được phiên AdsGram. Vui lòng thử lại.'});
+    }finally{if(release){try{await release();}catch(_){}}}
+});
+app.post('/api/adsgram/session/cancel',async(req,res)=>{
+    const userId=String(req.body?.userId||''),token=String(req.body?.token||''),actionId=String(req.body?.actionId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!token)return res.status(400).json({success:false,error:'Thiếu token.'});
+    try{
+        const completed=await readPersistentEvent(adsgramCompletedKey(token));
+        if(completed?.result){await releaseAdsgramActive(userId,token,'completed');return res.json({success:true,alreadyCompleted:true});}
+        const session=await readPersistentEvent(adsgramSessionKey(token));
+        if(!session||String(session.userId||'')!==userId)return res.json({success:true,alreadyGone:true});
+        if(actionId&&session.actionId&&String(session.actionId)!==actionId)return res.status(400).json({success:false,error:'Action AdsGram không khớp.'});
+        await writePersistentEvent(adsgramSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},2);
+        await releaseAdsgramActive(userId,token,'cancelled');
+        return res.json({success:true,cancelled:true});
+    }catch(e){return res.status(503).json({success:false,retry:true,error:'Không cleanup được phiên AdsGram.'});}
+});
+app.post('/api/adsgram/session/complete',async(req,res)=>{
+    const userId=String(req.body?.userId||''),token=String(req.body?.token||''),actionId=String(req.body?.actionId||''),sessionId=String(req.body?.sessionId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    if(!token)return res.status(400).json({success:false,error:'Thiếu token AdsGram.'});
+    let release=null;
+    try{
+        release=await acquirePersistentLeaseLock(persistentEventKey('ad-complete-user-lock',userId),60*1000);
+        if(!release)return res.status(409).json({success:false,retry:true,error:'Lượt AdsGram đang được xử lý.'});
+        const completed=await readPersistentEvent(adsgramCompletedKey(token));
+        if(completed?.result&&String(completed.userId||'')===userId){await releaseAdsgramActive(userId,token,'completed');return res.json({...completed.result,idempotent:true});}
+        const session=await readPersistentEvent(adsgramSessionKey(token));
+        if(!session||String(session.userId||'')!==userId||String(session.status||'')!=='started')return res.status(400).json({success:false,error:'Phiên AdsGram không hợp lệ.'});
+        if(Number(session.expiresAt||0)<=Date.now()){
+            await writePersistentEvent(adsgramSessionKey(token),{...session,status:'expired',expiresAt:Date.now()-1},1).catch(()=>false);
+            await releaseAdsgramActive(userId,token,'expired');
+            return res.status(410).json({success:false,expired:true,error:'Phiên AdsGram đã hết hạn.'});
+        }
+        if(session.actionId&&String(session.actionId)!==actionId)return res.status(400).json({success:false,error:'Action AdsGram không khớp.'});
+        if(session.sessionId&&String(session.sessionId)!==sessionId)return res.status(400).json({success:false,error:'Telegram Mini App session không khớp.'});
+        const elapsed=Date.now()-Number(session.startedAt||Date.now());
+        if(elapsed<700)return res.status(400).json({success:false,tooEarly:true,error:'Quảng cáo kết thúc quá nhanh để ghi nhận.'});
+
+        let user=await loadCurrentDailyUser(userId);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        if(String(user.lastBonusAdToken||'')===token){
+            const fresh=await readUserRow(userId);const recovered=fresh.data||user;
+            const result=adsgramBonusResponseFromUser(recovered,token,Number(recovered.lastBonusRewardCoins||0),Number(recovered.lastBonusRewardOrders||0),session.format);
+            await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt:Date.now(),result},3);
+            await releaseAdsgramActive(userId,token,'completed');
+            return res.json({...result,idempotent:true,recovered:true});
+        }
+        const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
+        if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
+        const nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,error:'Đang trong thời gian chờ lượt QC tiếp theo.'});
+        const preRisk=await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});
+        if(preRisk.blockedReward)return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
+        const rewardCoins=crypto.randomInt(10,26),rewardOrders=crypto.randomInt(10,26);
+        const now=Date.now();
+        const updateFields={
+            adsToday:Number(user.adsToday||0)+1,
+            rewardedAdsToday:Number(user.rewardedAdsToday||0)+(String(session.format)==='reward'?1:0),
+            lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,
+            bonusAdsToday:bonusCount+1,bonusAdNextAllowedAt:now+ADSGRAM_BONUS_COOLDOWN_MS,
+            lastBonusAdToken:token,lastBonusRewardCoins:rewardCoins,lastBonusRewardOrders:rewardOrders,lastBonusClicked:false,lastBonusAdProvider:'adsgram',lastResetDate:vietnamDayKey()
+        };
+        const mutation=await atomicWalletMutation(userId,{deltaCoins:rewardCoins,deltaOrders:rewardOrders,setFields:updateFields});
+        if(mutation.error)return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        if(!(await flushUserExtra()))return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'AdsGram đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại, không cần xem lại QC.'});
+        const fresh=await readUserRow(userId);const out=fresh.data||{};
+        const result=adsgramBonusResponseFromUser(out,token,rewardCoins,rewardOrders,session.format);
+        const saved=await writePersistentEvent(adsgramCompletedKey(token),{status:'completed',userId,token,completedAt:Date.now(),result},3);
+        if(!saved)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward AdsGram đã commit nhưng marker đang đồng bộ. Vui lòng thử lại, không cần xem lại QC.'});
+        await writePersistentEvent(adsgramSessionKey(token),{...session,status:'completed',completedAt:Date.now()},2).catch(()=>false);
+        await releaseAdsgramActive(userId,token,'completed');
+        await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,sessionId,purpose:'adsgram-bonus'}).catch(()=>{});
+        logTransaction(userId,'coin',rewardCoins,'Xem 1 QC AdsGram hợp lệ');
+        logTransaction(userId,'orders',rewardOrders,'Xem 1 QC AdsGram hợp lệ');
+        try{await tryFinalizeReferral(userId);}catch(_){}
+        try{result.tutorial=await maybeCompleteNewUserTutorial(userId);}catch(_){}
+        return res.json(result);
+    }catch(e){
+        console.error('AdsGram session complete:',e?.message||e);
+        return res.status(503).json({success:false,retry:true,error:'Không hoàn tất được AdsGram. Vui lòng thử lại.'});
+    }finally{if(release){try{await release();}catch(_){}}}
+});
+
 app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -10322,6 +10650,11 @@ app.post('/api/ad/session/start', async (req, res) => {
                     return res.status(429).json({success:false,limitReached:true,error:'Đã xem đủ 3 quảng cáo nhận thêm lượt giao hôm nay.'});
                 }
             }
+        }
+
+        const adsgramActive=await readPersistentEvent(adsgramActiveKey(normalizedUserId));
+        if(adsgramActive?.status==='active'&&Number(adsgramActive.expiresAt||0)>Date.now()){
+            return res.status(409).json({success:false,retry:true,active:true,error:'Đang có một quảng cáo AdsGram được xử lý cho tài khoản này.'});
         }
 
         let existingToken = activeAdByUser.get(normalizedUserId);
@@ -11176,6 +11509,11 @@ app.post('/api/withdraw', async (req, res) => {
                 await restoreCaptchaReservation();
             }
             throw withdrawInsertError;
+        }
+        const withdrawalRequestIp = requestIp(req);
+        if (withdrawalRequestIp) {
+            const ipSaved = await persistWithdrawalSourceIp({txCode}, userId, withdrawalRequestIp).catch(() => false);
+            if (!ipSaved) console.warn(`⚠️ Không persist được IP event của đơn rút #${txCode}.`);
         }
         logTransaction(userId, 'orders', -ordersAmount, `Rút tiền #${txCode} (${amountVnd.toLocaleString()} VNĐ)`);
 
