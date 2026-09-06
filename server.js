@@ -9595,7 +9595,7 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             .eq('user_id',userId).eq('task_id',taskId)
             .order('created_at',{ascending:false}).limit(1).maybeSingle();
         if(attemptError)throw attemptError;
-        if(!attempt)return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+        if(!attempt)return res.status(409).json({success:false,code:'not_landed',error:'Chưa ghi nhận hoàn thành quá trình vượt link. Nếu bạn vừa hoàn thành, vui lòng quay lại Mini App và bấm LÀM MỚI.'});
         if(attempt.status==='cancelled'){
             return res.status(410).json({success:false,code:'cancelled',error:'Nhiệm vụ này đã bị hủy. Mã/link cũ không còn được tính.'});
         }
@@ -9606,7 +9606,7 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             return res.status(410).json({success:false,code:'expired',error:'Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.'});
         }
         if(attempt.status!=='landed' && attempt.status!=='rewarded'){
-            return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+            return res.status(409).json({success:false,code:'not_landed',error:'Chưa ghi nhận hoàn thành quá trình vượt link. Nếu bạn vừa hoàn thành, vui lòng quay lại Mini App và bấm LÀM MỚI.'});
         }
         const expectedCode=linkTaskVerificationCode(attempt);
         const codeValid=submittedCodeFormatValid && /^\d{6}$/.test(expectedCode) && timingSafeEqualDigits(submittedCode,expectedCode);
@@ -9622,7 +9622,7 @@ app.post('/api/link-task/verify-code',async(req,res)=>{
             if(code==='code_cooldown')return res.status(429).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.'});
             if(code==='invalid_code')return res.status(400).json({success:false,cooldown:true,code,retryAfterMs:Math.max(1,Number(result?.retry_after_ms||LINK_TASK_CODE_COOLDOWN_MS)),error:'Mã xác nhận không đúng.'});
             if(code==='expired')return res.status(410).json({success:false,code,error:'Nhiệm vụ đã hết thời gian 10 phút. Vui lòng nhận nhiệm vụ mới.'});
-            if(code==='not_landed'||code==='not_found')return res.status(409).json({success:false,code:'not_landed',error:'Chưa xác nhận hoàn thành quá trình vượt link.'});
+            if(code==='not_landed'||code==='not_found')return res.status(409).json({success:false,code:'not_landed',error:'Chưa ghi nhận hoàn thành quá trình vượt link. Nếu bạn vừa hoàn thành, vui lòng quay lại Mini App và bấm LÀM MỚI.'});
             if(code==='wrong_user')return res.status(403).json({success:false,code,error:'Mã xác nhận không thuộc tài khoản này.'});
             if(code==='ip_limit')return res.status(429).json({success:false,code,error:'IP này đã hết lượt nhận thưởng cho nhiệm vụ.'});
             if(code==='device_limit')return res.status(429).json({success:false,code,error:'Thiết bị này đã hết lượt nhận thưởng cho nhiệm vụ.'});
