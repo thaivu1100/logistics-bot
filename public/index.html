@@ -17,7 +17,7 @@
         if (window.NATIONAL_DAY_THEME_ENABLED) document.documentElement.classList.add('national-day-theme');
         // ===== TEMP NATIONAL DAY 02/09 END =====
     </script>
-    <!-- Rewarded Interstitial uses the existing zone 11457064. Passive fullscreen uses the same flow. -->
+    <!-- Rewarded Interstitial uses the existing zone 11457064 for user-initiated rewarded actions. -->
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
     <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
@@ -1237,7 +1237,7 @@
                         <span class="text-yellow-300 font-black" x-text="texts.smartlinkRewardLabel"></span>
                         <span class="text-slate-400" x-text="smartlinkRemaining > 0 ? (texts.smartlinkRemainingLabel + ' ' + smartlinkRemaining) : texts.smartlinkLimitReached"></span>
                     </div>
-                    <button @click="startSmartlink()" :disabled="smartlinkRemaining <= 0 || smartlinkCooldown > 0 || !!smartlinkStartTime || _smartlinkSaving"
+                    <button @click="startSmartlink()" :disabled="smartlinkRemaining <= 0 || _smartlinkSaving || (!smartlinkAttemptId && smartlinkCooldown > 0)"
                         class="w-full py-2.5 rounded-2xl bg-blue-600 text-white font-black text-[10px] uppercase tracking-wide shadow-lg shadow-blue-600/20 btn-text disabled:opacity-40">
                         <span x-text="smartlinkButtonText()"></span>
                     </button>
@@ -1938,15 +1938,9 @@
         const BOT_USERNAME = 'KhoHangKiemtien_Bot';
         // SmartLink URL is server-authoritative; frontend never rotates providers.
 
-        // ==================== MONETAG PASSIVE FULLSCREEN REWARDED ====================
-        // Passive fullscreen chỉ dùng CÙNG Rewarded Interstitial zone hiện tại.
-        // Không trao Coin/Đơn Hàng/lượt giao/lượt rương và không bypass xác thực SDK/server.
-        function nextPassiveAdCooldown() {
-            return (180 + Math.random() * 120) * 1000; // random 3-5 phút
-        }
-        function nextPassiveTabThreshold() {
-            return 5 + Math.floor(Math.random() * 3); // random 5-7 lần chuyển mục
-        }
+        // ==================== UI CRITICAL-ACTION GUARD ====================
+        // Shared UI guard used by non-ad features (for example the timed coin box).
+        // Automatic/passive fullscreen Rewarded has been removed completely.
         function isCriticalActionActive() {
             try {
                 const data = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
@@ -1974,85 +1968,6 @@
                 );
             } catch (_) { return true; }
         }
-
-
-        let passiveTabThreshold = nextPassiveTabThreshold();
-        const passiveAdAppOpenedAt = Date.now();
-        let passiveAdCooldown = nextPassiveAdCooldown();
-        let passiveAdLastShown = 0;
-        let passiveAdInFlight = false;
-        let passiveAdRetryTimer = null;
-        let passiveTabCount = 0;
-        let passiveWasHidden = false;
-
-        window.notePassiveAdSuppression = function () {
-            passiveAdLastShown = Date.now();
-            passiveAdCooldown = nextPassiveAdCooldown();
-            passiveTabThreshold = nextPassiveTabThreshold();
-            passiveTabCount = 0;
-        };
-
-        async function showPassiveAdRandom() {
-            const now = Date.now();
-            if (passiveAdInFlight) return false;
-            if (passiveTabCount < passiveTabThreshold) return false;
-            if (now - passiveAdAppOpenedAt < 1500) return false;
-            if (now - passiveAdLastShown < passiveAdCooldown) return false;
-            if (isCriticalActionActive()) return false;
-
-            passiveAdInFlight = true;
-            try {
-                const appData = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
-                if (!appData || appData._rewardedRunning || isCriticalActionActive()) return false;
-                const ok = await appData.playRewardedAd(
-                    async () => {},
-                    'Quảng cáo tự động không thể hiển thị. Vui lòng thử lại sau.',
-                    'passive'
-                );
-                if (ok) {
-                    passiveAdLastShown = Date.now();
-                    passiveAdCooldown = nextPassiveAdCooldown();
-                    passiveTabThreshold = nextPassiveTabThreshold();
-                    passiveTabCount = 0;
-                }
-                return !!ok;
-            } catch (e) {
-                console.warn('Passive rewarded error', e);
-                return false;
-            } finally {
-                passiveAdInFlight = false;
-                try {
-                    const appData = (window.Alpine && document.body) ? window.Alpine.$data(document.body) : null;
-                    if (appData) appData._autoRewardedPending = false;
-                } catch (_) {}
-                if (passiveAdRetryTimer) clearTimeout(passiveAdRetryTimer);
-                passiveAdRetryTimer = null;
-            }
-        }
-
-        function schedulePassiveAdCheck(delay = 1200) {
-            if (passiveAdRetryTimer) return;
-            passiveAdRetryTimer = setTimeout(() => {
-                passiveAdRetryTimer = null;
-                showPassiveAdRandom().catch(() => {});
-            }, delay);
-        }
-
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) { passiveWasHidden = true; return; }
-            // Foreground return never counts as a menu/tab transition. It only retries if the real tab threshold was already met.
-            if (passiveWasHidden) {
-                passiveWasHidden = false;
-                if (passiveTabCount >= passiveTabThreshold) schedulePassiveAdCheck(1200);
-            }
-        });
-
-        window.addEventListener('focus', () => {
-            if (passiveWasHidden && !document.hidden) {
-                passiveWasHidden = false;
-                if (passiveTabCount >= passiveTabThreshold) schedulePassiveAdCheck(1200);
-            }
-        });
 
         const translations = {
             vi: {
@@ -2113,7 +2028,6 @@
                 extraDeliveryTitle: '🚚 Đã giao đủ 10/10 hôm nay', extraDeliveryDesc: '📺 Xem quảng cáo để nhận thêm lượt giao', watched: 'Đã xem', remainingAds: 'Còn', deliveriesToday: 'Lượt giao hiện tại', adsUnit: 'quảng cáo', deliveryUnit: 'lượt giao',
                 streakTitle: '🔥 Chuỗi điểm danh', streakDesc: 'Điểm danh chủ động mỗi ngày để nhận thưởng', streakCheckin: '✅ Điểm danh hôm nay', streakChecked: '✅ Đã điểm danh', streakRecover: '🔄 Khôi phục chuỗi bằng quảng cáo', streakMissed: '⚠️ Bạn đã bỏ lỡ ngày này', streakDay: 'Ngày', streakReceived: 'Đã nhận', streakToday: 'Hôm nay', streakLocked: 'Chưa đến', streakRecoveryDone: 'Chuỗi đã được khôi phục.',
                 allTasksBonus: '🎉 Hoàn thành tất cả nhiệm vụ', allTasksBonusDesc: 'Thưởng thêm +1.000 Coin +500 Đơn Hàng +2 lượt mở rương', noTasksYet: 'Đang tải nhiệm vụ...', walletType: '💳 Ví điện tử', chooseWallet: 'Chọn ví', bankSelect: 'Chọn ngân hàng', optionalLegacyBank: 'Ngân hàng hỗ trợ', accountNumberNumeric: 'Số tài khoản chỉ được nhập số', walletPhoneNumeric: 'Số điện thoại ví chỉ được nhập số',
-                passiveAdMessage: 'Quảng cáo tự động không thể hiển thị. Vui lòng thử lại sau.',
                 quizCorrect: 'Đúng', quizWrong: 'Sai', quizSkip: 'Bỏ qua', quizFree: 'Trả lời câu miễn phí', quizMore: 'Thêm câu hỏi', quizAnswerNow: 'Đang có câu hỏi - trả lời ngay!',
                 adError: 'Không thể hoàn tất quảng cáo Rewarded. Vui lòng thử lại.', deliveryLimitReached: '🚫 Hôm nay bạn đã sử dụng đủ 5/5 lượt giao hàng. Hãy quay lại vào ngày mai.',
                 captchaWithdraw:'XÁC MINH RÚT TIỀN', captchaDelivery:'XÁC MINH GIAO HÀNG', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Đang vận chuyển đơn hàng đến nhà...', deliveryLoading:'📦 Đang xếp hàng lên xe...', chestFreeSpins:'Lượt Mở Rương miễn phí: ', chestOpenUnit:'Lượt mở rương', inviteUnit:'bạn', musicPlaying:'Đang phát - ', musicLoop:' bài lặp lại tuần tự', musicOff:'Đã tắt', musicOn:'🔊 BẬT', musicOffButton:'🔇 TẮT', vndUnit:'VNĐ', remainingWord:'còn lại',
@@ -2190,7 +2104,6 @@
                 extraDeliveryTitle: '🚚 10/10 deliveries completed today', extraDeliveryDesc: '📺 Watch an ad to get more delivery attempts', watched: 'Watched', remainingAds: 'Remaining', deliveriesToday: 'Current deliveries', adsUnit: 'ads', deliveryUnit: 'deliveries',
                 streakTitle: '🔥 Check-in Streak', streakDesc: 'Check in manually every day to claim rewards', streakCheckin: '✅ Check in today', streakChecked: '✅ Checked in', streakRecover: '🔄 Recover streak with an ad', streakMissed: '⚠️ You missed this day', streakDay: 'Day', streakReceived: 'Claimed', streakToday: 'Today', streakLocked: 'Locked', streakRecoveryDone: 'Streak recovered.',
                 allTasksBonus: '🎉 Complete all tasks', allTasksBonusDesc: 'Bonus +1,000 Coin +500 Orders +2 chest opens', noTasksYet: 'Loading tasks...', walletType: '💳 E-Wallet', chooseWallet: 'Choose wallet', bankSelect: 'Choose a bank', optionalLegacyBank: 'Supported bank', accountNumberNumeric: 'Account number must contain digits only', walletPhoneNumeric: 'Wallet phone must contain digits only',
-                passiveAdMessage: 'Automatic ad could not be shown. Please try again later.',
                 quizCorrect: 'Correct', quizWrong: 'Wrong', quizSkip: 'Skip', quizFree: 'Answer free question', quizMore: 'More questions', quizAnswerNow: 'A question is ready - answer now!',
                 adError: 'Could not complete the Rewarded ad. Please try again.', deliveryLimitReached: 'You have used all available delivery attempts today.',
                 captchaWithdraw:'VERIFY WITHDRAWAL', captchaDelivery:'VERIFY DELIVERY', captchaCodePlaceholder:'Enter code...', deliveryDriving:'🚛 Delivering orders to the customer...', deliveryLoading:'📦 Loading goods onto the truck...', chestFreeSpins:'Free chest opens: ', chestOpenUnit:'Chest opens', inviteUnit:'friends', musicPlaying:'Playing - ', musicLoop:' tracks in sequence', musicOff:'Off', musicOn:'🔊 ON', musicOffButton:'🔇 OFF', vndUnit:'VND', remainingWord:'remaining',
@@ -2403,7 +2316,6 @@
                 ],
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 5,
                 lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
-                passiveAdsToday:0, passiveAdNextAllowedAt:0,
                 newUserWelcome:{eligible:false,claimed:false},
                 newUserTutorial:{eligible:false,ads:0,adGoal:3,smartlinks:0,smartlinkGoal:2,completed:false,rewardClaimed:false},
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
@@ -2413,7 +2325,6 @@
                 withdrawWalletType: 'momo', withdrawSubmitting: false, upgradeSubmitting: false, giftcodeSubmitting: false,
                 graphicsMode: localStorage.getItem('graphicsMode') === 'fixlag' ? 'fixlag' : 'fullhd',
                 securitySessionId: '', securityRiskScore: 0, securityRiskLevel: 'LOW',
-                _tabSwitchCount: 0, _autoRewardedCooldownUntil: 0, _autoRewardedPending: false,
                 fraudClickIntervals: [], lastSecurityClickAt: 0, securityHeartbeatTimer: null,
                 antiFraudInstallId: '',
                 spinAdProgress: 0, clickTimestamps: [],
@@ -2435,7 +2346,7 @@
                 smartlinkCount:0, lastSmartlinkTime:0,
                 groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
-                smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, tick: 0, coinBoxCountdown: '2 giờ',
+                smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, _smartlinkReconcileTimer: null, _smartlinkReconcileAttempts: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
                 isSpinning: false, notification: { show: false, text: '' }, showDeliveryAnimation: false,
                 isTruckMoving: false, isShaking: false, isOpened: false, texts: translations.vi,
@@ -2574,8 +2485,6 @@
                         this.newUserTutorial={...this.newUserTutorial,...tutorial};
                     }
                     if (welcome && typeof welcome==='object') this.newUserWelcome={...this.newUserWelcome,...welcome};
-                    if (typeof payload.passiveAdsToday==='number') this.passiveAdsToday=Number(payload.passiveAdsToday);
-                    if (payload.passiveAdNextAllowedAt!==undefined) this.passiveAdNextAllowedAt=Number(payload.passiveAdNextAllowedAt||0);
                     if (typeof payload.coins==='number') this.coins=Number(payload.coins);
                     if (typeof payload.orders==='number') this.orders=Number(payload.orders);
                     if (typeof payload.spins==='number') this.spinFree=Number(payload.spins);
@@ -2923,8 +2832,6 @@
                             this.bonusAdsToday = data.bonusAdsToday || 0;
                             this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0);
                             this.updateBonusAdCooldown();
-                            this.passiveAdsToday = Number(data.passiveAdsToday || 0);
-                            this.passiveAdNextAllowedAt = Number(data.passiveAdNextAllowedAt || 0);
                             this.applyNewUserStatus({newUserWelcome:data.newUserWelcome,newUserTutorial:data.newUserTutorial});
                             this.rewardedAdsToday = data.rewardedAdsToday || 0;
                             this.extraDeliveryAdsToday = data.extraDeliveryAdsToday || 0;
@@ -3046,6 +2953,13 @@
                         if (this.smartlinkAttemptId) this.handleSmartlinkReturn();
                         if (this.tab === 'tasks') this.syncLinkTasks().catch(() => {});
                     });
+                    if (this.smartlinkAttemptId) {
+                        const pendingAge = Math.max(0, Date.now() - Number(this.smartlinkStartTime || 0));
+                        const reconcileDelay = Math.max(350, 5200 - pendingAge);
+                        setTimeout(() => {
+                            if (this.smartlinkAttemptId) this.handleSmartlinkReturn(true).catch(() => {});
+                        }, reconcileDelay);
+                    }
                     
                     // Chống spam: click quá 5 lần trong 3 giây trên cùng 1 nút sẽ bị chặn + cảnh báo
                     document.addEventListener('click', (e) => {
@@ -3083,10 +2997,6 @@
                         this.saveState();
                         if (nextTab === 'tasks') { this.syncDailyTasksFromServer().catch(() => {}); this.syncLinkTasks().catch(() => {}); }
                         if (nextTab === 'jobmail') this.loadJobMail(1).catch(() => {});
-                        if (previousTab && nextTab !== previousTab) {
-                            passiveTabCount += 1;
-                            schedulePassiveAdCheck(650);
-                        }
                     });
                     if (this._uiSecondTimer) clearInterval(this._uiSecondTimer);
                     this._uiSecondTimer = setInterval(() => {
@@ -3132,18 +3042,10 @@
                     // đăng ký cả visibilitychange + pagehide + beforeunload vì mỗi WebView Telegram
                     // bắn khác nhau 1 trong các sự kiện này.
                     const flushSave = () => { this.saveState(); };
-                    const cancelPassiveOnExit = () => {
-                        if (this._rewardedPurpose !== 'passive' || !this._rewardedActiveToken || !this._rewardedActionId) return;
-                        fetch(`${API_URL}/api/ad/session/cancel`, {
-                            method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
-                            body:JSON.stringify({userId:this.user.id,token:this._rewardedActiveToken,actionId:this._rewardedActionId})
-                        }).catch(() => {});
-                    };
                     const stopMusicOnExit = () => { try { this.stopMusic(); } catch (e) {} };
                     document.addEventListener('visibilitychange', () => {
                         if (document.hidden) {
                             stopMusicOnExit();
-                            cancelPassiveOnExit();
                             flushSave();
                         } else if (this.musicOn && this._musicUserEnabledThisSession) {
                             this.resumeMusic();
@@ -3151,12 +3053,10 @@
                     });
                     window.addEventListener('pagehide', () => {
                         stopMusicOnExit();
-                        cancelPassiveOnExit();
                         flushSave();
                     });
                     window.addEventListener('beforeunload', () => {
                         stopMusicOnExit();
-                        cancelPassiveOnExit();
                         flushSave();
                     });
                     try {
@@ -3383,6 +3283,8 @@
                 },
                 smartlinkButtonText() {
                     if (this.smartlinkRemaining <= 0) return this.texts.smartlinkLimitReached;
+                    if (this._smartlinkSaving) return this.language === 'en' ? '⏳ PROCESSING...' : '⏳ ĐANG XỬ LÝ...';
+                    if (this.smartlinkAttemptId) return this.language === 'en' ? '🔄 SYNC SMARTLINK' : '🔄 ĐỒNG BỘ SMARTLINK';
                     if (this.smartlinkCooldown > 0) {
                         const t = this.formatCooldownSeconds(this.smartlinkCooldown);
                         return this.language === 'en' ? `⏳ Next SmartLink in ${t}` : `⏳ SmartLink tiếp sau ${t}`;
@@ -4501,7 +4403,11 @@
                     }
                 },
                 async startSmartlink() {
-                    if (this._smartlinkSaving || this.smartlinkStartTime > 0 || this.smartlinkAttemptId) return false;
+                    if (this._smartlinkSaving) return false;
+                    // Nếu còn attempt cũ, nút trở thành nút reconcile. Không tạo attempt mới cho tới khi
+                    // server xác nhận attempt cũ completed/expired/invalid.
+                    if (this.smartlinkStartTime > 0 && !this.smartlinkAttemptId) this.clearSmartlinkAttempt();
+                    if (this.smartlinkAttemptId) return await this.handleSmartlinkReturn(true);
                     this.updateSmartlinkCooldown();
                     if (this.smartlinkCooldown > 0) {
                         this.showNotification(this.smartlinkButtonText());
@@ -4518,6 +4424,19 @@
                             body:JSON.stringify({userId:this.user.id, sessionId:this.securitySessionId})
                         });
                         const result = await response.json().catch(() => ({}));
+                        // Server có thể phát hiện một attempt processing cũ dù localStorage đã mất.
+                        // Nhận lại đúng attemptId rồi reconcile; tuyệt đối không tạo/reward attempt thứ hai.
+                        if (result.pendingAttempt && result.attemptId) {
+                            this.smartlinkStartTime = Number(result.startedAt || Date.now());
+                            this.smartlinkAttemptId = String(result.attemptId);
+                            try {
+                                localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
+                                localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
+                            } catch (_) {}
+                            this.showNotification(this.language === 'en' ? '🔄 Restoring the previous SmartLink...' : '🔄 Đang khôi phục SmartLink trước đó...');
+                            setTimeout(() => this.handleSmartlinkReturn(true).catch(() => {}), 250);
+                            return false;
+                        }
                         if (!response.ok || !result.success || !result.attemptId || !result.link) {
                             if (result.limitReached) {
                                 if (typeof result.smartlinksToday === 'number') this.smartlinksToday = Number(result.smartlinksToday);
@@ -4537,6 +4456,7 @@
                         // This timestamp is UI/reload state only. Reward eligibility is checked from server startedAt.
                         this.smartlinkStartTime = Number(result.startedAt || Date.now());
                         this.smartlinkAttemptId = String(result.attemptId);
+                        this._smartlinkReconcileAttempts = 0;
                         try {
                             localStorage.setItem('shipper_smartlink_start', String(this.smartlinkStartTime));
                             localStorage.setItem('shipper_smartlink_attempt', this.smartlinkAttemptId);
@@ -4560,6 +4480,11 @@
                 },
 
                 clearSmartlinkAttempt() {
+                    if (this._smartlinkReconcileTimer) {
+                        clearTimeout(this._smartlinkReconcileTimer);
+                        this._smartlinkReconcileTimer = null;
+                    }
+                    this._smartlinkReconcileAttempts = 0;
                     this.smartlinkStartTime = 0;
                     this.smartlinkAttemptId = '';
                     try {
@@ -4569,8 +4494,18 @@
                     } catch (_) {}
                 },
 
-                async handleSmartlinkReturn() {
-                    if (!this.smartlinkAttemptId || this._smartlinkSaving || document.hidden) return;
+                scheduleSmartlinkReconcile() {
+                    if (!this.smartlinkAttemptId || this._smartlinkReconcileTimer || this._smartlinkReconcileAttempts >= 2) return;
+                    this._smartlinkReconcileAttempts += 1;
+                    const delay = 2200 * this._smartlinkReconcileAttempts;
+                    this._smartlinkReconcileTimer = setTimeout(() => {
+                        this._smartlinkReconcileTimer = null;
+                        if (this.smartlinkAttemptId) this.handleSmartlinkReturn(true).catch(() => {});
+                    }, delay);
+                },
+
+                async handleSmartlinkReturn(force = false) {
+                    if (!this.smartlinkAttemptId || this._smartlinkSaving || (!force && document.hidden)) return false;
                     const attemptId = String(this.smartlinkAttemptId || '');
                     this._smartlinkSaving = true;
                     try {
@@ -4587,20 +4522,20 @@
                                 result = {success:false,retry:true};
                             }
                             if (response?.ok && result.success) break;
-                            if (result.tooEarly || result.attemptExpired || result.invalidAttempt || result.limitReached) break;
+                            if (result.tooEarly || result.attemptExpired || result.invalidAttempt || result.staleAttempt || result.limitReached) break;
                             if (!result.retry && response && ![408,409,425,429,500,502,503,504].includes(response.status)) break;
                             await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
                         }
 
                         if (result.tooEarly) {
-                            // Exact required warning. No reward/counter/task/referral update occurs.
+                            // Không reward/counter/task/referral. Attempt local được bỏ để user chủ động bắt đầu lại.
                             this.clearSmartlinkAttempt();
                             this.showNotification('⚠️ ' + (this.texts.smartlinkTooEarly || (this.language === 'en'
                                 ? 'You must wait at least 5 seconds. Please try again!!'
                                 : 'Cần Đợi Tối Thiểu 5s.Vui Lòng Thử Lại!!')));
                             return false;
                         }
-                        if (result.attemptExpired || result.invalidAttempt) {
+                        if (result.attemptExpired || result.invalidAttempt || result.staleAttempt) {
                             this.clearSmartlinkAttempt();
                             this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry));
                             return false;
@@ -4612,6 +4547,9 @@
                             return false;
                         }
                         if (!response?.ok || !result.success) {
+                            // Không clear attempt khi trạng thái commit chưa chắc chắn. Retry có giới hạn; sau đó
+                            // user vẫn có thể bấm nút "ĐỒNG BỘ SMARTLINK" để reconcile cùng attemptId.
+                            if (result.retry !== false) this.scheduleSmartlinkReconcile();
                             this.showNotification('⚠️ ' + (result.error || this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
                             return false;
                         }
@@ -4634,6 +4572,7 @@
                         return true;
                     } catch (e) {
                         console.error('SmartLink:',e);
+                        this.scheduleSmartlinkReconcile();
                         this.showNotification('⚠️ ' + (this.texts.smartlinkRetry || 'SmartLink completion is pending. Return to the app to retry.'));
                         return false;
                     } finally {
@@ -5352,17 +5291,6 @@
                                 this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily limit of 15 Rewarded Ads.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.');
                                 return false;
                             }
-                            if (purpose === 'passive' && (sessionData?.cooldown || sessionData?.limitReached)) {
-                                this.passiveAdsToday = Number(sessionData.passiveAdsToday ?? this.passiveAdsToday);
-                                this.passiveAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0);
-                                passiveTabCount = 0;
-                                passiveTabThreshold = nextPassiveTabThreshold();
-                                passiveAdLastShown = Date.now();
-                                passiveAdCooldown = this.passiveAdNextAllowedAt > Date.now()
-                                    ? Math.max(1000, this.passiveAdNextAllowedAt - Date.now())
-                                    : nextPassiveAdCooldown();
-                                return false; // server không cấp token -> tuyệt đối không mở SDK
-                            }
                             if (!(sessionData?.retry || !sessionResponse || [408,409,429,500,502,503,504].includes(sessionResponse.status))) break;
                             await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
                         }
@@ -5384,16 +5312,11 @@
                                 return false;
                             });
                         if (!sdkResult) {
-                            throw new Error(purpose === 'passive' ? 'Quảng cáo tự động không thể hiển thị.' : 'Rewarded Interstitial không thể mở.');
+                            throw new Error('Rewarded Interstitial không thể mở.');
                         }
                         // Monetag Rewarded SDK đã resolve thành công: complete ngay, không artificial wait.
 
-                        if (this._rewardedActionId !== actionId) {
-                            if (purpose === 'passive' && token) {
-                                fetch(`${API_URL}/api/ad/session/cancel`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId}),keepalive:true}).catch(() => {});
-                            }
-                            return false;
-                        }
+                        if (this._rewardedActionId !== actionId) return false;
 
                         let completeData = null;
                         let completeRes = null;
@@ -5423,7 +5346,7 @@
 
                         // Server có thể trả verified=true khi Rewarded đã được xác minh/commit nhưng marker
                         // persistence đang retry. Đây vẫn là AD SUCCESS và phải dùng lại đúng token, không xem QC mới.
-                        if (!completeData?.success && completeData?.verified && completeData?.adToken && purpose !== 'passive') {
+                        if (!completeData?.success && completeData?.verified && completeData?.adToken) {
                             completeData = { ...completeData, success:true, adToken:String(completeData.adToken) };
                         }
                         if (!completeData?.success) {
@@ -5431,26 +5354,15 @@
                         }
 
                         adVerified = true;
-                        if (purpose === 'passive') {
-                            this.passiveAdsToday = Number(completeData.passiveAdsToday ?? this.passiveAdsToday);
-                            this.passiveAdNextAllowedAt = Number(completeData.nextAllowedAt || 0);
-                            passiveAdLastShown = Date.now();
-                            passiveAdCooldown = this.passiveAdNextAllowedAt > Date.now()
-                                ? Math.max(1000, this.passiveAdNextAllowedAt - Date.now())
-                                : nextPassiveAdCooldown();
-                            passiveTabThreshold = nextPassiveTabThreshold();
-                            passiveTabCount = 0;
-                        } else {
-                            this.onAdWatched('rewarded', completeData);
-                            await this.syncDailyTasksFromServer().catch(() => false);
-                            try {
-                                // Không kiểm tra truthy/falsy của return value: callback async trả undefined vẫn là hợp lệ.
-                                await Promise.resolve(onDone?.(completeData));
-                            } catch (actionError) {
-                                console.error('Rewarded action failed after verified ad:', actionError);
-                                this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.');
-                                return true;
-                            }
+                        this.onAdWatched('rewarded', completeData);
+                        await this.syncDailyTasksFromServer().catch(() => false);
+                        try {
+                            // Không kiểm tra truthy/falsy của return value: callback async trả undefined vẫn là hợp lệ.
+                            await Promise.resolve(onDone?.(completeData));
+                        } catch (actionError) {
+                            console.error('Rewarded action failed after verified ad:', actionError);
+                            this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.');
+                            return true;
                         }
 
                         this._rewardedPreloadStarted = false;
@@ -5459,7 +5371,7 @@
                         return true;
                     } catch (e) {
                         console.error('Rewarded ad:', e);
-                        if (sessionStarted && token && !adVerified && (purpose === 'passive' || !sdkOpened)) {
+                        if (sessionStarted && token && !adVerified && !sdkOpened) {
                             fetch(`${API_URL}/api/ad/session/cancel`, {
                                 method:'POST',
                                 headers:{'Content-Type':'application/json'},
@@ -5470,12 +5382,9 @@
                             this.showNotification('⚠️ Quảng cáo đã được xác minh nhưng thao tác phía máy chủ chưa hoàn tất.');
                             return true;
                         }
-                        if (purpose !== 'passive') this.showNotification(e?.message || failMessage);
+                        this.showNotification(e?.message || failMessage);
                         return false;
                     } finally {
-                        if (adVerified && typeof window.notePassiveAdSuppression === 'function') {
-                            window.notePassiveAdSuppression();
-                        }
                         if (this._rewardedActionId === actionId) this._rewardedActionId = '';
                         if (this._rewardedActiveToken === token) this._rewardedActiveToken = '';
                         if (this._rewardedPurpose === purpose) this._rewardedPurpose = '';
@@ -5775,8 +5684,6 @@
                             this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
                             this.bonusAdNextAllowedAt = Number(d.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
                             this.updateBonusAdCooldown();
-                            this.passiveAdsToday = Number(d.passiveAdsToday ?? this.passiveAdsToday ?? 0);
-                            this.passiveAdNextAllowedAt = Number(d.passiveAdNextAllowedAt ?? this.passiveAdNextAllowedAt ?? 0);
                             this.applyNewUserStatus({newUserWelcome:d.newUserWelcome,newUserTutorial:d.newUserTutorial});
                             this.lastSmartlinkTime = Number(d.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
                             this.updateSmartlinkCooldown();
