@@ -9015,12 +9015,16 @@ async function createProviderShortUrl(cfg,destination,nonce){
         return {shortUrl,slug:new URL(shortUrl).pathname.split('/').filter(Boolean).pop()||''};
     }
     if(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4'){
+        // Mapping theo API OCTOLINK: 2 bước=4, 3 bước=3, 4 bước=5.
+        // Guard này fail-closed nếu config bị sửa nhầm trong tương lai; tuyệt đối không fallback type=0.
+        const expectedType=({uptolink_step2:'4',uptolink_step3:'3',uptolink_step4:'5'})[cfg.key];
+        if(String(cfg.uptolinkType)!==expectedType)throw new Error(`UPTOLINK invalid campaign type mapping for ${cfg.key}`);
         const buildUrl=(format)=>{
             const u=new URL('https://octolink.vip/api');
             u.searchParams.set('api',UPTOLINK_API_TOKEN);
             u.searchParams.set('url',destination);
             u.searchParams.set('format',format);
-            u.searchParams.set('type',String(cfg.uptolinkType));
+            u.searchParams.set('type',expectedType);
             return u;
         };
         const r=await fetchProviderWithRetry(buildUrl('json'),{headers:{accept:'application/json,text/plain;q=0.8'}},8000,1);
@@ -9179,7 +9183,16 @@ async function createFreshLinkTaskAttempt({userId,cfg,ipHash,deviceHash}){
         issued_ip_hash:ipHash,landing_ip_hash:null,device_hash:deviceHash,device_ip_hash:null,
         country_code:null,is_vpn:false,
         created_at:now.toISOString(),expires_at:expiresAt,
-        metadata:{quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0}
+        metadata:{
+            quotaType:cfg.quotaType,
+            maxPerIp:cfg.maxPerIp,
+            maxPerDevice:cfg.maxPerDevice,
+            maxPerDeviceIp:cfg.maxPerDeviceIp||0,
+            ...(cfg.key==='layma'?{safeProviderFallback:true}:{}),
+            ...(cfg.key==='uptolink_step2'||cfg.key==='uptolink_step3'||cfg.key==='uptolink_step4'
+                ?{uptolinkType:String(cfg.uptolinkType||'')}
+                :{})
+        }
     };
     const {data:inserted,error:insertError}=await db.from('link_task_attempts').insert(row).select('*').single();
     if(insertError){
@@ -9420,22 +9433,49 @@ app.get('/api/link-task/provider-fallback/:nonce',async(req,res)=>{
     const nonce=String(req.params.nonce||'');
     try{
         const db=linkTaskDb();
-        const {data:a,error}=await db.from('link_task_attempts').select('id,status,expires_at').eq('nonce',nonce).maybeSingle();
+        const {data:a,error}=await db.from('link_task_attempts')
+            .select('id,status,expires_at,task_id,provider,metadata')
+            .eq('nonce',nonce).maybeSingle();
         if(error||!a)return res.status(404).send('<h2>❌ Link nhiệm vụ không hợp lệ.</h2>');
-        if(['created','shortened','landed'].includes(String(a.status||'')) && (!a.expires_at || new Date(a.expires_at).getTime()<=Date.now())){
-            await db.from('link_task_attempts').update({status:'expired'}).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
-        }else if(['created','shortened'].includes(String(a.status||''))){
-            await db.from('link_task_attempts').update({status:'cancelled'}).eq('id',a.id).in('status',['created','shortened']);
+
+        // Route fallback này hiện chỉ được LAYMA sử dụng. Không cho một nonce của provider khác
+        // bị hủy chỉ vì ai đó tự ghép URL /provider-fallback/<nonce>.
+        if(String(a.task_id||'')!=='layma'){
+            return res.status(404).send('<h2>❌ Link dự phòng không hợp lệ.</h2>');
         }
+
+        const nowIso=new Date().toISOString();
+        const oldMetadata=(a.metadata&&typeof a.metadata==='object'&&!Array.isArray(a.metadata))?a.metadata:{};
+        if(['created','shortened','landed'].includes(String(a.status||'')) && (!a.expires_at || new Date(a.expires_at).getTime()<=Date.now())){
+            await db.from('link_task_attempts').update({
+                status:'expired',
+                metadata:{...oldMetadata,providerFallbackReachedAt:nowIso}
+            }).eq('id',a.id).in('status',LINK_TASK_ACTIVE_STATUSES);
+        }else if(['created','shortened'].includes(String(a.status||''))){
+            await db.from('link_task_attempts').update({
+                status:'cancelled',
+                metadata:{
+                    ...oldMetadata,
+                    cancelledReason:'provider_no_campaign_fallback',
+                    cancelledAt:nowIso,
+                    providerFallbackReachedAt:nowIso
+                }
+            }).eq('id',a.id).in('status',['created','shortened']);
+        }
+
+        // Chỉ log trạng thái/provider; tuyệt đối không log nonce, token hay URL API có secret.
+        console.warn('LAYMA provider fallback reached: no campaign / provider fallback');
+
         res.set('Cache-Control','no-store, no-cache, must-revalidate');
         const mini=telegramMiniAppDeepLink('linktask');
         const botUrl=telegramBotDeepLink();
-        return res.status(409).send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nhiệm vụ tạm chưa khả dụng</title><style>body{font-family:system-ui;background:#0f172a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{width:min(420px,100%);box-sizing:border-box;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:24px;padding:24px}.b{display:block;margin-top:12px;padding:13px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:800}.s{color:#cbd5e1;line-height:1.55}</style></head><body><div class="c"><div style="font-size:52px">⚠️</div><h2>NHÀ CUNG CẤP CHƯA CÓ NHIỆM VỤ</h2><p class="s">Hiện chưa có campaign phù hợp. Phiên này không được xác nhận và không có mã thưởng. Vui lòng quay lại Mini App rồi thử lại sau.</p><a class="b" href="${safeHtml(mini)}">🚀 QUAY LẠI MINI APP</a><a class="b" style="background:#0f766e" href="${safeHtml(botUrl)}">🤖 MỞ BOT TELEGRAM</a></div></body></html>`);
+        return res.status(409).send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nhiệm vụ tạm chưa khả dụng</title><style>body{font-family:system-ui;background:#0f172a;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;padding:20px}.c{width:min(420px,100%);box-sizing:border-box;text-align:center;background:#1e293b;border:1px solid #334155;border-radius:24px;padding:24px}.b{display:block;margin-top:12px;padding:13px;border-radius:14px;background:#2563eb;color:#fff;text-decoration:none;font-weight:800}.s{color:#cbd5e1;line-height:1.55}</style></head><body><div class="c"><div style="font-size:52px">⚠️</div><h2>NHÀ CUNG CẤP CHƯA CÓ NHIỆM VỤ</h2><p class="s">Nhà cung cấp hiện chưa có campaign phù hợp với thiết bị/IP của bạn. Nhiệm vụ này đã được hủy và không tính lượt hoàn thành, không có mã thưởng. Vui lòng quay lại Mini App rồi thử lại hoặc dùng ĐỔI NHIỆM VỤ.</p><a class="b" href="${safeHtml(mini)}">🚀 QUAY LẠI MINI APP</a><a class="b" style="background:#0f766e" href="${safeHtml(botUrl)}">🤖 MỞ BOT TELEGRAM</a></div></body></html>`);
     }catch(e){
         console.error('Link task provider fallback:',safeProviderDiagnostic(e));
         return res.status(500).send('<h2>⚠️ Không thể xử lý nhiệm vụ lúc này.</h2>');
     }
 });
+
 app.get('/api/link-task/landing/:nonce',async(req,res)=>{
     const nonce=String(req.params.nonce||'');
     let release=null;
