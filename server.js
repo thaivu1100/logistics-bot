@@ -1578,30 +1578,51 @@ const isMainAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID);
 const isAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID) || subAdminIds.has(String(ctx.from?.id || ''));
 
 // ==================== KHOÁ BOT / MINI APP (BẢO TRÌ) ====================
-// Trạng thái khoá được lưu ở bảng "app_settings" (key/value) để KHÔNG bị mất khi Render restart/deploy lại
-// server (khác với biến in-memory thông thường sẽ tự reset về false mỗi lần khởi động lại).
-// CẦN TẠO BẢNG NÀY 1 LẦN TRÊN SUPABASE (SQL Editor):
-//   create table if not exists app_settings (key text primary key, value jsonb);
+// app_settings là SOURCE OF TRUTH để trạng thái bảo trì sống qua restart/cold-start/multi-instance.
+// BOT_LOCKED chỉ là cache cục bộ rất ngắn; mọi request quan trọng đều đồng bộ lại từ database.
+const BOT_LOCK_KEY = 'bot_locked';
+const BOT_LOCK_CACHE_MS = 1500;
 let BOT_LOCKED = false;
+let BOT_LOCK_LAST_SYNC_AT = 0;
 const MAINTENANCE_MESSAGE = "🔒 Bot Đang Bị Khoá Để Bảo Trì. Vui Lòng Thử Lại Sau!!";
 
+function botLockDb() {
+    // app_settings đã được dùng cho persistent event/lock; ưu tiên service_role để không bị RLS/anon chặn.
+    return jobMailSupabase || supabase;
+}
+async function readBotLockedPersistent({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && BOT_LOCK_LAST_SYNC_AT > 0 && now - BOT_LOCK_LAST_SYNC_AT < BOT_LOCK_CACHE_MS) {
+        return BOT_LOCKED;
+    }
+    const { data, error } = await botLockDb().from('app_settings')
+        .select('value').eq('key', BOT_LOCK_KEY).maybeSingle();
+    if (error) throw error;
+    BOT_LOCKED = data?.value === true;
+    BOT_LOCK_LAST_SYNC_AT = now;
+    return BOT_LOCKED;
+}
 async function loadBotLockState() {
     try {
-        const { data } = await supabase.from('app_settings').select('value').eq('key', 'bot_locked').single();
-        BOT_LOCKED = data?.value === true;
+        await readBotLockedPersistent({ force:true });
     } catch (e) {
-        BOT_LOCKED = false; // Bảng chưa tồn tại hoặc chưa có dòng nào -> mặc định KHÔNG khoá
+        // Không giả là đã đọc được trạng thái persistent. Cache false chỉ là trạng thái boot tạm thời;
+        // /api/lock-status và middleware API sẽ fail-closed nếu database vẫn không đọc được.
+        BOT_LOCKED = false;
+        BOT_LOCK_LAST_SYNC_AT = 0;
+        console.error('❌ Không đọc được trạng thái bảo trì persistent:', e?.message || e);
     }
 }
 loadBotLockState();
 
 async function setBotLocked(locked) {
-    BOT_LOCKED = locked;
-    try {
-        await supabase.from('app_settings').upsert({ key: 'bot_locked', value: locked });
-    } catch (e) {
-        console.error('Lỗi lưu trạng thái khoá bot (đã áp dụng tạm thời trong bộ nhớ):', e.message);
-    }
+    const next = !!locked;
+    const { error } = await botLockDb().from('app_settings').upsert({ key: BOT_LOCK_KEY, value: next });
+    if (error) throw error;
+    BOT_LOCKED = next;
+    BOT_LOCK_LAST_SYNC_AT = Date.now();
+    adminDashboardCache = null;
+    return BOT_LOCKED;
 }
 
 // Tăng 1 field số nguyên trên bảng "users" 1 cách AN TOÀN (atomic) bằng compare-and-swap có thử lại.
@@ -2723,41 +2744,54 @@ bot.use(async (ctx, next) => {
     // xử lý đúng như trước khi có middleware này (không thay đổi hành vi báo lỗi hiện có).
 });
 
-// Middleware chặn TOÀN BỘ tương tác của user thường khi bot đang bị khoá bảo trì (admin vẫn dùng được
-// bình thường để có thể tự /mokhoabot mở lại). Đặt TRƯỚC mọi lệnh/handler khác để chặn sớm nhất.
+// Middleware chặn TOÀN BỘ tương tác của user thường khi bot đang bị khoá bảo trì.
+// Đọc lại persistent state theo cache ngắn để mọi instance cùng thấy một trạng thái; mọi Admin vẫn bypass
+// để có thể tự mở khoá và dùng lệnh quản trị trong thời gian bảo trì.
 bot.use(async (ctx, next) => {
-    if (BOT_LOCKED && !isMainAdmin(ctx)) {
+    let locked = BOT_LOCKED;
+    try {
+        locked = await readBotLockedPersistent();
+    } catch (e) {
+        console.error('Maintenance middleware read:', e?.message || e);
+        if (!isAdmin(ctx)) {
+            const chatType = ctx.chat?.type;
+            if (chatType === 'group' || chatType === 'supergroup' || chatType === 'channel') return;
+            return ctx.reply(MAINTENANCE_MESSAGE).catch(() => {});
+        }
+    }
+    if (locked && !isAdmin(ctx)) {
         const chatType = ctx.chat?.type;
         const isGroupOrChannel = chatType === 'group' || chatType === 'supergroup' || chatType === 'channel';
-        if (isGroupOrChannel) {
-            // Im lặng hoàn toàn trong group/supergroup/channel khi bot bị khoá - không reply, không cảnh báo.
-            return;
-        }
+        if (isGroupOrChannel) return;
         const language = await getStoredUserLanguage(ctx.from?.id);
         const maintenanceText = language === 'en'
             ? '🔒 The bot is locked for maintenance. Please try again later!!'
             : MAINTENANCE_MESSAGE;
-        if (ctx.callbackQuery) {
-            await ctx.answerCbQuery(maintenanceText, { show_alert: true }).catch(() => {});
-        }
+        if (ctx.callbackQuery) await ctx.answerCbQuery(maintenanceText, { show_alert: true }).catch(() => {});
         return ctx.reply(maintenanceText).catch(() => {});
     }
     return next();
 });
 
-// /khoabot - Khoá Bot & Mini App để bảo trì (chỉ Admin)
-bot.command('khoabot', async (ctx) => {
+async function handleBotMaintenanceCommand(ctx, locked) {
     if (!isAdmin(ctx)) return;
-    await setBotLocked(true);
-    ctx.reply("🔒 Đã khoá Bot & Mini App để bảo trì.\nNgười dùng sẽ nhận thông báo: \"" + MAINTENANCE_MESSAGE + "\"\nDùng /mokhoabot để mở khoá lại.");
-});
+    try {
+        await setBotLocked(locked);
+        if (locked) {
+            return ctx.reply("🔒 Đã khoá Bot & Mini App để bảo trì.\nTrạng thái đã lưu persistent trong Supabase.\nDùng /mokhoabot để mở khoá lại.");
+        }
+        return ctx.reply("🔓 Đã mở khoá Bot & Mini App. Trạng thái persistent đã được cập nhật.");
+    } catch (e) {
+        console.error(locked ? '/khoabot:' : '/mokhoabot:', e?.message || e);
+        return ctx.reply('❌ Không thể cập nhật trạng thái bảo trì trong Supabase. Bot KHÔNG báo thành công giả. Vui lòng kiểm tra app_settings / service_role.');
+    }
+}
 
-// /mokhoabot - Mở khoá Bot & Mini App (chỉ Admin)
-bot.command('mokhoabot', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    await setBotLocked(false);
-    ctx.reply("🔓 Đã mở khoá Bot & Mini App. Người dùng có thể sử dụng bình thường trở lại.");
-});
+// /khoabot - Khoá Bot & Mini App để bảo trì (chỉ Admin)
+bot.command('khoabot', ctx => handleBotMaintenanceCommand(ctx, true));
+// /mokhoabot - Mở khoá Bot & Mini App (chỉ Admin). /mobot là alias ngắn tương thích yêu cầu vận hành.
+bot.command('mokhoabot', ctx => handleBotMaintenanceCommand(ctx, false));
+bot.command('mobot', ctx => handleBotMaintenanceCommand(ctx, false));
 
 // /addadmin <ID> - Phong 1 user làm admin phụ (CHỈ Admin chính được dùng lệnh này)
 // Admin phụ dùng được tất cả lệnh admin khác nhưng KHÔNG thể tự thêm/xoá admin (vẫn dưới quyền Admin chính).
@@ -4888,11 +4922,19 @@ process.on('uncaughtException', (err) => {
 
 // ==================== API CHO FRONTEND ====================
 
-// API để Mini App kiểm tra trạng thái khoá bảo trì (KHÔNG bị chặn bởi middleware bên dưới)
-app.get('/api/lock-status', (req, res) => {
-    // Admin CHÍNH (ID 6327666718) luôn bypass khóa bảo trì để có thể tự kiểm tra/test Mini App
-    const isMainAdminRequest = String(req.query.userId) === String(ADMIN_ID);
-    res.json({ locked: BOT_LOCKED && !isMainAdminRequest, message: MAINTENANCE_MESSAGE });
+// API để Mini App kiểm tra trạng thái khoá bảo trì (KHÔNG bị chặn bởi middleware bên dưới).
+// Không tin userId query/body để bypass: Admin chỉ được nhận diện bằng Telegram initData đã xác minh.
+app.get('/api/lock-status', async (req, res) => {
+    try {
+        const locked = await readBotLockedPersistent({ force:true });
+        const verifiedUser = telegramUserFromRequest(req);
+        const isMainAdminRequest = verifiedUser?.id && String(verifiedUser.id) === String(ADMIN_ID);
+        res.setHeader('Cache-Control','no-store');
+        return res.json({ locked: !!locked && !isMainAdminRequest, message: MAINTENANCE_MESSAGE });
+    } catch (e) {
+        console.error('Lock status read:', e?.message || e);
+        return res.status(503).json({ locked:true, stateUnavailable:true, message:MAINTENANCE_MESSAGE });
+    }
 });
 
 // Public landing: chỉ aggregate dữ liệu thật; service_role ở server, không expose user row/secret.
@@ -4918,23 +4960,24 @@ app.get('/api/public/config',(_req,res)=>{
     return res.json({success:true,telegramMiniAppUrl:telegramMiniAppDeepLink('public'),telegramBotUrl:telegramBotDeepLink()});
 });
 
-// Lấy userId của người gọi API, thử nhiều nguồn khác nhau (query, body, hoặc đoạn cuối path dạng /api/xxx/:id)
-function extractRequestUserId(req) {
-    return req.query?.userId || req.body?.userId || req.body?.id || req.path.split('/').filter(Boolean).pop();
-}
-
-// Chặn toàn bộ API của Mini App khi bot đang bị khoá bảo trì (trừ chính API kiểm tra khoá ở trên, các API
-// dành cho Admin, và mọi request đến từ chính Admin CHÍNH - ID 6327666718 - để Admin luôn thao tác được
-// bình thường qua Mini App/web /admin trong lúc bảo trì).
-app.use('/api', (req, res, next) => {
-    // Attempt đã được phát trước lúc bảo trì vẫn phải đi tới landing để ghi nhận "landed" và hiện mã.
-    // Chỉ whitelist GET landing; /link-task/start và /link-task/verify-code vẫn bị khóa khi BOT_LOCKED.
+// Chặn toàn bộ API nghiệp vụ của Mini App khi bot đang bảo trì. Persistent DB là source of truth;
+// Admin Mini App chỉ bypass khi x-telegram-init-data xác minh đúng ADMIN_ID, không tin query/body userId.
+app.use('/api', async (req, res, next) => {
     const isLinkTaskLanding = req.method === 'GET' && (/^\/link-task\/landing\/[^/]+$/.test(req.path) || /^\/link-task\/provider-fallback\/[^/]+$/.test(req.path));
-    if (BOT_LOCKED && req.path !== '/lock-status' && !req.path.startsWith('/admin') && !isLinkTaskLanding) {
-        if (String(extractRequestUserId(req)) === String(ADMIN_ID)) return next();
-        return res.status(503).json({ locked: true, error: MAINTENANCE_MESSAGE, message: MAINTENANCE_MESSAGE });
+    if (req.path === '/lock-status' || req.path.startsWith('/admin') || isLinkTaskLanding) return next();
+    let locked;
+    try {
+        locked = await readBotLockedPersistent();
+    } catch (e) {
+        console.error('Maintenance API guard read:', e?.message || e);
+        return res.status(503).json({ locked:true, stateUnavailable:true, error:MAINTENANCE_MESSAGE, message:MAINTENANCE_MESSAGE });
     }
-    next();
+    if (locked) {
+        const verifiedUser = telegramUserFromRequest(req);
+        if (verifiedUser?.id && String(verifiedUser.id) === String(ADMIN_ID)) return next();
+        return res.status(503).json({ locked:true, error:MAINTENANCE_MESSAGE, message:MAINTENANCE_MESSAGE });
+    }
+    return next();
 });
 
 // API legacy giữ tương thích: trả marker ONBOARDING PERSISTENT, không live-check membership.
@@ -9891,30 +9934,38 @@ async function releasePersistentAdSession(userId, token, terminalStatus = 'relea
 
 // ==================== ADSGRAM — SERVER-AUTHORITATIVE ONE-TIME SESSIONS ====================
 // Blocks are public placement IDs, not secrets.
-// - int-46420: manual "XEM QC ADSGRAM", dedicated persistent 10-minute cooldown.
-// - 46075: rewarded format. Manual Reward task keeps the existing shared 15/day + 5-minute bonus pool.
-//   Automatic scheduler may use this block only as purpose=auto-ad, and a successful official SDK completion
-//   receives the same existing AdsGram reward through the server-authoritative atomic wallet path.
-const ADSGRAM_INTERSTITIAL_BLOCK_ID = 'int-46420';
-const ADSGRAM_REWARD_BLOCK_ID = '46075';
+// - int-46646: manual "XEM QC ADSGRAM", dedicated persistent 10-minute cooldown.
+// - 46645: rewarded format cho AdsGram Reward/automatic scheduler. Mọi AdsGram manual dùng cooldown AdsGram riêng.
+//   Monetag manual có cooldown persistent riêng 10 phút; hai provider không ghi đè timer của nhau.
+const ADSGRAM_INTERSTITIAL_BLOCK_ID = 'int-46646';
+const ADSGRAM_REWARD_BLOCK_ID = '46645';
 const ADSGRAM_SESSION_TTL_MS = 8 * 60 * 1000;
 const ADSGRAM_BONUS_DAILY_LIMIT = 15;
-const BONUS_AD_COOLDOWN_MS = 5 * 60 * 1000;
+const MONETAG_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 const ADSGRAM_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
-const AUTO_AD_MIN_COOLDOWN_MS = 3 * 60 * 1000;
+const AUTO_AD_MIN_COOLDOWN_MS = 150 * 1000;
 function adsgramSessionKey(token){return persistentEventKey('adsgram-session',String(token||''));}
 function adsgramCompletedKey(token){return persistentEventKey('adsgram-completed',String(token||''));}
 function adsgramActiveKey(userId){return persistentEventKey('adsgram-active-user',String(userId||''));}
 function adsgramManualCooldownKey(userId){return persistentEventKey('adsgram-manual-next',String(userId||''));}
+function monetagManualCooldownKey(userId){return persistentEventKey('monetag-manual-next',String(userId||''));}
 function autoAdCooldownKey(userId){return persistentEventKey('auto-ad-next',String(userId||''));}
 function adsgramBlockForFormat(format){return String(format||'')==='reward'?ADSGRAM_REWARD_BLOCK_ID:ADSGRAM_INTERSTITIAL_BLOCK_ID;}
 function adsgramPurpose(format,requestedPurpose){
     if(String(format||'')==='interstitial')return 'adsgram-manual';
-    return String(requestedPurpose||'')==='auto-ad'?'auto-ad':'bonus-task';
+    return String(requestedPurpose||'')==='auto-ad'?'auto-ad':'adsgram-reward-manual';
+}
+async function readPersistentCooldownAt(key){
+    const {data,error}=await persistentEventDb().from('app_settings').select('value').eq('key',String(key||'')).maybeSingle();
+    if(error)throw error;
+    const marker=parsePersistentJsonObject(data?.value);
+    return Math.max(0,Number(marker?.nextAllowedAt||0));
 }
 async function readAdsgramManualNextAllowedAt(userId){
-    const marker=await readPersistentEvent(adsgramManualCooldownKey(userId));
-    return Math.max(0,Number(marker?.nextAllowedAt||0));
+    return readPersistentCooldownAt(adsgramManualCooldownKey(userId));
+}
+async function readMonetagManualNextAllowedAt(userId){
+    return readPersistentCooldownAt(monetagManualCooldownKey(userId));
 }
 async function writeAdsgramManualCooldown(userId,token,completedAt=Date.now()){
     const nextAllowedAt=Number(completedAt)+ADSGRAM_MANUAL_COOLDOWN_MS;
@@ -9923,9 +9974,15 @@ async function writeAdsgramManualCooldown(userId,token,completedAt=Date.now()){
     },3);
     return ok?nextAllowedAt:0;
 }
+async function writeMonetagManualCooldown(userId,token,completedAt=Date.now()){
+    const nextAllowedAt=Number(completedAt)+MONETAG_MANUAL_COOLDOWN_MS;
+    const ok=await writePersistentEvent(monetagManualCooldownKey(userId),{
+        status:'cooldown',userId:String(userId),token:String(token||''),completedAt:Number(completedAt),nextAllowedAt
+    },3);
+    return ok?nextAllowedAt:0;
+}
 async function readAutoAdNextAllowedAt(userId){
-    const marker=await readPersistentEvent(autoAdCooldownKey(userId));
-    return Math.max(0,Number(marker?.nextAllowedAt||0));
+    return readPersistentCooldownAt(autoAdCooldownKey(userId));
 }
 async function writeAutoAdCooldown(userId,provider,token,completedAt=Date.now()){
     const nextAllowedAt=Number(completedAt)+AUTO_AD_MIN_COOLDOWN_MS;
@@ -9945,7 +10002,6 @@ function adsgramBonusResponseFromUser(user,token,rewardCoins,rewardOrders,format
         success:true,provider:'adsgram',format:String(format||''),adToken:String(token||''),purpose:String(purpose||'bonus-task'),
         adsToday:Number(user?.adsToday||0),rewardedAdsToday:Number(user?.rewardedAdsToday||0),
         lifetimeAdsWatched:Number(user?.lifetimeAdsWatched||0),bonusAdsToday:Number(user?.bonusAdsToday||0),
-        bonusAdNextAllowedAt:Number(user?.bonusAdNextAllowedAt||0),
         adsgramManualNextAllowedAt:Number(extra.adsgramManualNextAllowedAt||0),
         autoAdNextAllowedAt:Number(extra.autoAdNextAllowedAt||0),
         rewardCoins:Number(rewardCoins||0),rewardOrders:Number(rewardOrders||0),
@@ -9962,7 +10018,7 @@ app.post('/api/adsgram/manual/state',async(req,res)=>{
         const now=Date.now();
         return res.json({
             success:true,bonusAdsToday:Number(user.bonusAdsToday||0),
-            nextAllowedAt,retryAfterMs:Math.max(0,nextAllowedAt-now),
+            adsgramManualNextAllowedAt:nextAllowedAt,nextAllowedAt,retryAfterMs:Math.max(0,nextAllowedAt-now),
             cooldown:now<nextAllowedAt,dailyLimit:ADSGRAM_BONUS_DAILY_LIMIT
         });
     }catch(e){
@@ -9976,7 +10032,7 @@ app.post('/api/adsgram/session/start',async(req,res)=>{
     const format=String(req.body?.format||'interstitial').toLowerCase()==='reward'?'reward':'interstitial';
     const purpose=adsgramPurpose(format,req.body?.purpose);
     if(String(req.body?.purpose||'')==='auto-ad'&&format!=='reward'){
-        return res.status(400).json({success:false,code:'invalid_auto_adsgram_format',error:'Auto AdsGram chỉ dùng Reward block 46075.'});
+        return res.status(400).json({success:false,code:'invalid_auto_adsgram_format',error:'Auto AdsGram chỉ dùng Reward block 46645.'});
     }
     const expectedBlock=adsgramBlockForFormat(format);
     const blockId=String(req.body?.blockId||expectedBlock);
@@ -9994,8 +10050,7 @@ app.post('/api/adsgram/session/start',async(req,res)=>{
         if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
         const now=Date.now();
         let nextAllowedAt=0;
-        if(purpose==='adsgram-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
-        else if(purpose==='bonus-task')nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        if(purpose==='adsgram-manual'||purpose==='adsgram-reward-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
         else if(purpose==='auto-ad')nextAllowedAt=await readAutoAdNextAllowedAt(userId);
         if(now<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-now,nextAllowedAt,bonusAdsToday:bonusCount,purpose});
 
@@ -10073,7 +10128,7 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
         // Crash/retry recovery after wallet commit. Rebuild the required persistent cooldown before returning.
         if(String(user.lastBonusAdToken||'')===token){
             let manualNext=0,autoNext=0;
-            if(purpose==='adsgram-manual')manualNext=await writeAdsgramManualCooldown(userId,token,Number(user.lastManualRewardedCompletedAt||completedAt));
+            if(purpose==='adsgram-manual'||purpose==='adsgram-reward-manual')manualNext=await writeAdsgramManualCooldown(userId,token,Number(user.lastManualRewardedCompletedAt||completedAt));
             if(purpose==='auto-ad')autoNext=await writeAutoAdCooldown(userId,'adsgram',token,Number(user.lastManualRewardedCompletedAt||completedAt));
             const fresh=await readUserRow(userId);const recovered=fresh.data||user;
             const result=adsgramBonusResponseFromUser(recovered,token,Number(recovered.lastBonusRewardCoins||0),Number(recovered.lastBonusRewardOrders||0),session.format,purpose,{adsgramManualNextAllowedAt:manualNext||await readAdsgramManualNextAllowedAt(userId),autoAdNextAllowedAt:autoNext||await readAutoAdNextAllowedAt(userId)});
@@ -10085,8 +10140,7 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
         const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
         if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
         let nextAllowedAt=0;
-        if(purpose==='adsgram-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
-        else if(purpose==='bonus-task')nextAllowedAt=Math.max(0,Number(user.bonusAdNextAllowedAt||0));
+        if(purpose==='adsgram-manual'||purpose==='adsgram-reward-manual')nextAllowedAt=await readAdsgramManualNextAllowedAt(userId);
         else if(purpose==='auto-ad')nextAllowedAt=await readAutoAdNextAllowedAt(userId);
         if(Date.now()<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-Date.now(),nextAllowedAt,purpose,error:'Đang trong thời gian chờ lượt QC tiếp theo.'});
 
@@ -10104,13 +10158,12 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
             lastManualRewardedCompletedAt:completedAt,
             lastBonusAdToken:token,lastBonusRewardCoins:rewardCoins,lastBonusRewardOrders:rewardOrders,lastBonusClicked:false,lastBonusAdProvider:'adsgram',lastResetDate:vietnamDayKey()
         };
-        if(purpose==='bonus-task') updateFields.bonusAdNextAllowedAt=completedAt+BONUS_AD_COOLDOWN_MS;
         const mutation=await atomicWalletMutation(userId,{deltaCoins:rewardCoins,deltaOrders:rewardOrders,setFields:updateFields});
         if(mutation.error)return res.status(409).json({success:false,retry:true,error:mutation.error.message});
         if(!(await flushUserExtra()))return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'AdsGram đã được ghi nhận nhưng trạng thái đang đồng bộ. Vui lòng thử lại, không cần xem lại QC.'});
 
         let manualNext=0,autoNext=0;
-        if(purpose==='adsgram-manual'){
+        if(purpose==='adsgram-manual'||purpose==='adsgram-reward-manual'){
             manualNext=await writeAdsgramManualCooldown(userId,token,completedAt);
             if(!manualNext)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward AdsGram đã commit nhưng cooldown 10 phút đang đồng bộ. Không cần xem lại QC.'});
         }
@@ -10135,6 +10188,21 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
         console.error('AdsGram session complete:',e?.message||e);
         return res.status(503).json({success:false,retry:true,error:'Không hoàn tất được AdsGram. Vui lòng thử lại.'});
     }finally{if(release){try{await release();}catch(_){}}}
+});
+
+app.post('/api/monetag/manual/state',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    try{
+        const [user,nextAllowedAt]=await Promise.all([loadCurrentDailyUser(userId),readMonetagManualNextAllowedAt(userId)]);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const now=Date.now();
+        return res.json({success:true,bonusAdsToday:Number(user.bonusAdsToday||0),monetagManualNextAllowedAt:nextAllowedAt,nextAllowedAt,retryAfterMs:Math.max(0,nextAllowedAt-now),cooldown:now<nextAllowedAt,dailyLimit:15});
+    }catch(e){
+        console.error('Monetag manual state:',e?.message||e);
+        return res.status(503).json({success:false,retry:true,error:'Không đọc được cooldown Monetag.'});
+    }
 });
 
 app.post('/api/ad/session/start', async (req, res) => {
@@ -10237,7 +10305,7 @@ app.post('/api/ad/session/start', async (req, res) => {
             if (bonusCount >= 15) {
                 return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC Rewarded hôm nay.'});
             }
-            const nextAllowedAt = Math.max(0, Number(bonusUser.bonusAdNextAllowedAt || 0));
+            const nextAllowedAt = await readMonetagManualNextAllowedAt(normalizedUserId);
             if (Date.now() < nextAllowedAt) {
                 return res.status(429).json({
                     success:false,cooldown:true,
@@ -10641,13 +10709,18 @@ app.post('/api/ad/session/complete', async (req, res) => {
 
         // Nếu process trước đã commit bonus nhưng chết trước completed marker, không cộng ví/counter lần hai.
         if (purpose === 'bonus-task' && String(user.lastBonusAdToken || '') === String(token)) {
+            let monetagManualNextAllowedAt=await readMonetagManualNextAllowedAt(String(userId));
+            if(!monetagManualNextAllowedAt){
+                monetagManualNextAllowedAt=await writeMonetagManualCooldown(String(userId),String(token),Number(user.lastManualRewardedCompletedAt||Date.now()));
+                if(!monetagManualNextAllowedAt)return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Reward Monetag đã commit nhưng cooldown 10 phút đang đồng bộ.'});
+            }
             const recovered = await readUserRow(String(userId));
             const recoveredUser = recovered.data || user;
             const recoveredResponse = {
                 success:true,adToken:String(token),purpose,
                 adsToday:Number(recoveredUser.adsToday||0),rewardedAdsToday:Number(recoveredUser.rewardedAdsToday||0),
                 lifetimeAdsWatched:Number(recoveredUser.lifetimeAdsWatched||0),bonusAdsToday:Number(recoveredUser.bonusAdsToday||0),
-                bonusAdNextAllowedAt:Number(recoveredUser.bonusAdNextAllowedAt||0),
+                bonusAdNextAllowedAt:monetagManualNextAllowedAt,monetagManualNextAllowedAt,
                 extraDeliveryAdsToday:Number(recoveredUser.extraDeliveryAdsToday||0),extraDeliveryCount:Number(recoveredUser.extraDeliveryCount||0),
                 rewardCoins:Number(recoveredUser.lastBonusRewardCoins||0),rewardOrders:Number(recoveredUser.lastBonusRewardOrders||0),rewardSpins:0,
                 adClicked:recoveredUser.lastBonusClicked===true,
@@ -10670,7 +10743,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,lastManualRewardedCompletedAt:Date.now(),lastResetDate:vietnamDayKey()};
         if(purpose==='bonus-task') {
             updateFields.bonusAdsToday=Number(user.bonusAdsToday||0)+1;
-            updateFields.bonusAdNextAllowedAt=Date.now()+BONUS_AD_COOLDOWN_MS;
+            updateFields.bonusAdNextAllowedAt=Date.now()+MONETAG_MANUAL_COOLDOWN_MS;
             updateFields.lastBonusAdToken=String(token);
             updateFields.lastBonusRewardCoins=rewardCoins;
             updateFields.lastBonusRewardOrders=rewardOrders;
@@ -10679,7 +10752,12 @@ app.post('/api/ad/session/complete', async (req, res) => {
         if(purpose==='chest-spin') updateFields.spinAdCount=Number(user.spinAdCount||0)+1;
         const mutation=await atomicWalletMutation(String(userId),{deltaCoins:rewardCoins,deltaOrders:rewardOrders,deltaSpins:rewardSpins,setFields:updateFields});
         if(mutation.error) return res.status(409).json({success:false,retry:true,error:mutation.error.message});
-        if (purpose==='bonus-task' && !(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Phần thưởng đã commit nhưng cooldown đang đồng bộ.'});
+        if (purpose==='bonus-task' && !(await flushUserExtra())) return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Phần thưởng đã commit nhưng trạng thái user đang đồng bộ.'});
+        let monetagManualNextAllowedAt=0;
+        if(purpose==='bonus-task'){
+            monetagManualNextAllowedAt=await writeMonetagManualCooldown(String(userId),String(token),Number(updateFields.lastManualRewardedCompletedAt||Date.now()));
+            if(!monetagManualNextAllowedAt)return res.status(503).json({success:false,retry:true,verified:true,adToken:String(token),purpose,error:'Reward Monetag đã commit nhưng cooldown 10 phút đang đồng bộ. Không cần xem lại QC.'});
+        }
         const fresh=await readUserRow(String(userId));
         const completed={
             userId:String(userId),adType,purpose,completedAt:Date.now(),used:false,deliveryClaimResult:null,streakRecoveryResult:null,completionResult:null,
@@ -10695,7 +10773,7 @@ app.post('/api/ad/session/complete', async (req, res) => {
         const responseUser = freshAfterTutorial.data || fresh.data || {};
         insertRowSafe('ad_events',{user_id:String(userId),ad_type:adType,status:'success',purpose,ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});
         completedAdEvents.set(String(token),completed);
-        const response={success:true,adToken:String(token),purpose,adsToday:Number(responseUser.adsToday||0),rewardedAdsToday:Number(responseUser.rewardedAdsToday||0),lifetimeAdsWatched:Number(responseUser.lifetimeAdsWatched||0),bonusAdsToday:Number(responseUser.bonusAdsToday||0),bonusAdNextAllowedAt:Number(responseUser.bonusAdNextAllowedAt||0),extraDeliveryAdsToday:0,extraDeliveryCount:0,deliveryLimit:DELIVERY_DAILY_LIMIT,rewardCoins,rewardOrders,rewardSpins,adClicked,clickVerifiedServerSide:purpose==='bonus-task'&&adClicked,coins:Number(responseUser.coins||0),orders:Number(responseUser.orders||0),spins:Number(responseUser.spins||0),spinAdCount:Number(responseUser.spinAdCount||0),walletUpdatedAt:responseUser.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,tutorial,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
+        const response={success:true,adToken:String(token),purpose,adsToday:Number(responseUser.adsToday||0),rewardedAdsToday:Number(responseUser.rewardedAdsToday||0),lifetimeAdsWatched:Number(responseUser.lifetimeAdsWatched||0),bonusAdsToday:Number(responseUser.bonusAdsToday||0),bonusAdNextAllowedAt:Number(monetagManualNextAllowedAt||responseUser.bonusAdNextAllowedAt||0),monetagManualNextAllowedAt:Number(monetagManualNextAllowedAt||0),extraDeliveryAdsToday:0,extraDeliveryCount:0,deliveryLimit:DELIVERY_DAILY_LIMIT,rewardCoins,rewardOrders,rewardSpins,adClicked,clickVerifiedServerSide:purpose==='bonus-task'&&adClicked,coins:Number(responseUser.coins||0),orders:Number(responseUser.orders||0),spins:Number(responseUser.spins||0),spinAdCount:Number(responseUser.spinAdCount||0),walletUpdatedAt:responseUser.walletUpdatedAt||mutation.data?.walletUpdatedAt||null,tutorial,elapsed,riskScore:(await getAntiFraudState(String(userId))).stats.score};
         completed.completionResult=response;
         const completedPersisted = await persistCompletedAdEvent(String(token), completed);
         if (!completedPersisted && PERSISTENT_AD_ACTION_PURPOSES.has(purpose)) {
@@ -11661,7 +11739,7 @@ async function adminGetUserDetail(userId){
 async function adminDashboardStats(force=false){
     if(!force&&adminDashboardCache&&Date.now()-adminDashboardCache.cachedAt<20000)return adminDashboardCache.value;
     const db=adminDb(),bounds=vietnamDayBoundsIso(),cols=await getUserColumns();
-    const totals={totalUsers:0,totalCoins:0,totalOrders:0,totalAds:0,totalSmartlinks:0,totalChests:0,totalReferrals:0,adsToday:0,smartlinksToday:0,newUsersToday:0,bannedUsers:0};
+    const totals={totalUsers:0,totalCoins:0,totalOrders:0,totalAds:0,totalSmartlinks:0,totalChests:0,totalReferrals:0,adsToday:0,rewardedAdsToday:0,smartlinksToday:0,newUsersToday:0,bannedUsers:0};
     let supabaseReady=true;
 
     // Prefer the existing database-side aggregate for the expensive wallet totals.
@@ -11683,7 +11761,7 @@ async function adminDashboardStats(force=false){
 
     // No existing RPC exposes these activity counters. Read only the minimum non-wallet columns required
     // for real dashboard numbers; never synthesize chart/history data.
-    const activityCols=['adsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'].filter(c=>cols.has(c));
+    const activityCols=['adsToday','rewardedAdsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'].filter(c=>cols.has(c));
     let offset=0,pageSize=1000;
     while(activityCols.length&&offset<200000){
         const {data,error}=await db.from('users').select(activityCols.join(',')).range(offset,offset+pageSize-1);
@@ -11695,6 +11773,7 @@ async function adminDashboardStats(force=false){
             totals.totalChests+=Number(u.chestOpensTotal||0);
             totals.totalReferrals+=Number(u.validInvites||0);
             totals.adsToday+=Number(u.adsToday||0);
+            totals.rewardedAdsToday+=Number(u.rewardedAdsToday||0);
             totals.smartlinksToday+=Number(u.smartlinksToday||0);
             if(u.accountCreatedAt&&u.accountCreatedAt>=bounds.start&&u.accountCreatedAt<bounds.end)totals.newUsersToday++;
         }
@@ -11718,10 +11797,12 @@ async function adminDashboardStats(force=false){
         if(data.length<1000)break;
         wdOffset+=1000;
     }
+    const freshBotLocked=await readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED);
     const value={
         ...totals,totalLinkTasks:Number(linkStats.completed||0),linkRewardOrders:Number(linkStats.rewardOrders||0),
         totalWithdrawn,pendingWithdrawals:Number(pendingWd.count||0),withdrawalsToday:Number(todayWd.count||0),
-        linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!BOT_LOCKED,
+        linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!freshBotLocked,
+        adsgramToday:null,monetagToday:null, // schema hiện tại không có provider-specific daily aggregate đáng tin cậy; UI hiển thị N/A, không fake.
         supabaseReady,linkTaskDbReady:!!linkDbReady?.ready,trustProxy:TRUST_PROXY_SETTING===false?'DIRECT / 0 HOP':`${TRUST_PROXY_SETTING} HOP`,
         uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),webAppUrl:String(WEB_APP_URL||'')
     };
@@ -11784,7 +11865,7 @@ app.get('/api/admin/users',requireAdminWebSession,async(req,res)=>{
             try{const af=await getAntiFraudState(String(r.id));riskScore=Number(af.stats?.score||0);riskLevel=String(af.stats?.level||'LOW');}catch(_){}
             try{const lt=await getLinkTaskUserStats(String(r.id));linkTaskCompleted=Number(lt.completed||0);}catch(_){}
             const ip=normalizeIpForDuplicateCheck(r.ip);
-            return {...r,riskScore,riskLevel,linkTaskCompleted,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};
+            return {...r,riskScore,riskLevel,linkTaskCompleted,adsgramToday:null,monetagToday:null,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};
         }));
         return res.json({success:true,page,limit,total:Number(count||0),sort:sortField,dir:ascending?'asc':'desc',users:enriched});
     }catch(e){console.error('Admin users:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được danh sách người dùng.'});}
@@ -11823,7 +11904,18 @@ app.get('/api/admin/admins',requireAdminWebSession,async(req,res)=>{try{const {d
 app.post('/api/admin/admins/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),id=req.body?.userId;if(action==='add')await adminAddSubAdmin(id,adminActor(req));else if(action==='remove')await adminRemoveSubAdmin(id,adminActor(req));else return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});return res.json({success:true});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không cập nhật được Admin.').slice(0,220)});}});
 app.post('/api/admin/broadcast',requireAdminWebMutation,async(req,res)=>{try{return res.json({success:true,job:await adminStartBroadcast(req.body?.message,adminActor(req))});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không bắt đầu được broadcast.').slice(0,220)});}});
 app.get('/api/admin/broadcast/:id',requireAdminWebSession,(req,res)=>{const job=adminBroadcastJobs.get(String(req.params.id||''));if(!job)return res.status(404).json({success:false,error:'Không tìm thấy broadcast job.'});return res.json({success:true,job});});
-app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{const db=await checkLinkTaskDatabaseReadiness({force:req.query.force==='1'}).catch(()=>({ready:false}));let supabaseOk=false;try{const x=await adminDb().from('users').select('id',{count:'exact',head:true});supabaseOk=!x.error;}catch(_){}let audit=[];try{const {data}=await adminDb().from('app_settings').select('key,value').like('key','admin_audit:%').order('key',{ascending:false}).limit(30);audit=(data||[]).map(r=>r.value);}catch(_){}return res.json({success:true,system:{botLocked:!!BOT_LOCKED,maintenanceMessage:MAINTENANCE_MESSAGE,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),supabaseOk,linkTaskDb:db,network:requestNetworkDiagnostic(req),adminWebConfigured:adminWebConfigured(),webAppUrl:String(WEB_APP_URL||''),audit}});}catch(e){return res.status(500).json({success:false,error:'Không tải được trạng thái hệ thống.'});}});
+app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{
+    const db=await checkLinkTaskDatabaseReadiness({force:req.query.force==='1'}).catch(()=>({ready:false}));
+    let supabaseOk=false;try{const x=await adminDb().from('users').select('id',{count:'exact',head:true});supabaseOk=!x.error;}catch(_){}
+    let audit=[];try{const {data}=await adminDb().from('app_settings').select('key,value').like('key','admin_audit:%').order('key',{ascending:false}).limit(30);audit=(data||[]).map(r=>r.value);}catch(_){}
+    const botLocked=await readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED);
+    return res.json({success:true,system:{
+        botLocked:!!botLocked,maintenanceMessage:MAINTENANCE_MESSAGE,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),
+        supabaseOk,linkTaskDb:db,network:requestNetworkDiagnostic(req),adminWebConfigured:adminWebConfigured(),webAppUrl:String(WEB_APP_URL||''),
+        ads:{adsgramRewardBlock:ADSGRAM_REWARD_BLOCK_ID,adsgramInterstitialBlock:ADSGRAM_INTERSTITIAL_BLOCK_ID,adsgramManualCooldownMinutes:Math.round(ADSGRAM_MANUAL_COOLDOWN_MS/60000),monetagManualCooldownMinutes:Math.round(MONETAG_MANUAL_COOLDOWN_MS/60000),autoCooldownSeconds:Math.round(AUTO_AD_MIN_COOLDOWN_MS/1000),monetagZone:String(MONETAG_ZONE_ID||'')},
+        audit
+    }});
+}catch(e){console.error('Admin system:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được trạng thái hệ thống.'});}});
 app.post('/api/admin/system/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||'');if(action==='lockBot')await setBotLocked(true);else if(action==='unlockBot')await setBotLocked(false);else if(action==='banIp')return res.json({success:true,result:await adminBanIp(req.body?.ip,adminActor(req))});else if(action==='resetAll'){if(String(req.body?.confirmText||'')!=='RESET ALL DATA')return res.status(400).json({success:false,error:'Nhập chính xác RESET ALL DATA để xác nhận.'});await adminResetAllData(adminActor(req));return res.json({success:true,resetAll:true});}else return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});await writeAdminAudit(adminActor(req),action,'system',{});adminDashboardCache=null;return res.json({success:true,botLocked:!!BOT_LOCKED});}catch(e){return res.status(500).json({success:false,error:String(e?.message||'Không cập nhật được hệ thống.').slice(0,220)});}});
 
 function renderAdminWebHtml(nonce){
@@ -11835,9 +11927,9 @@ return String.raw`<!DOCTYPE html>
 .login{min-height:100vh;display:grid;place-items:center;padding:24px}.login-card{width:min(440px,100%);padding:30px;border:1px solid var(--line2);border-radius:28px;background:linear-gradient(150deg,rgba(17,41,66,.98),rgba(7,18,31,.98));box-shadow:0 34px 100px rgba(0,0,0,.55)}.brand{font-size:26px;font-weight:950;letter-spacing:-.04em}.brand-sub{margin:6px 0 22px;color:var(--muted);font-size:12px;letter-spacing:.12em}.field{width:100%;border:1px solid #294968;background:#081624;color:#fff;border-radius:13px;padding:11px 13px;outline:none;min-height:42px}.field:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(62,231,255,.10)}textarea.field{resize:vertical;min-height:110px}
 .btn{border:0;border-radius:12px;padding:10px 13px;background:#17304b;color:#fff;font-weight:850;cursor:pointer;transition:.18s ease}.btn:hover{filter:brightness(1.12);transform:translateY(-1px)}.btn:disabled{opacity:.42;cursor:not-allowed;transform:none}.btn.primary{background:linear-gradient(135deg,#2876ff,#10bcd8)}.btn.good{background:#126a4c}.btn.warn{background:#765610}.btn.danger{background:#7b2939}.btn.ghost{background:#102338;border:1px solid #2a4b69}
 .layout{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:270px;padding:20px 14px;border-right:1px solid #1b354e;background:rgba(6,17,30,.96);backdrop-filter:blur(18px);z-index:40;overflow:auto}.side-brand{padding:8px 10px 18px;font-size:19px;font-weight:950}.side-brand small{display:block;margin-top:4px;color:var(--muted);font-size:10px;letter-spacing:.14em}.nav-btn{width:100%;display:flex;align-items:center;gap:10px;border:0;border-radius:13px;background:transparent;color:#afc5db;padding:11px 12px;margin:3px 0;text-align:left;font-weight:800;cursor:pointer}.nav-btn.active,.nav-btn:hover{color:#fff;background:linear-gradient(135deg,#163756,#132b47);box-shadow:inset 0 0 0 1px #274c6e}.side-footer{margin-top:18px;padding:12px;border-top:1px solid #183149}.main{margin-left:270px;min-width:0;padding:0 24px 60px}.topbar{position:sticky;top:0;z-index:25;display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:74px;margin:0 -24px 18px;padding:12px 24px;border-bottom:1px solid rgba(38,72,104,.7);background:rgba(6,16,29,.88);backdrop-filter:blur(18px)}.top-left{display:flex;align-items:center;gap:11px;min-width:0}.menu-btn{display:none}.top-title{font-size:22px;font-weight:950;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.top-kicker{font-size:10px;color:var(--cyan);font-weight:900;letter-spacing:.12em}.top-actions{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #2c4e6c;background:#0e2238;border-radius:999px;padding:7px 10px;font-size:11px;font-weight:850}
-.section{display:none;max-width:1540px;margin:0 auto}.section.active{display:block}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:12px}.section-head h2{margin:0;font-size:18px}.section-head p{margin:4px 0 0;color:var(--muted);font-size:12px}
-.status-strip{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:12px}.status-box{min-width:0;border:1px solid var(--line);border-radius:15px;background:linear-gradient(145deg,#0d2034,#091624);padding:10px 11px}.status-box .s-label{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.07em}.status-box .s-value{margin-top:5px;font-size:12px;font-weight:900;overflow-wrap:anywhere}
-.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);background:linear-gradient(145deg,rgba(15,34,55,.97),rgba(8,20,34,.98));border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}.stat{position:relative;overflow:hidden}.stat:after{content:"";position:absolute;width:80px;height:80px;border-radius:50%;right:-30px;top:-30px;background:rgba(62,231,255,.06)}.stat .k{font-size:11px;color:var(--muted);font-weight:750}.stat .v{margin-top:6px;font-size:24px;font-weight:950}.stat .ico{font-size:18px}.subgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.section{display:none;max-width:1540px;margin:0 auto}.section.active{display:block}.section-head{position:relative;overflow:hidden;display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:14px;padding:16px 18px;border:1px solid rgba(52,92,128,.55);border-radius:20px;background:linear-gradient(125deg,rgba(18,49,78,.72),rgba(8,23,39,.55));box-shadow:0 18px 46px rgba(0,0,0,.16)}.section-head:after{content:"";position:absolute;right:-65px;top:-85px;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle,rgba(62,231,255,.13),transparent 68%);pointer-events:none}.section-head h2{margin:0;font-size:19px;letter-spacing:-.02em}.section-head p{margin:5px 0 0;color:var(--muted);font-size:12px}.section-head>div{position:relative;z-index:1}
+.status-strip{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;margin-bottom:12px}.status-box{min-width:0;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,#102944,#081725);padding:12px 12px;box-shadow:inset 0 1px 0 rgba(255,255,255,.025),0 10px 28px rgba(0,0,0,.14)}.status-box .s-label{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.07em}.status-box .s-value{margin-top:5px;font-size:12px;font-weight:900;overflow-wrap:anywhere}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);background:linear-gradient(145deg,rgba(15,38,62,.98),rgba(7,19,33,.99));border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);min-width:0}.card:hover{border-color:#2e587a}.stat{position:relative;overflow:hidden}.stat:after{content:"";position:absolute;width:80px;height:80px;border-radius:50%;right:-30px;top:-30px;background:rgba(62,231,255,.06)}.stat .k{font-size:11px;color:var(--muted);font-weight:750}.stat .v{margin-top:6px;font-size:24px;font-weight:950}.stat .ico{font-size:18px}.subgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
 .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}.toolbar .field{width:auto;min-width:150px}.toolbar .grow{flex:1;min-width:220px}.table-wrap{width:100%;overflow:auto;border:1px solid var(--line);border-radius:18px;background:#081625;box-shadow:var(--shadow)}table{width:100%;border-collapse:collapse;min-width:900px}th,td{padding:11px 12px;border-bottom:1px solid #19334c;text-align:left;font-size:11px;vertical-align:top}th{position:sticky;top:0;z-index:1;background:#10243a;color:#9db8d0;font-size:10px;letter-spacing:.04em}tbody tr:hover td{background:#0e2135}.tag{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:9px;font-weight:950;background:#18304c;white-space:nowrap}.tag.good{color:#75f3bd;background:#153b31}.tag.bad{color:#ff9dab;background:#47222e}.tag.warn{color:#ffdd7b;background:#463815}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions .btn{padding:7px 9px;font-size:10px}.pager{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px}.link-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.link-card{border:1px solid #28506f;border-radius:18px;padding:14px;background:linear-gradient(150deg,#102840,#0b192a)}.link-card h3{margin:0 0 10px}.diag{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;font-size:11px}
 .modal{position:fixed;inset:0;z-index:70;background:rgba(0,7,16,.86);display:grid;place-items:center;padding:18px}.modal-card{width:min(1080px,100%);max-height:92vh;overflow:auto;border:1px solid #315b7d;border-radius:24px;background:#09192a;padding:20px;box-shadow:0 36px 110px rgba(0,0,0,.72)}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:center;position:sticky;top:-20px;background:#09192af5;padding:12px 0;z-index:2}.detail-sections{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.detail-group{border:1px solid #203e5b;border-radius:17px;padding:13px;background:#0b1c2e}.detail-group h4{margin:0 0 10px;font-size:12px;color:#cfe9ff}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.mini{padding:9px;border:1px solid #1e3b56;border-radius:12px;background:#081725;min-width:0}.mini span{display:block;font-size:9px;color:var(--muted)}.mini b{display:block;margin-top:4px;font-size:11px;overflow-wrap:anywhere}.pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#06121f;border:1px solid #1c384f;border-radius:13px;padding:11px;font-size:10px;max-height:220px;overflow:auto}.progress{height:9px;border-radius:999px;background:#0a1725;overflow:hidden;border:1px solid #1e3a54}.progress>div{height:100%;background:linear-gradient(90deg,#2d7dff,#3ee7ff);width:0}.toast{position:fixed;right:18px;top:18px;z-index:100;max-width:min(390px,calc(100vw - 36px));padding:12px 14px;border-radius:13px;background:#12354c;border:1px solid #2e698d;box-shadow:0 18px 50px #000a;font-weight:800;font-size:12px}.toast.err{background:#4b1e2a;border-color:#8f3c51}.drawer-overlay{display:none}
 @media(max-width:1180px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.status-strip{grid-template-columns:repeat(4,minmax(0,1fr))}.link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -11875,7 +11967,7 @@ return String.raw`<!DOCTYPE html>
 <section id="sec-users" class="section">
   <div class="section-head"><div><h2>Quản lý người dùng</h2><p>IP gần nhất chỉ lấy từ canonical users.ip; event IP được giữ riêng.</p></div></div>
   <div class="toolbar"><input id="userSearch" class="field grow" placeholder="Tìm ID hoặc tên"><select id="userBanned" class="field"><option value="all">Tất cả trạng thái</option><option value="false">Đang hoạt động</option><option value="true">Đang ban</option></select><select id="userSort" class="field"><option value="id">Sort: ID</option><option value="name">Sort: Tên</option><option value="coins">Sort: Coin</option><option value="orders">Sort: Orders</option><option value="ads">Sort: QC</option><option value="smartlinks">Sort: SmartLink</option></select><select id="userDir" class="field"><option value="desc">Giảm dần</option><option value="asc">Tăng dần</option></select><button id="userSearchBtn" class="btn primary">Tải</button></div>
-  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Orders</th><th>QC</th><th>SmartLink</th><th>Link Task</th><th>Risk</th><th>IP gần nhất</th><th>Ban</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><div id="usersPager" class="pager"></div></div>
+  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Orders</th><th>QC</th><th>AdsGram</th><th>Monetag</th><th>SmartLink</th><th>Link Task</th><th>Risk</th><th>IP gần nhất</th><th>Ban</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><div id="usersPager" class="pager"></div></div>
 </section>
 
 <section id="sec-withdrawals" class="section">
@@ -11922,7 +12014,7 @@ return String.raw`<!DOCTYPE html>
 'use strict';
 var csrf='',currentUserId='',userPage=1,wdPage=1,broadcastTimer=null,currentTab='overview';
 var titles={overview:'Tổng quan',users:'Người dùng',withdrawals:'Rút tiền',links:'Vượt Link',jobmail:'JOB MAIL',giftcodes:'Giftcode',admins:'Admin & Broadcast',system:'Hệ thống'};
-function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function fmtDate(v){if(!v)return 'N/A';try{return new Date(v).toLocaleString('vi-VN')}catch(_){return String(v)}}function fmtUptime(s){s=Math.max(0,Number(s||0));var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}function toast(msg,err){var el=$('toast');el.textContent=String(msg||'');el.className='toast'+(err?' err':'');clearTimeout(el._t);el._t=setTimeout(function(){el.classList.add('hidden')},3200)}function tag(txt,kind){return '<span class="tag '+(kind||'')+'">'+esc(txt)+'</span>'}function statCard(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+num(v)+'</div></div>'}function mini(k,v){return '<div class="mini"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>'}function group(title,items){return '<div class="detail-group"><h4>'+title+'</h4><div class="detail-grid">'+items.map(function(x){return mini(x[0],x[1])}).join('')+'</div></div>'}
+function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function fmtDate(v){if(!v)return 'N/A';try{return new Date(v).toLocaleString('vi-VN')}catch(_){return String(v)}}function fmtUptime(s){s=Math.max(0,Number(s||0));var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}function toast(msg,err){var el=$('toast');el.textContent=String(msg||'');el.className='toast'+(err?' err':'');clearTimeout(el._t);el._t=setTimeout(function(){el.classList.add('hidden')},3200)}function tag(txt,kind){return '<span class="tag '+(kind||'')+'">'+esc(txt)+'</span>'}function statCard(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+num(v)+'</div></div>'}function statCardText(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+esc(v==null?'N/A':v)+'</div></div>'}function mini(k,v){return '<div class="mini"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>'}function group(title,items){return '<div class="detail-group"><h4>'+title+'</h4><div class="detail-grid">'+items.map(function(x){return mini(x[0],x[1])}).join('')+'</div></div>'}
 async function api(url,opt){opt=opt||{};var headers=new Headers(opt.headers||{});if(opt.body&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');if(csrf&&String(opt.method||'GET').toUpperCase()!=='GET')headers.set('x-csrf-token',csrf);var res=await fetch(url,Object.assign({credentials:'same-origin',cache:'no-store'},opt,{headers:headers}));var data=await res.json().catch(function(){return {success:false,error:'Phản hồi server không hợp lệ.'}});if(res.status===401){csrf='';showLogin();throw new Error(data.error||'Phiên Admin đã hết hạn.')}if(!res.ok||data.success===false)throw new Error(data.error||('HTTP '+res.status));return data}
 function showLogin(){$('loginView').classList.remove('hidden');$('appView').classList.add('hidden')}function showApp(){$('loginView').classList.add('hidden');$('appView').classList.remove('hidden')}
 function openDrawer(){if(innerWidth>820)return;$('sidebar').classList.add('open');$('drawerOverlay').classList.add('show')}function closeDrawer(){$('sidebar').classList.remove('open');$('drawerOverlay').classList.remove('show')}
@@ -11939,12 +12031,12 @@ function bind(){if(document.body.dataset.bound)return;document.body.dataset.boun
  document.querySelectorAll('.userAct').forEach(function(b){b.onclick=function(){userAction(b.dataset.action)}})
 }
 function switchTab(tab,force){currentTab=tab;document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.toggle('active',b.dataset.tab===tab)});document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active')});var sec=$('sec-'+tab);if(sec)sec.classList.add('active');$('pageTitle').textContent=titles[tab]||tab;closeDrawer();if(tab==='overview')loadOverview(force);if(tab==='users')loadUsers();if(tab==='withdrawals')loadWithdrawals();if(tab==='links')loadLinks();if(tab==='jobmail')loadJobMail();if(tab==='giftcodes')loadGiftcodes();if(tab==='admins')loadAdmins();if(tab==='system')loadSystem(force)}
-async function loadOverview(force){try{var s=(await api('/api/admin/dashboard'+(force?'?force=1':''))).stats;var status=[['BOT',s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE'],['SUPABASE',s.supabaseReady?'🟢 READY':'🔴 ERROR'],['LINK TASK DB',s.linkTaskDbReady?'🟢 READY':'🔴 NOT READY'],['TRUST PROXY','🌐 '+(s.trustProxy||'N/A')],['UPTIME','⏱ '+fmtUptime(s.uptimeSeconds)],['SERVER STARTED','🚀 '+fmtDate(s.startedAt)],['WEB_APP_URL','🌎 '+(s.webAppUrl||'N/A')]];$('overviewStatus').innerHTML=status.map(function(x){return '<div class="status-box"><div class="s-label">'+esc(x[0])+'</div><div class="s-value">'+esc(x[1])+'</div></div>'}).join('');$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE';$('statsGrid').innerHTML=[statCard('Tổng User',s.totalUsers,'👥'),statCard('User đang Ban',s.bannedUsers,'🚫'),statCard('Tổng Coin hiện có',s.totalCoins,'🪙'),statCard('Tổng Đơn Hàng',s.totalOrders,'📦'),statCard('Đơn rút chờ duyệt',s.pendingWithdrawals,'💸'),statCard('Mail chờ duyệt',s.jobMail&&s.jobMail.pending,'📩'),statCard('Link Task hoàn thành',s.totalLinkTasks,'🔗'),statCard('QC hôm nay',s.adsToday,'📺'),statCard('SmartLink hôm nay',s.smartlinksToday,'🌐')].join('');$('activityGrid').innerHTML=[statCard('Link Task hôm nay',s.linkTasksToday,'🔗'),statCard('Rút tiền hôm nay',s.withdrawalsToday,'💸'),statCard('Mail gửi hôm nay',s.jobMail&&s.jobMail.todaySubmitted,'📨')].join('')}catch(e){toast(e.message,true)}}
+async function loadOverview(force){try{var s=(await api('/api/admin/dashboard'+(force?'?force=1':''))).stats;var status=[['BOT',s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE'],['SUPABASE',s.supabaseReady?'🟢 READY':'🔴 ERROR'],['LINK TASK DB',s.linkTaskDbReady?'🟢 READY':'🔴 NOT READY'],['TRUST PROXY','🌐 '+(s.trustProxy||'N/A')],['UPTIME','⏱ '+fmtUptime(s.uptimeSeconds)],['SERVER STARTED','🚀 '+fmtDate(s.startedAt)],['WEB_APP_URL','🌎 '+(s.webAppUrl||'N/A')]];$('overviewStatus').innerHTML=status.map(function(x){return '<div class="status-box"><div class="s-label">'+esc(x[0])+'</div><div class="s-value">'+esc(x[1])+'</div></div>'}).join('');$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE';$('statsGrid').innerHTML=[statCard('Tổng User',s.totalUsers,'👥'),statCard('User đang Ban',s.bannedUsers,'🚫'),statCard('Tổng Coin hiện có',s.totalCoins,'🪙'),statCard('Tổng Đơn Hàng',s.totalOrders,'📦'),statCard('Đơn rút chờ duyệt',s.pendingWithdrawals,'💸'),statCard('Mail chờ duyệt',s.jobMail&&s.jobMail.pending,'📩'),statCard('Link Task hoàn thành',s.totalLinkTasks,'🔗'),statCard('QC hôm nay',s.adsToday,'📺'),statCard('SmartLink hôm nay',s.smartlinksToday,'🌐')].join('');$('activityGrid').innerHTML=[statCard('Rewarded hôm nay',s.rewardedAdsToday,'🎬'),statCardText('AdsGram hôm nay',s.adsgramToday==null?'N/A':s.adsgramToday,'🟦'),statCardText('Monetag hôm nay',s.monetagToday==null?'N/A':s.monetagToday,'🟪'),statCard('Link Task hôm nay',s.linkTasksToday,'🔗'),statCard('Rút tiền hôm nay',s.withdrawalsToday,'💸'),statCard('Mail gửi hôm nay',s.jobMail&&s.jobMail.todaySubmitted,'📨')].join('')}catch(e){toast(e.message,true)}}
 function pager(id,page,total,limit,cb){var el=$(id),pages=Math.max(1,Math.ceil(Number(total||0)/Number(limit||25)));el.innerHTML='<button class="btn ghost" id="'+id+'Prev" '+(page<=1?'disabled':'')+'>←</button><span class="muted">Trang '+page+'/'+pages+' • '+num(total)+' bản ghi</span><button class="btn ghost" id="'+id+'Next" '+(page>=pages?'disabled':'')+'>→</button>';$(id+'Prev').onclick=function(){if(page>1)cb(page-1)};$(id+'Next').onclick=function(){if(page<pages)cb(page+1)}}
-async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="11" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
+async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+tag('N/A','')+'</td><td>'+tag('N/A','')+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="13" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
 async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100 '+d.risk.level;var dup=d.duplicates&&d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không';var reasons=d.risk&&d.risk.reasons&&d.risk.reasons.length?d.risk.reasons.join(', '):'Không có';$('userDetailGroups').innerHTML=[
  group('💰 Ví',[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Truck Level',num(d.user.truckLevel)]]),
- group('📺 Hoạt động',[['QC hôm nay',num(d.user.adsToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['SmartLink hôm nay',num(d.user.smartlinksToday)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Referral',num(d.user.validInvites)]]),
+ group('📺 Hoạt động',[['QC hôm nay',num(d.user.adsToday)],['AdsGram hôm nay','N/A'],['Monetag hôm nay','N/A'],['Tổng QC',num(d.user.lifetimeAdsWatched)],['SmartLink hôm nay',num(d.user.smartlinksToday)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Referral',num(d.user.validInvites)]]),
  group('🔗 Link Task',[['Hoàn thành',d.linkTask?num(d.linkTask.completed):'N/A'],['Orders nhận',d.linkTask?num(d.linkTask.rewardOrders):'N/A']]),
  group('🌐 Network',[['IP gần nhất',d.user.ip||'Chưa có'],['Trùng IP với',dup]]),
  group('💸 Rút tiền',[['Tổng đã rút',num(d.withdrawal.totalWithdrawn)+' VNĐ'],['Tổng bị hủy',num(d.withdrawal.totalCancelled)+' VNĐ'],['IP đơn rút gần nhất',d.withdrawal.latestIp||'Chưa có']]),
@@ -11963,7 +12055,7 @@ async function createGiftcode(){try{await api('/api/admin/giftcodes',{method:'PO
 async function loadAdmins(){try{var j=await api('/api/admin/admins');$('adminsList').innerHTML='<p>👑 Main Admin: <b>'+esc(j.mainAdmin)+'</b></p>'+(j.subAdmins.length?j.subAdmins.map(function(a){return '<div class="mini" style="margin:6px 0">👤 '+esc(a.id)+' <button class="btn danger sub-remove" data-id="'+esc(a.id)+'" style="float:right">Xóa</button></div>'}).join(''):'<p class="muted">Chưa có Admin phụ.</p>');document.querySelectorAll('.sub-remove').forEach(function(b){b.onclick=function(){subAdminAction('remove',b.dataset.id)}})}catch(e){toast(e.message,true)}}async function addSubAdmin(){subAdminAction('add',$('subAdminId').value)}async function subAdminAction(a,id){if(!id)return;if(!confirm((a==='add'?'Thêm ':'Xóa ')+'Admin '+id+'?'))return;try{await api('/api/admin/admins/action',{method:'POST',body:JSON.stringify({action:a,userId:id})});toast('✅ Đã cập nhật Admin');$('subAdminId').value='';loadAdmins()}catch(e){toast(e.message,true)}}
 async function sendBroadcast(){var msg=$('broadcastText').value;if(!msg.trim())return;if(!confirm('Bạn chắc chắn muốn gửi cho TOÀN BỘ người dùng?'))return;try{var j=await api('/api/admin/broadcast',{method:'POST',body:JSON.stringify({message:msg})});$('broadcastState').textContent='Đã bắt đầu job '+j.job.id;pollBroadcast(j.job.id)}catch(e){toast(e.message,true)}}function pollBroadcast(id){if(broadcastTimer)clearInterval(broadcastTimer);broadcastTimer=setInterval(async function(){try{var j=await api('/api/admin/broadcast/'+id),x=j.job,p=x.total?Math.round((x.success+x.failed)*100/x.total):0;$('broadcastState').textContent='Trạng thái: '+x.status+' • '+x.success+'/'+x.total+' thành công • '+x.failed+' lỗi';$('broadcastProgress').style.width=p+'%';if(x.status!=='running')clearInterval(broadcastTimer)}catch(_){clearInterval(broadcastTimer)}},1200)}
 async function resetAllWeb(){var first=prompt('Thao tác này sẽ reset dữ liệu toàn bộ hệ thống. Nhập RESET ALL DATA để tiếp tục:');if(first!=='RESET ALL DATA')return;var second=confirm('XÁC NHẬN LẦN 2: Bạn chắc chắn muốn reset toàn bộ dữ liệu?');if(!second)return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify({action:'resetAll',confirmText:first})});toast('✅ Đã reset toàn bộ dữ liệu');loadSystem(true);loadOverview(true)}catch(e){toast(e.message,true)}}
-async function loadSystem(force){try{var s=(await api('/api/admin/system'+(force?'?force=1':''))).system,n=s.network||{};$('systemInfo').textContent='BOT: '+(s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE')+'\nUPTIME: '+fmtUptime(s.uptimeSeconds)+'\nSTARTED: '+fmtDate(s.startedAt)+'\nSUPABASE: '+(s.supabaseOk?'✅ READY':'❌ ERROR')+'\nLINK TASK DB: '+(s.linkTaskDb&&s.linkTaskDb.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+String(n.trustProxy||'N/A')+'\nREMOTE ADDRESS: '+String(n.remoteAddress||'N/A')+'\nX-FORWARDED-FOR PRESENT: '+(n.forwardedForPresent?'YES':'NO')+'\nFORWARDED HOP COUNT: '+Number(n.forwardedHopCount||0)+'\nCANONICAL PUBLIC IP: '+(n.publicIpAvailable?(n.canonicalPublicIp||n.resolvedPublicIp):'❌ PUBLIC IP UNAVAILABLE')+'\nWEB_APP_URL: '+String(s.webAppUrl||'');$('auditList').textContent=(s.audit||[]).map(function(a){return String(a.at||'')+' • '+String(a.actor||'')+' • '+String(a.action||'')+' • '+String(a.target||'')}).join('\n')||'Chưa có audit.';$('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked;$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE'}catch(e){toast(e.message,true)}}async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem(true);if(a==='lockBot'||a==='unlockBot')loadOverview(true)}catch(e){toast(e.message,true)}}
+async function loadSystem(force){try{var s=(await api('/api/admin/system'+(force?'?force=1':''))).system,n=s.network||{};$('systemInfo').textContent='BOT: '+(s.botLocked?'🔴 MAINTENANCE':'🟢 ONLINE')+'\nUPTIME: '+fmtUptime(s.uptimeSeconds)+'\nSTARTED: '+fmtDate(s.startedAt)+'\nSUPABASE: '+(s.supabaseOk?'✅ READY':'❌ ERROR')+'\nLINK TASK DB: '+(s.linkTaskDb&&s.linkTaskDb.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+String(n.trustProxy||'N/A')+'\nREMOTE ADDRESS: '+String(n.remoteAddress||'N/A')+'\nX-FORWARDED-FOR PRESENT: '+(n.forwardedForPresent?'YES':'NO')+'\nFORWARDED HOP COUNT: '+Number(n.forwardedHopCount||0)+'\nCANONICAL PUBLIC IP: '+(n.publicIpAvailable?(n.canonicalPublicIp||n.resolvedPublicIp):'❌ PUBLIC IP UNAVAILABLE')+'\nWEB_APP_URL: '+String(s.webAppUrl||'')+'\n\nADS DIAGNOSTIC'+'\nAdsGram Reward Block: '+String(s.ads&&s.ads.adsgramRewardBlock||'N/A')+'\nAdsGram Interstitial: '+String(s.ads&&s.ads.adsgramInterstitialBlock||'N/A')+'\nAdsGram manual cooldown: '+String(s.ads&&s.ads.adsgramManualCooldownMinutes||'N/A')+' phút'+'\nMonetag manual cooldown: '+String(s.ads&&s.ads.monetagManualCooldownMinutes||'N/A')+' phút'+'\nAuto Ad cooldown: '+String(s.ads&&s.ads.autoCooldownSeconds||'N/A')+' giây'+'\nMonetag Zone: '+String(s.ads&&s.ads.monetagZone||'N/A');$('auditList').textContent=(s.audit||[]).map(function(a){return String(a.at||'')+' • '+String(a.actor||'')+' • '+String(a.action||'')+' • '+String(a.target||'')}).join('\n')||'Chưa có audit.';$('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked;$('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE'}catch(e){toast(e.message,true)}}async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem(true);if(a==='lockBot'||a==='unlockBot')loadOverview(true)}catch(e){toast(e.message,true)}}
 init();
 })();
 </script></body></html>`;
