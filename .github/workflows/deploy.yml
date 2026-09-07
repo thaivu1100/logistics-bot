@@ -4,61 +4,279 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   group: logistics-bot-production
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
+env:
+  RELEASE_ID: ${{ github.sha }}
+  RUN_ID: ${{ github.run_id }}
+
 jobs:
   deploy:
+    name: deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Validate application source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          node --check server.js
+          node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json: OK')"
+
+          if [ -f public/index.html ]; then
+            echo "Frontend: public/index.html"
+          elif [ -f index.txt ]; then
+            echo "Frontend source: index.txt (remote staging will copy it to public/index.html)"
+          elif [ -f index.html ]; then
+            echo "Frontend source: index.html (remote staging will copy it to public/index.html)"
+          else
+            echo "::error::Không tìm thấy public/index.html, index.txt hoặc index.html"
+            exit 1
+          fi
+
+      - name: Build deployment archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ARCHIVE_TMP="${RUNNER_TEMP}/logistics-release.tgz"
+
+          tar \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='*.log' \
+            --exclude='logistics-release.tgz' \
+            -czf "${ARCHIVE_TMP}" .
+
+          cp "${ARCHIVE_TMP}" "${GITHUB_WORKSPACE}/logistics-release.tgz"
+          test -s "${GITHUB_WORKSPACE}/logistics-release.tgz"
+          echo "Archive ready: $(du -h "${GITHUB_WORKSPACE}/logistics-release.tgz" | awk '{print $1}')"
+
+      - name: Upload release artifact to VPS
+        uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 10m
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          source: logistics-release.tgz
+          target: /tmp/logistics-deploy-${{ github.run_id }}
+          timeout: 60s
+          command_timeout: 5m
+          overwrite: true
+
+      - name: Deploy staged release on VPS
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          RELEASE_ID: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          timeout: 60s
+          command_timeout: 12m
+          envs: RELEASE_ID,RUN_ID
           script: |
             set -Eeuo pipefail
 
-            cd /opt/logistics-bot
+            APP="/opt/logistics-bot"
+            RELEASES="/opt/logistics-bot-releases"
+            SERVICE="logistics-bot"
+            TRANSFER_DIR="/tmp/logistics-deploy-${RUN_ID}"
+            ARCHIVE="${TRANSFER_DIR}/logistics-release.tgz"
+            STAGING="${RELEASES}/${RELEASE_ID}"
+            APP_NEXT="${APP}.next"
+            APP_ROLLBACK="${APP}.rollback"
 
-            OLD_COMMIT="$(git rev-parse HEAD)"
+            echo "==> Preparing release ${RELEASE_ID:0:12}"
 
-            rollback() {
-              echo "Deploy failed - rollback"
-              git reset --hard "$OLD_COMMIT"
-              npm install --omit=dev
-              systemctl restart logistics-bot
-            }
+            if [ ! -s "${ARCHIVE}" ]; then
+              echo "ERROR: deployment archive missing: ${ARCHIVE}"
+              exit 1
+            fi
 
-            trap rollback ERR
+            mkdir -p "${RELEASES}"
+            rm -rf -- "${STAGING}"
+            mkdir -p "${STAGING}"
+            tar -xzf "${ARCHIVE}" -C "${STAGING}"
 
-            git fetch origin main
-            git checkout main
-            git reset --hard origin/main
+            cd "${STAGING}"
 
-            npm install --omit=dev
+            # Server.js serves __dirname/public. Keep the repository layout if it
+            # already contains public/index.html; otherwise create it only from
+            # one of the project frontend source files.
+            if [ ! -f public/index.html ]; then
+              if [ -f index.txt ]; then
+                mkdir -p public
+                cp index.txt public/index.html
+              elif [ -f index.html ]; then
+                mkdir -p public
+                cp index.html public/index.html
+              fi
+            fi
+
+            test -f package.json
+            test -f server.js
+            test -f public/index.html
+
+            node --check server.js
+            node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json: OK')"
+
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev --no-audit --no-fund
+            else
+              npm install --omit=dev --no-audit --no-fund
+            fi
 
             node --check server.js
 
-            systemctl restart logistics-bot
+            # Determine local health-check port without printing the environment file.
+            HEALTH_PORT=3000
+            if [ -f /etc/logistics-bot.env ]; then
+              PORT_VALUE="$(grep -E '^[[:space:]]*PORT=' /etc/logistics-bot.env | tail -n 1 | cut -d= -f2- | tr -d "\"'" | xargs || true)"
+              if printf '%s' "${PORT_VALUE}" | grep -Eq '^[0-9]{1,5}$'; then
+                HEALTH_PORT="${PORT_VALUE}"
+              fi
+            fi
 
-            sleep 4
+            PREVIOUS=""
+            if [ -L "${APP}" ]; then
+              PREVIOUS="$(readlink -f "${APP}" || true)"
+            elif [ -d "${APP}" ]; then
+              LEGACY="${RELEASES}/legacy-$(date +%Y%m%d%H%M%S)"
+              mv "${APP}" "${LEGACY}"
+              PREVIOUS="${LEGACY}"
+            elif [ -e "${APP}" ]; then
+              echo "ERROR: ${APP} exists but is not a directory/symlink"
+              exit 1
+            fi
 
-            systemctl is-active --quiet logistics-bot
+            rm -f -- "${APP_NEXT}" "${APP_ROLLBACK}"
+            ln -s "${STAGING}" "${APP_NEXT}"
+            mv -Tf "${APP_NEXT}" "${APP}"
 
-            curl --fail --silent --max-time 10 \
-              http://127.0.0.1:3000/ \
-              > /dev/null
+            rollback_release() {
+              echo "Deploy failed - local rollback"
+              if [ -n "${PREVIOUS}" ] && [ -d "${PREVIOUS}" ]; then
+                rm -f -- "${APP_ROLLBACK}"
+                ln -s "${PREVIOUS}" "${APP_ROLLBACK}"
+                mv -Tf "${APP_ROLLBACK}" "${APP}"
+                systemctl restart "${SERVICE}" || true
 
-            curl --fail --silent --max-time 15 \
-              https://logistics-bot-160-191-87-87.nip.io/ \
-              > /dev/null
+                for i in $(seq 1 15); do
+                  if curl --fail --silent --show-error --max-time 3 \
+                    "http://127.0.0.1:${HEALTH_PORT}/health" >/dev/null; then
+                    echo "Rollback health check: OK"
+                    return 0
+                  fi
+                  sleep 1
+                done
 
-            trap - ERR
+                echo "ERROR: rollback release did not become healthy"
+                systemctl status "${SERVICE}" --no-pager || true
+                journalctl -u "${SERVICE}" -n 40 --no-pager || true
+              else
+                echo "ERROR: no previous local release available for rollback"
+              fi
+              return 1
+            }
 
-            echo "DEPLOY SUCCESS"
+            if ! systemctl restart "${SERVICE}"; then
+              rollback_release || true
+              exit 1
+            fi
+
+            if ! systemctl is-active --quiet "${SERVICE}"; then
+              rollback_release || true
+              exit 1
+            fi
+
+            HEALTH_OK=0
+            for i in $(seq 1 20); do
+              if curl --fail --silent --show-error --max-time 3 \
+                "http://127.0.0.1:${HEALTH_PORT}/health" >/dev/null; then
+                HEALTH_OK=1
+                break
+              fi
+              sleep 1
+            done
+
+            if [ "${HEALTH_OK}" -ne 1 ]; then
+              systemctl status "${SERVICE}" --no-pager || true
+              journalctl -u "${SERVICE}" -n 40 --no-pager || true
+              rollback_release || true
+              exit 1
+            fi
+
+            echo "Health check: OK"
+            echo "Active release: $(readlink -f "${APP}")"
+
+            # Clean only old local code releases. Never touches /etc/logistics-bot.env
+            # or Supabase data. Keep the active and previous releases even if old.
+            ACTIVE="$(readlink -f "${APP}" || true)"
+            find "${RELEASES}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' \
+              | sort -nr \
+              | tail -n +6 \
+              | cut -d' ' -f2- \
+              | while IFS= read -r OLD; do
+                  [ -z "${OLD}" ] && continue
+                  [ "${OLD}" = "${ACTIVE}" ] && continue
+                  [ -n "${PREVIOUS}" ] && [ "${OLD}" = "${PREVIOUS}" ] && continue
+                  rm -rf -- "${OLD}"
+                done
+
+            rm -rf -- "${TRANSFER_DIR}"
+            echo "Deploy completed successfully"
+
+      - name: VPS GitHub connectivity diagnostic
+        if: always()
+        uses: appleboy/ssh-action@v1.2.4
+        continue-on-error: true
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          timeout: 30s
+          command_timeout: 90s
+          script: |
+            echo "== Optional network diagnostic =="
+            getent hosts github.com || true
+            curl -4 -I --connect-timeout 8 --max-time 12 https://github.com >/dev/null 2>&1 \
+              && echo "github.com IPv4: reachable" \
+              || echo "github.com IPv4: unavailable"
+            curl -6 -I --connect-timeout 8 --max-time 12 https://github.com >/dev/null 2>&1 \
+              && echo "github.com IPv6: reachable" \
+              || echo "github.com IPv6: unavailable"
+            ip route || true
