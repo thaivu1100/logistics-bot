@@ -8,6 +8,7 @@
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+    <script src="https://thatlobster.com/6d/40/5a/6d405ae063c5343d0ad8658f24c728ae.js"></script>
     
     <script src='//libtl.com/sdk.js' data-zone='11457064' data-sdk='show_11457064'></script>
     <script src="https://www.youtube.com/iframe_api"></script>
@@ -147,6 +148,13 @@
         .join-banner-btns { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
         .join-banner-btns a, .join-banner-btns button { font-size: 10px; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
         
+        /* ==================== SPONSOR BANNER 320x50 ==================== */
+        .sponsor-banner-slot { width:100%; max-width:340px; margin:10px auto 14px; padding:8px 10px 10px; border-radius:16px; background:rgba(15,23,42,.72); border:1px solid rgba(148,163,184,.12); overflow:hidden; text-align:center; box-sizing:border-box; }
+        .sponsor-banner-label { margin:0 0 5px; font-size:7px; line-height:1; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:#64748b; }
+        .sponsor-banner-frame { width:320px; max-width:100%; min-height:50px; margin:0 auto; overflow:hidden; display:flex; justify-content:center; align-items:center; }
+        .sponsor-banner-frame iframe { max-width:100% !important; border:0 !important; }
+        @media (max-width:339px) { .sponsor-banner-slot { padding-left:0; padding-right:0; border-left:0; border-right:0; border-radius:12px; } }
+
         /* ==================== JOB MAIL ==================== */
         .job-mail-wrap { min-width:0; overflow:hidden; }
         .job-mail-hero { position:relative; overflow:hidden; background:linear-gradient(145deg,rgba(30,64,175,.45),rgba(15,23,42,.94) 55%,rgba(146,64,14,.28)); border:1px solid rgba(251,191,36,.22); }
@@ -1068,6 +1076,23 @@
             <span class="national-star">★</span><span>🇻🇳 MỪNG QUỐC KHÁNH 02/09</span><span class="national-star">★</span>
         </div>
 
+        <!-- Sponsor 320x50: one static, clearly separated placement. Không che CTA/navigation và không tự refresh. -->
+        <section class="sponsor-banner-slot" aria-label="Quảng cáo tài trợ">
+            <div class="sponsor-banner-label">Quảng cáo</div>
+            <div class="sponsor-banner-frame">
+                <script>
+                  atOptions = {
+                    'key' : '06614de8b0449426a8ef60d24e757dc4',
+                    'format' : 'iframe',
+                    'height' : 50,
+                    'width' : 320,
+                    'params' : {}
+                  };
+                </script>
+                <script src="https://thatlobster.com/06614de8b0449426a8ef60d24e757dc4/invoke.js"></script>
+            </div>
+        </section>
+
         <main class="ui-main-content p-2 space-y-3">
             <!-- TRANG CHỦ -->
             <div x-show="tab === 'home'" x-transition class="tab-enter ui-tab ui-home space-y-3 relative">
@@ -1369,7 +1394,7 @@
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-black uppercase opacity-60" x-text="texts.watchAdRewardTitle"></h3>
+                        <h3 class="text-sm font-black uppercase text-blue-300">📺 XEM QC MONETAG</h3>
                         <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
                     </div>
                     <p class="text-[9px] text-slate-400"><span x-text="texts.watchAdRewardDesc"></span>
@@ -1377,7 +1402,7 @@
                         <span class="text-cyan-300 font-black">Nếu Monetag xác minh click: ngẫu nhiên 1–70 Coin + 1–70 Đơn.</span>
                         <span x-text="texts.maxPerDay"></span>
                     </p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || bonusAdCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -1891,16 +1916,15 @@
 
     <script>
         const API_URL = window.location.origin;
-        // Centralized ad cadence. Manual Monetag keeps its existing 5-minute pool;
-        // the manual AdsGram Interstitial has its own persistent 10-minute server cooldown.
-        const BONUS_AD_MANUAL_COOLDOWN_MS = 5 * 60 * 1000;
+        // Centralized ad cadence. AdsGram và Monetag manual có cooldown persistent RIÊNG 10 phút.
+        const MONETAG_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
         const AUTO_AD_MONETAG_WEIGHT = 50;
         const AUTO_AD_ADSGRAM_WEIGHT = 50;
-        const AUTO_AD_FIRST_DELAY_MIN_MS = 90 * 1000;
-        const AUTO_AD_FIRST_DELAY_MAX_MS = 120 * 1000;
-        const AUTO_AD_MIN_COOLDOWN_MS = 3 * 60 * 1000;
-        const AUTO_AD_TAB_THRESHOLD_MIN = 4;
-        const AUTO_AD_TAB_THRESHOLD_MAX = 7;
+        const AUTO_AD_FIRST_DELAY_MIN_MS = 75 * 1000;
+        const AUTO_AD_FIRST_DELAY_MAX_MS = 90 * 1000;
+        const AUTO_AD_MIN_COOLDOWN_MS = 150 * 1000;
+        const AUTO_AD_TAB_THRESHOLD_MIN = 3;
+        const AUTO_AD_TAB_THRESHOLD_MAX = 6;
         // FIX LỖI "KẸT Ở MÀN LOADING": bọc fetch với AbortController để tự huỷ request nếu server không
         // phản hồi kịp (vd Render free tier "ngủ" cần thời gian khởi động lại), thay vì để request treo
         // vô thời hạn rồi phải chờ tới hạn watchdog mới thoát được màn loading.
@@ -2332,7 +2356,7 @@
                     {rank:7,orders:5000,spins:1,min:5},{rank:8,orders:4000,spins:0,min:5},{rank:9,orders:3000,spins:0,min:5},{rank:10,orders:2000,spins:0,min:5}
                 ],
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 5,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, monetagManualNextAllowedAt:0, monetagManualCooldown:0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 newUserWelcome:{eligible:false,claimed:false},
                 newUserTutorial:{eligible:false,ads:0,adGoal:3,smartlinks:0,smartlinkGoal:2,completed:false,rewardClaimed:false},
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
@@ -2847,7 +2871,8 @@
                             this.lifetimeAdsWatched = data.lifetimeAdsWatched || 0;
                             this.lifetimeSmartlinks = data.lifetimeSmartlinks || 0;
                             this.bonusAdsToday = data.bonusAdsToday || 0;
-                            this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0);
+                            this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0); // legacy mirror only
+                            this.monetagManualNextAllowedAt = Number(data.monetagManualNextAllowedAt || 0); // dedicated state endpoint sẽ hydrate persistent cooldown
                             this.updateBonusAdCooldown();
                             this.applyNewUserStatus({newUserWelcome:data.newUserWelcome,newUserTutorial:data.newUserTutorial});
                             this.rewardedAdsToday = data.rewardedAdsToday || 0;
@@ -2940,7 +2965,7 @@
                         await fetch(`${API_URL}/api/save-ip/${this.user.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
                     } catch (e) { console.error('Lỗi lưu IP:', e); }
                     await this.syncLinkTasks();
-                    await this.syncAdsGramManualState().catch(() => false);
+                    await Promise.all([this.syncAdsGramManualState().catch(() => false), this.syncMonetagManualState().catch(() => false)]);
                     
                     if (!this.rankList || this.rankList.length === 0) this.initRankList();
                     this.applyLevelStats(); // Đồng bộ thời gian sản xuất / sản lượng / kho theo cấp xe hiện tại
@@ -3154,20 +3179,17 @@
 
                 async checkMaintenanceLock() {
                     try {
-                        // FIX YÊU CẦU "/khoabot CHỈ KHOÁ USER THƯỜNG, ADMIN 6327666718 LUÔN BYPASS": trước
-                        // đây gọi /api/lock-status KHÔNG kèm userId, nên server (vốn đã có sẵn cơ chế bypass
-                        // đúng theo ADMIN_ID ở endpoint này) không có cách nào biết ai đang gọi và luôn trả
-                        // về locked=true cho TẤT CẢ mọi người khi BOT_LOCKED, kể cả chính Admin -> Admin cũng
-                        // bị màn hình bảo trì che mất Mini App khi tự /khoabot. Lấy userId từ this.user (nếu
-                        // đã có) hoặc trực tiếp từ Telegram WebApp (vì hàm này được gọi rất sớm trong initApp,
-                        // có thể trước khi this.user.id kịp gán) và gửi kèm để server nhận diện đúng Admin.
-                        const uid = this.user?.id || window.Telegram?.WebApp?.initDataUnsafe?.user?.id || '';
-                        const url = `${API_URL}/api/lock-status` + (uid ? ('?userId=' + encodeURIComponent(uid)) : '');
-                        const res = await fetchWithTimeout(url);
-                        if (!res.ok) return;
-                        const data = await res.json();
+                        // Server xác minh Admin bằng Telegram initData header; không tin query/body userId.
+                        // Nếu không đọc được persistent state thì fail-closed để user không bypass bảo trì.
+                        const res = await fetchWithTimeout(`${API_URL}/api/lock-status`, { cache:'no-store' }, 8000);
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) { this.maintenanceLocked = true; return false; }
                         this.maintenanceLocked = !!data.locked;
-                    } catch (e) { /* Không đổi trạng thái nếu lỗi mạng */ }
+                        return !this.maintenanceLocked;
+                    } catch (e) {
+                        this.maintenanceLocked = true;
+                        return false;
+                    }
                 },
 
                 async checkGroupMembership(silent = false) {
@@ -3290,10 +3312,11 @@
                     this._goldenHourSyncTimer=setInterval(()=>{ this.fetchGoldenHourStatus().catch(()=>false); },20000);
                 },
                 updateBonusAdCooldown() {
-                    const nextAllowedAt = Math.max(0, Number(this.bonusAdNextAllowedAt || 0));
-                    this.bonusAdCooldown = Date.now() < nextAllowedAt
+                    const nextAllowedAt = Math.max(0, Number(this.monetagManualNextAllowedAt || 0));
+                    this.monetagManualCooldown = Date.now() < nextAllowedAt
                         ? Math.ceil((nextAllowedAt - Date.now()) / 1000)
                         : 0;
+                    this.bonusAdCooldown = this.monetagManualCooldown; // legacy alias only
                 },
                 updateAdsGramManualCooldown() {
                     const nextAllowedAt = Math.max(0, Number(this.adsgramManualNextAllowedAt || 0));
@@ -3321,8 +3344,8 @@
                     if (Number(this.bonusAdsToday || 0) >= 15) {
                         return this.language === 'en' ? '✅ DAILY LIMIT REACHED' : '✅ ĐÃ HẾT LƯỢT HÔM NAY';
                     }
-                    if (this.bonusAdCooldown > 0) {
-                        const t = this.formatCooldownSeconds(this.bonusAdCooldown);
+                    if (this.monetagManualCooldown > 0) {
+                        const t = this.formatCooldownSeconds(this.monetagManualCooldown);
                         return this.language === 'en' ? `⏳ Next ad in ${t}` : `⏳ Xem tiếp sau ${t}`;
                     }
                     return this.texts.watchAdRewardBtn;
@@ -4414,13 +4437,28 @@
                         return true;
                     } catch (_) { return false; }
                 },
+                async syncMonetagManualState() {
+                    try {
+                        const res = await fetch(`${API_URL}/api/monetag/manual/state`, {
+                            method:'POST', headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id})
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok || !data?.success) return false;
+                        this.monetagManualNextAllowedAt = Number(data.monetagManualNextAllowedAt || data.nextAllowedAt || 0);
+                        this.bonusAdNextAllowedAt = this.monetagManualNextAllowedAt; // legacy mirror only
+                        if (typeof data.bonusAdsToday === 'number') this.bonusAdsToday = Number(data.bonusAdsToday);
+                        this.updateBonusAdCooldown();
+                        return true;
+                    } catch (_) { return false; }
+                },
                 getAdsGramController(format = 'interstitial') {
                     const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
                     const cacheKey = normalized === 'reward' ? '_adsgramRewardController' : '_adsgramInterstitialController';
                     if (this[cacheKey]) return this[cacheKey];
                     if (!window.Adsgram || typeof window.Adsgram.init !== 'function') return null;
                     try {
-                        const blockId = normalized === 'reward' ? '46075' : 'int-46420';
+                        const blockId = normalized === 'reward' ? '46645' : 'int-46646';
                         this[cacheKey] = window.Adsgram.init({ blockId });
                         return this[cacheKey] || null;
                     } catch (e) {
@@ -4453,7 +4491,6 @@
                     if (typeof result.rewardedAdsToday === 'number') this.rewardedAdsToday = Number(result.rewardedAdsToday);
                     if (typeof result.lifetimeAdsWatched === 'number') this.lifetimeAdsWatched = Number(result.lifetimeAdsWatched);
                     if (typeof result.bonusAdsToday === 'number') this.bonusAdsToday = Number(result.bonusAdsToday);
-                    if (result.bonusAdNextAllowedAt != null) this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || 0);
                     if (result.adsgramManualNextAllowedAt != null) this.adsgramManualNextAllowedAt = Number(result.adsgramManualNextAllowedAt || 0);
                     if (result.autoAdNextAllowedAt != null) this.autoAdNextAllowedAt = Number(result.autoAdNextAllowedAt || 0);
                     if (result.coins != null) this.coins = Number(result.coins);
@@ -4524,7 +4561,7 @@
                     const auto = options?.auto === true;
                     const silent = options?.silent === true;
                     const normalized = auto ? 'reward' : (String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial');
-                    const purpose = auto ? 'auto-ad' : (normalized === 'interstitial' ? 'adsgram-manual' : 'bonus-task');
+                    const purpose = auto ? 'auto-ad' : (normalized === 'interstitial' ? 'adsgram-manual' : 'adsgram-reward-manual');
                     if (this._adsgramRunning || this._rewardedRunning || (this._autoAdInFlight && !auto)) return false;
                     if (this.readPendingAdsGramRecovery()) {
                         await this.reconcilePendingAdsGram({silent});
@@ -4541,8 +4578,8 @@
                         if (!silent) this.showNotification(this.adsgramButtonText());
                         return false;
                     }
-                    if (!auto && normalized === 'reward' && this.bonusAdCooldown > 0) {
-                        if (!silent) this.showNotification(this.bonusAdButtonText());
+                    if (!auto && normalized === 'reward' && this.adsgramManualCooldown > 0) {
+                        if (!silent) this.showNotification(this.adsgramButtonText());
                         return false;
                     }
 
@@ -4552,7 +4589,7 @@
                         return false;
                     }
                     const actionId = this.adsgramActionId();
-                    const blockId = normalized === 'reward' ? '46075' : 'int-46420';
+                    const blockId = normalized === 'reward' ? '46645' : 'int-46646';
                     this._adsgramRunning = true;
                     this._adsgramActionId = actionId;
                     let token = '';
@@ -4571,14 +4608,10 @@
                             if (startRes?.ok && startData?.success && startData?.token) break;
                             if (startData?.cooldown) {
                                 const nextAllowedAt = Number(startData.nextAllowedAt || (Date.now()+Number(startData.retryAfterMs||0)) || 0);
-                                if (purpose === 'adsgram-manual') {
+                                if (purpose === 'adsgram-manual' || purpose === 'adsgram-reward-manual') {
                                     this.adsgramManualNextAllowedAt = nextAllowedAt;
                                     this.updateAdsGramManualCooldown();
                                     if (!silent) this.showNotification(this.adsgramButtonText());
-                                } else if (purpose === 'bonus-task') {
-                                    this.bonusAdNextAllowedAt = nextAllowedAt;
-                                    this.updateBonusAdCooldown();
-                                    if (!silent) this.showNotification(this.bonusAdButtonText());
                                 } else {
                                     this.autoAdNextAllowedAt = nextAllowedAt;
                                 }
@@ -4660,23 +4693,17 @@
                         this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily limit of 15 Rewarded Ads.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.');
                         return;
                     }
-                    if (this.bonusAdCooldown > 0) {
+                    if (this.monetagManualCooldown > 0) {
                         this.showNotification(this.bonusAdButtonText());
                         return;
                     }
-                    if (this._rewardedRunning || this._adsgramRunning) return;
-                    if (this.readPendingAdsGramRecovery()) { this.reconcilePendingAdsGram(); return; }
-                    // Một thao tác chủ động của user chọn ngẫu nhiên 1 provider. Không tạo hai timer quảng cáo
-                    // độc lập và không cho Monetag + AdsGram mở chồng lên nhau.
-                    const adsgramAvailable = !!(window.Adsgram && typeof window.Adsgram.init === 'function');
-                    if (adsgramAvailable && Math.random() < 0.5) {
-                        this.watchAdsGramRewardTask();
-                        return;
-                    }
+                    if (this._rewardedRunning || this._adsgramRunning || this._autoAdInFlight) return;
+                    // Nhiệm vụ Monetag là provider riêng; không random chuyển sang AdsGram.
                     this.playRewardedAd((result = {}) => {
                         this.bonusAdsToday = Number(result.bonusAdsToday ?? this.bonusAdsToday);
                         this.rewardedAdsToday = Number(result.rewardedAdsToday ?? this.rewardedAdsToday);
-                        this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || (Date.now() + BONUS_AD_MANUAL_COOLDOWN_MS));
+                        this.bonusAdNextAllowedAt = Number(result.bonusAdNextAllowedAt || 0); // legacy mirror only
+                        this.monetagManualNextAllowedAt = Number(result.monetagManualNextAllowedAt || result.bonusAdNextAllowedAt || (Date.now() + MONETAG_MANUAL_COOLDOWN_MS));
                         this.updateBonusAdCooldown();
                         this.coins = Number(result.coins ?? this.coins);
                         this.orders = Number(result.orders ?? this.orders);
@@ -5672,7 +5699,8 @@
                                 return false; // Rewarded cũ đã verified; tuyệt đối không mở thêm Monetag.
                             }
                             if (purpose === 'bonus-task' && sessionData?.cooldown) {
-                                this.bonusAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0);
+                                this.bonusAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0); // legacy mirror only
+                                this.monetagManualNextAllowedAt = Number(sessionData.nextAllowedAt || 0);
                                 this.updateBonusAdCooldown();
                                 this.showNotification(this.bonusAdButtonText());
                                 return false; // chưa có token -> Monetag SDK tuyệt đối không mở
@@ -6082,6 +6110,7 @@
                             this.spinAdProgress = d.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = d.bonusAdsToday ?? this.bonusAdsToday;
                             this.bonusAdNextAllowedAt = Number(d.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
+                            if (d.monetagManualNextAllowedAt != null) this.monetagManualNextAllowedAt = Number(d.monetagManualNextAllowedAt || 0);
                             this.updateBonusAdCooldown();
                             this.applyNewUserStatus({newUserWelcome:d.newUserWelcome,newUserTutorial:d.newUserTutorial});
                             this.lastSmartlinkTime = Number(d.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
@@ -6154,7 +6183,7 @@
                         lifetimeAdsWatched: this.lifetimeAdsWatched,
                         lifetimeSmartlinks: this.lifetimeSmartlinks,
                         bonusAdsToday: this.bonusAdsToday,
-                        bonusAdNextAllowedAt: this.bonusAdNextAllowedAt,
+                        bonusAdNextAllowedAt: this.monetagManualNextAllowedAt || this.bonusAdNextAllowedAt,
                         rewardedAdsToday: this.rewardedAdsToday,
                         extraDeliveryAdsToday: 0,
                         extraDeliveryCount: 0,
@@ -6242,6 +6271,7 @@
                             this.spinAdProgress = w.spinAdProgress ?? this.spinAdProgress;
                             this.bonusAdsToday = w.bonusAdsToday ?? this.bonusAdsToday;
                             this.bonusAdNextAllowedAt = Number(w.bonusAdNextAllowedAt ?? this.bonusAdNextAllowedAt ?? 0);
+                            if (w.monetagManualNextAllowedAt != null) this.monetagManualNextAllowedAt = Number(w.monetagManualNextAllowedAt || 0);
                             this.updateBonusAdCooldown();
                             this.lastSmartlinkTime = Number(w.lastSmartlinkTime ?? this.lastSmartlinkTime ?? 0);
                             this.updateSmartlinkCooldown();
