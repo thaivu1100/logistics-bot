@@ -1356,7 +1356,7 @@
                     <div class="text-center text-[8px] text-slate-400">
                         <span x-text="texts.streakCurrent"></span>: <b class="text-white" x-text="(loginStreakState.currentDay || 1)"></b>/7
                     </div>
-                    <button @click="checkInStreak()" class="w-full py-2 bg-green-600 rounded-[20px] font-black text-[10px] uppercase btn-text" x-text="texts.streakCheckin"></button>
+                    <button @click="checkInStreak()" :disabled="streakCheckinDisabled()" class="w-full py-2 bg-green-600 rounded-[20px] font-black text-[10px] uppercase btn-text disabled:opacity-40" x-text="streakCheckinButtonText()"></button>
                     <button x-show="loginStreakState.recoveryAvailable || loginStreakState.missed" @click="recoverStreak()" class="w-full py-2 bg-purple-600/30 border border-purple-500 rounded-[20px] font-black text-[10px] uppercase text-purple-300 btn-text" x-text="texts.streakRecover"></button>
                     <div x-show="streakCelebrating" class="text-center text-yellow-300 font-black text-sm animate-pulse" x-text="texts.streakDay7"></div>
                 </div>
@@ -1389,8 +1389,8 @@
                         <h3 class="text-sm font-black uppercase text-cyan-300">📺 XEM QC ADSGRAM</h3>
                         <span class="text-[10px] font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
                     </div>
-                    <p class="text-[9px] text-slate-400 leading-relaxed">Xem một AdsGram Interstitial hợp lệ. Giữ giới hạn hiện tại <b class="text-white">15 lượt/ngày</b>; riêng card này có thời gian chờ <b class="text-white">10 phút</b> sau mỗi lượt thành công. Phần thưởng giữ nguyên: <b class="text-yellow-400">10–25 Coin + 10–25 Đơn</b>.</p>
-                    <button @click="watchAdsGramTask()" :disabled="(bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
+                    <p x-show="adsgramTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
+                    <button @click="watchAdsGramTask()" :disabled="adsgramTaskLocked || (bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
                 </div>
                 <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between">
@@ -1402,7 +1402,8 @@
                         <span class="text-cyan-300 font-black">Nếu Monetag xác minh click: ngẫu nhiên 1–70 Coin + 1–70 Đơn.</span>
                         <span x-text="texts.maxPerDay"></span>
                     </p>
-                    <button @click="watchBonusAdTask()" :disabled="(bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <p x-show="monetagTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
+                    <button @click="watchBonusAdTask()" :disabled="monetagTaskLocked || (bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
             </div>
 
@@ -2356,7 +2357,7 @@
                     {rank:7,orders:5000,spins:1,min:5},{rank:8,orders:4000,spins:0,min:5},{rank:9,orders:3000,spins:0,min:5},{rank:10,orders:2000,spins:0,min:5}
                 ],
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 5,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, monetagManualNextAllowedAt:0, monetagManualCooldown:0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, monetagManualNextAllowedAt:0, monetagManualCooldown:0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, adsgramTaskLocked:false, monetagTaskLocked:false, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 newUserWelcome:{eligible:false,claimed:false},
                 newUserTutorial:{eligible:false,ads:0,adGoal:3,smartlinks:0,smartlinkGoal:2,completed:false,rewardClaimed:false},
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
@@ -2385,7 +2386,7 @@
                 linkTasks:[], _linkTaskStarting:'', linkTaskLastSync:0, linkTaskStatusError:'', linkTaskCodeInputs:{}, linkTaskCodeCooldownUntil:{}, linkTaskCodeNow:Date.now(), _linkTaskCodeTicker:null, _linkCodeVerifying:{}, _linkTaskExpirySyncing:false,
                 _taskClaimInFlight:false, _taskClaimingId:'',
                 smartlinkCount:0, lastSmartlinkTime:0,
-                groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
+                groupTaskClaimed: false, groupTaskKiemtienClaimed: false, loginStreakState:{day:0,currentDay:1,lastCheckInDate:null,recoveryAvailable:false,recoveryDate:null,attemptId:'',phase:'',completed:false}, streakCelebrating:false, // Trạng thái campaign nhóm hiện tại do server trả về; không dùng boolean claim legacy
                 chestOpensTotal: 0, chestOpensToday: 0, // Tổng số lượt / số lượt hôm nay đã mở rương (Admin xem qua /checkID)
                 smartlinkStartTime: 0, smartlinkAttemptId: '', smartlinkCooldown: 0, _smartlinkReconcileTimer: null, _smartlinkReconcileAttempts: 0, tick: 0, coinBoxCountdown: '2 giờ',
                 showCoinBoxModal: false, usedSmartlinks: [],
@@ -3341,6 +3342,7 @@
                     return this.texts.smartlinkStart;
                 },
                 bonusAdButtonText() {
+                    if (this.monetagTaskLocked) return this.language === 'en' ? '🔒 TASK TEMPORARILY LOCKED' : '🔒 NHIỆM VỤ ĐANG TẠM KHÓA';
                     if (Number(this.bonusAdsToday || 0) >= 15) {
                         return this.language === 'en' ? '✅ DAILY LIMIT REACHED' : '✅ ĐÃ HẾT LƯỢT HÔM NAY';
                     }
@@ -4431,6 +4433,7 @@
                         });
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok || !data?.success) return false;
+                        this.adsgramTaskLocked = data.adsgramLocked === true;
                         this.adsgramManualNextAllowedAt = Number(data.adsgramManualNextAllowedAt || data.nextAllowedAt || 0);
                         if (typeof data.bonusAdsToday === 'number') this.bonusAdsToday = Number(data.bonusAdsToday);
                         this.updateAdsGramManualCooldown();
@@ -4445,6 +4448,7 @@
                         });
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok || !data?.success) return false;
+                        this.monetagTaskLocked = data.monetagLocked === true;
                         this.monetagManualNextAllowedAt = Number(data.monetagManualNextAllowedAt || data.nextAllowedAt || 0);
                         this.bonusAdNextAllowedAt = this.monetagManualNextAllowedAt; // legacy mirror only
                         if (typeof data.bonusAdsToday === 'number') this.bonusAdsToday = Number(data.bonusAdsToday);
@@ -4452,23 +4456,45 @@
                         return true;
                     } catch (_) { return false; }
                 },
+                reportAdsGramDiagnostic(error, format = 'interstitial', forcedKind = '') {
+                    const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
+                    const raw = String(error?.message || error || '').toLowerCase();
+                    let kind = String(forcedKind || '');
+                    if (!kind) {
+                        if (/block\s*id|blockid/.test(raw) && /not\s+found|is\s+not\s+found/.test(raw)) kind = 'block_not_found';
+                        else if (/inventory|no\s+ad|no\s+banner|fill/.test(raw)) kind = 'no_inventory';
+                        else if (/network|fetch|timeout|connection/.test(raw)) kind = 'network_error';
+                        else kind = 'provider_unavailable';
+                    }
+                    const safeName = String(error?.name || 'AdsGramError').slice(0, 60);
+                    console.warn('AdsGram unavailable:', { kind, format:normalized, name:safeName });
+                    if (!this.user?.id) return;
+                    fetch(`${API_URL}/api/adsgram/diagnostic`, {
+                        method:'POST', headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({userId:this.user.id,format:normalized,kind})
+                    }).catch(() => {});
+                },
                 getAdsGramController(format = 'interstitial') {
                     const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
                     const cacheKey = normalized === 'reward' ? '_adsgramRewardController' : '_adsgramInterstitialController';
                     if (this[cacheKey]) return this[cacheKey];
-                    if (!window.Adsgram || typeof window.Adsgram.init !== 'function') return null;
+                    if (!window.Adsgram || typeof window.Adsgram.init !== 'function') {
+                        this.reportAdsGramDiagnostic(null, normalized, 'sdk_unavailable');
+                        return null;
+                    }
                     try {
                         const blockId = normalized === 'reward' ? '46645' : 'int-46646';
                         this[cacheKey] = window.Adsgram.init({ blockId });
                         return this[cacheKey] || null;
                     } catch (e) {
-                        console.warn('AdsGram init error:', e);
+                        this.reportAdsGramDiagnostic(e, normalized);
                         this[cacheKey] = null;
                         return null;
                     }
                 },
                 adsgramButtonText() {
                     this.updateAdsGramManualCooldown();
+                    if (this.adsgramTaskLocked) return this.language === 'en' ? '🔒 TASK TEMPORARILY LOCKED' : '🔒 NHIỆM VỤ ĐANG TẠM KHÓA';
                     if ((this.bonusAdsToday || 0) >= 15) return this.language === 'en' ? 'DAILY LIMIT REACHED' : 'ĐÃ HẾT 15 LƯỢT HÔM NAY';
                     if (this.adsgramManualCooldown > 0) {
                         return `⏳ ${this.formatCooldownSeconds(this.adsgramManualCooldown)}`;
@@ -4570,6 +4596,10 @@
 
                     this.updateBonusAdCooldown();
                     this.updateAdsGramManualCooldown();
+                    if (!auto && this.adsgramTaskLocked) {
+                        if (!silent) this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
+                        return false;
+                    }
                     if ((this.bonusAdsToday || 0) >= 15) {
                         if (!silent) this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily ad limit.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.');
                         return false;
@@ -4585,7 +4615,8 @@
 
                     const controller = this.getAdsGramController(normalized);
                     if (!controller || typeof controller.show !== 'function') {
-                        if (!silent) this.showNotification('⚠️ AdsGram chưa sẵn sàng. Vui lòng thử lại sau.');
+                        this.reportAdsGramDiagnostic(null, normalized, 'sdk_unavailable');
+                        if (!silent) this.showNotification('⚠️ QC AdsGram hiện chưa khả dụng. Vui lòng thử lại sau.');
                         return false;
                     }
                     const actionId = this.adsgramActionId();
@@ -4606,6 +4637,11 @@
                                 startData = await startRes.json().catch(() => ({}));
                             } catch (_) { startRes = null; startData = {success:false,retry:true}; }
                             if (startRes?.ok && startData?.success && startData?.token) break;
+                            if (startData?.taskLocked || startData?.adsgramLocked) {
+                                this.adsgramTaskLocked = true;
+                                if (!silent) this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
+                                return false;
+                            }
                             if (startData?.cooldown) {
                                 const nextAllowedAt = Number(startData.nextAllowedAt || (Date.now()+Number(startData.retryAfterMs||0)) || 0);
                                 if (purpose === 'adsgram-manual' || purpose === 'adsgram-reward-manual') {
@@ -4663,7 +4699,7 @@
                         this.saveState();
                         return true;
                     } catch (e) {
-                        console.warn('AdsGram:', e);
+                        this.reportAdsGramDiagnostic(e, normalized);
                         if (token && !sdkCompleted) {
                             fetch(`${API_URL}/api/adsgram/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId})}).catch(()=>{});
                         }
@@ -4671,7 +4707,7 @@
                             this.writePendingAdsGramRecovery({token,actionId,sessionId:this.securitySessionId,format:normalized,purpose,savedAt:Date.now()});
                             if (!silent) this.showNotification('⚠️ QC AdsGram đã hoàn tất nhưng máy chủ đang đồng bộ. Lần bấm tiếp theo sẽ đồng bộ đúng phiên này, không cần xem lại QC.');
                         } else if (!silent) {
-                            this.showNotification(e?.message || 'QC AdsGram đang hết hoặc lỗi. Vui lòng thử lại sau.');
+                            this.showNotification('⚠️ QC AdsGram hiện chưa khả dụng. Vui lòng thử lại sau.');
                         }
                         return false;
                     } finally {
@@ -4681,6 +4717,10 @@
                     }
                 },
                 watchAdsGramTask() {
+                    if (this.adsgramTaskLocked) {
+                        this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
+                        return false;
+                    }
                     return this.playAdsGramBonus('interstitial');
                 },
                 watchAdsGramRewardTask() {
@@ -4689,6 +4729,10 @@
                 // Card XEM QC NHẬN THƯỞNG: server random phần thưởng; click chỉ tính khi postback server-side xác minh.
                 watchBonusAdTask() {
                     this.updateBonusAdCooldown();
+                    if (this.monetagTaskLocked) {
+                        this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
+                        return;
+                    }
                     if ((this.bonusAdsToday || 0) >= 15) {
                         this.showNotification(this.language === 'en' ? '⚠️ You have reached the daily limit of 15 Rewarded Ads.' : '⚠️ Bạn đã đạt giới hạn 15 lượt QC Rewarded hôm nay.');
                         return;
@@ -5061,10 +5105,39 @@
                             recoveryAvailable:!!data.recoveryAvailable,
                             recoveryDate:data.recoveryDate || null,
                             lastCheckInDate:data.lastCheckInDate || null,
-                            today:data.today || ''
+                            today:data.today || '',
+                            attemptId:String(data.attemptId || ''),
+                            phase:String(data.phase || ''),
+                            completed:data.completed === true
                         };
                         this.streakRewards = data.rewards || this.streakRewards;
                         return true;
+                    } catch (_) { return false; }
+                },
+                streakCheckinButtonText() {
+                    const s=this.loginStreakState||{};
+                    if (s.today && s.lastCheckInDate === s.today) return this.language === 'en' ? '✅ CHECKED IN' : '✅ ĐÃ ĐIỂM DANH';
+                    if (['smartlink_opened','ad_processing'].includes(String(s.phase||''))) {
+                        return this.language === 'en' ? '📺 WATCH AD TO CHECK IN' : '📺 XEM QC ĐỂ ĐIỂM DANH';
+                    }
+                    return this.language === 'en' ? '✅ CHECK IN TODAY' : '✅ ĐIỂM DANH HÔM NAY';
+                },
+                streakCheckinDisabled() {
+                    const s=this.loginStreakState||{};
+                    return !!this.maintenanceLocked || !!this._rewardedRunning || (s.today && s.lastCheckInDate === s.today);
+                },
+                openStreakCheckinSmartlink(url) {
+                    const target=String(url||'');
+                    if (!target) return false;
+                    try {
+                        if (window.Telegram?.WebApp?.openLink) {
+                            window.Telegram.WebApp.openLink(target);
+                            return true;
+                        }
+                    } catch (_) {}
+                    try {
+                        const opened=window.open(target,'_blank','noopener,noreferrer');
+                        return !!opened;
                     } catch (_) { return false; }
                 },
                 streakDayStatus(day) {
@@ -5086,37 +5159,90 @@
                     return parts.join(' + ');
                 },
                 async checkInStreak() {
-                    if (this._rewardedRunning) return;
+                    if (this._rewardedRunning || this.maintenanceLocked) return;
+                    const state=this.loginStreakState||{};
+                    if (state.today && state.lastCheckInDate === state.today) {
+                        this.showNotification(this.language === 'en' ? '✅ You already checked in today.' : '✅ Hôm nay bạn đã điểm danh rồi.');
+                        return;
+                    }
+                    if (['smartlink_opened','ad_processing'].includes(String(state.phase||'')) && state.attemptId) {
+                        return this.completeStreakCheckinWithAd();
+                    }
                     try {
-                        const res = await fetch(`${API_URL}/api/streak/checkin`, {
+                        const res = await fetch(`${API_URL}/api/streak/checkin/start`, {
                             method:'POST', headers:{'Content-Type':'application/json'},
                             body:JSON.stringify({userId:this.user.id})
                         });
                         const result = await res.json().catch(() => ({}));
                         if (result.missed && result.recoveryAvailable) {
-                            this.loginStreakState = {...this.loginStreakState, missed:true, recoveryAvailable:true};
+                            this.loginStreakState = {...this.loginStreakState, missed:true, recoveryAvailable:true, recoveryDate:result.recoveryDate||this.loginStreakState.recoveryDate};
                             this.showNotification('🔄 ' + (this.texts.streakMissed || 'Your streak was broken. Recover it with a Rewarded ad.'));
-                            return;
+                            return false;
                         }
                         if (!res.ok || !result.success) {
                             this.showNotification('⚠️ ' + (result.error || this.texts.streakCheckinFailed || 'Check-in failed.'));
-                            return;
+                            return false;
                         }
-                        this.loginStreakState = {...this.loginStreakState, ...result};
-                        this.coins = Number(result.coins ?? this.coins);
-                        this.orders = Number(result.orders ?? this.orders);
-                        this.spinFree = Number(result.spins ?? this.spinFree);
-                        if (result.walletUpdatedAt) this.walletSyncedAt = result.walletUpdatedAt;
-                        this.saveState().catch(() => {});
-                        if (result.day === 7) {
-                            this.streakCelebrating = true;
+                        if (result.alreadyClaimed) {
+                            await this.syncStreakStatus();
+                            this.showNotification(this.language === 'en' ? '✅ You already checked in today.' : '✅ Hôm nay bạn đã điểm danh rồi.');
+                            return true;
+                        }
+                        this.loginStreakState = {
+                            ...this.loginStreakState,
+                            attemptId:String(result.attemptId||''),
+                            phase:String(result.phase||'smartlink_opened'),
+                            completed:false
+                        };
+                        if (result.reused) {
+                            // Server đã có attempt persistent cho hôm nay: không mở SmartLink lần nữa.
+                            return this.completeStreakCheckinWithAd();
+                        }
+                        if (!this.openStreakCheckinSmartlink(result.smartlinkUrl)) {
+                            this.showNotification(this.language === 'en' ? '⚠️ Unable to open the check-in link.' : '⚠️ Không mở được link điểm danh. Vui lòng thử lại.');
+                            return false;
+                        }
+                        this.showNotification(this.language === 'en' ? '🔗 Return here, then watch the ad to finish check-in.' : '🔗 Sau khi xem link, quay lại và bấm XEM QC ĐỂ ĐIỂM DANH.');
+                        return true;
+                    } catch (_) {
+                        this.showNotification('⚠️ ' + (this.texts.serverConnectionError || 'Server connection error.'));
+                        return false;
+                    }
+                },
+                async completeStreakCheckinWithAd() {
+                    if (this._rewardedRunning || this.maintenanceLocked) return false;
+                    let attemptId=String(this.loginStreakState?.attemptId||'');
+                    if (!attemptId) {
+                        await this.syncStreakStatus();
+                        attemptId=String(this.loginStreakState?.attemptId||'');
+                    }
+                    if (!attemptId || !['smartlink_opened','ad_processing'].includes(String(this.loginStreakState?.phase||''))) {
+                        this.showNotification(this.language === 'en' ? '⚠️ Start check-in first.' : '⚠️ Vui lòng bắt đầu điểm danh trước.');
+                        return false;
+                    }
+                    return this.playRewardedAd(async (adResult = {}) => {
+                        const adToken=String(adResult.adToken||'');
+                        if (!adToken) throw new Error('Rewarded token unavailable');
+                        const res=await fetch(`${API_URL}/api/streak/checkin/complete`,{
+                            method:'POST',headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({userId:this.user.id,attemptId,adToken})
+                        });
+                        const result=await res.json().catch(()=>({}));
+                        if(!res.ok||!result.success) throw new Error(result.error||'Không thể hoàn tất điểm danh.');
+                        this.loginStreakState={...this.loginStreakState,...result,attemptId:String(result.attemptId||attemptId),phase:'completed',completed:true};
+                        this.coins=Number(result.coins??this.coins);
+                        this.orders=Number(result.orders??this.orders);
+                        this.spinFree=Number(result.spins??this.spinFree);
+                        if(result.walletUpdatedAt)this.walletSyncedAt=result.walletUpdatedAt;
+                        if(Number(result.day||0)===7){
+                            this.streakCelebrating=true;
                             this.createConfetti?.();
-                            setTimeout(() => { this.streakCelebrating = false; }, 2800);
+                            setTimeout(()=>{this.streakCelebrating=false;},2800);
                         }
                         await this.syncStreakStatus();
-                    } catch (e) {
-                        this.showNotification('⚠️ ' + (this.texts.serverConnectionError || 'Server connection error.'));
-                    }
+                        this.saveState().catch(()=>{});
+                        this.showNotification(this.language === 'en' ? '✅ Check-in completed!' : '✅ ĐÃ ĐIỂM DANH THÀNH CÔNG!');
+                    }, this.language === 'en' ? 'Rewarded ad unavailable. Check-in was not completed.' : 'QC Monetag chưa hoàn tất. Điểm danh chưa được ghi nhận.', 'streak-checkin');
                 },
                 async recoverStreak() {
                     if (this._rewardedRunning) return;
@@ -5697,6 +5823,11 @@
                                 } catch (_) {}
                                 await this.retryDeliveryClaim(pendingToken);
                                 return false; // Rewarded cũ đã verified; tuyệt đối không mở thêm Monetag.
+                            }
+                            if (purpose === 'bonus-task' && (sessionData?.taskLocked || sessionData?.monetagLocked)) {
+                                this.monetagTaskLocked = true;
+                                if (!silent) this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
+                                return false; // server fail-closed trước khi Monetag SDK mở
                             }
                             if (purpose === 'bonus-task' && sessionData?.cooldown) {
                                 this.bonusAdNextAllowedAt = Number(sessionData.nextAllowedAt || 0); // legacy mirror only
