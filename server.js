@@ -10178,6 +10178,35 @@ async function richadsStorageReady(){
     if(!RICHADS_REQUIRED_USER_COLUMNS.every(c=>cols.has(c))) cols=await getUserColumns(true);
     return RICHADS_REQUIRED_USER_COLUMNS.every(c=>cols.has(c));
 }
+const RICHADS_DIAGNOSTIC_KINDS = new Set(['init_ok','init_failed','call_start','resolved','rejected','timeout','session_start','session_complete']);
+function richadsDiagnosticKey(kind){return persistentEventKey('richads-diagnostic',String(kind||'last'));}
+function richadsSafeDiagnosticText(value,max=180){
+    return String(value??'').replace(/[\r\n\t]+/g,' ').replace(/[^\x20-\x7E\u00C0-\u024F\u1E00-\u1EFF]/g,'').trim().slice(0,max);
+}
+async function recordRichadsDiagnostic(kind,userId='',detail={}){
+    const normalized=String(kind||'');
+    if(!RICHADS_DIAGNOSTIC_KINDS.has(normalized))return false;
+    const value={
+        kind:normalized,
+        at:new Date().toISOString(),
+        atMs:Date.now(),
+        userId:String(userId||'').slice(0,80),
+        message:richadsSafeDiagnosticText(detail?.message||'',180)
+    };
+    const keys=[richadsDiagnosticKey('last')];
+    if(normalized==='init_failed'||normalized==='rejected')keys.push(richadsDiagnosticKey('last_error'));
+    if(normalized==='timeout')keys.push(richadsDiagnosticKey('last_timeout'));
+    if(normalized==='session_start')keys.push(richadsDiagnosticKey('last_session_start'));
+    if(normalized==='session_complete')keys.push(richadsDiagnosticKey('last_session_complete'));
+    const saved=await Promise.all(keys.map(k=>writePersistentEvent(k,value,2).catch(()=>false)));
+    adminDashboardCache=null;
+    return saved.every(Boolean);
+}
+async function readRichadsDiagnostics(){
+    const names=['last','last_error','last_timeout','last_session_start','last_session_complete'];
+    const values=await Promise.all(names.map(n=>readPersistentEvent(richadsDiagnosticKey(n)).catch(()=>null)));
+    return Object.fromEntries(names.map((n,i)=>[n,values[i]||null]));
+}
 function richadsSessionKey(token){return persistentEventKey('richads-session',String(token||''));}
 function richadsCompletedKey(token){return persistentEventKey('richads-completed',String(token||''));}
 function richadsActiveKey(userId){return persistentEventKey('richads-active-user',String(userId||''));}
@@ -10500,6 +10529,7 @@ app.post('/api/adsgram/session/complete',async(req,res)=>{
         logTransaction(userId,'orders',rewardOrders,`Xem 1 QC AdsGram hợp lệ (${purpose})`);
         try{await tryFinalizeReferral(userId);}catch(_){}
         try{result.tutorial=await maybeCompleteNewUserTutorial(userId);}catch(_){}
+        void recordRichadsDiagnostic('session_complete',userId,{message:'reward_committed'}).catch(()=>false);
         return res.json(result);
     }catch(e){
         console.error('AdsGram session complete:',e?.message||e);
@@ -10551,6 +10581,17 @@ app.post('/api/richads/manual/state',async(req,res)=>{
     }catch(e){console.error('RichAds manual state:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không đọc được trạng thái RichAds.'});}
 });
 
+app.post('/api/richads/diagnostic',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    const kind=String(req.body?.kind||'');
+    if(!RICHADS_DIAGNOSTIC_KINDS.has(kind)||kind==='session_start'||kind==='session_complete')return res.status(400).json({success:false,error:'Diagnostic không hợp lệ.'});
+    const message=richadsSafeDiagnosticText(req.body?.message||'',180);
+    await recordRichadsDiagnostic(kind,userId,{message}).catch(()=>false);
+    return res.json({success:true});
+});
+
 app.post('/api/richads/session/start',async(req,res)=>{
     const userId=String(req.body?.userId||''),actionId=String(req.body?.actionId||'').slice(0,180),sessionId=String(req.body?.sessionId||'').slice(0,180);
     if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -10576,14 +10617,14 @@ app.post('/api/richads/session/start',async(req,res)=>{
         if(adsgramActive?.status==='active'&&Number(adsgramActive.expiresAt||0)>now)return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo AdsGram khác đang được xử lý.'});
         if(richadsActive?.status==='active'&&Number(richadsActive.expiresAt||0)>now&&richadsActive.token){
             const existing=await readPersistentEvent(richadsSessionKey(richadsActive.token));
-            if(existing&&String(existing.actionId||'')===actionId&&String(existing.sessionId||'')===sessionId)return res.json({success:true,token:String(richadsActive.token),idempotent:true,recovered:true,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID});
+            if(existing&&String(existing.actionId||'')===actionId&&String(existing.sessionId||'')===sessionId){void recordRichadsDiagnostic('session_start',userId,{message:'recovered'}).catch(()=>false);return res.json({success:true,token:String(richadsActive.token),idempotent:true,recovered:true,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID});}
             return res.status(409).json({success:false,retry:true,active:true,error:'Một phiên RichAds khác đang hoạt động.'});
         }
         const token=crypto.randomBytes(24).toString('base64url'),startedAt=Date.now(),expiresAt=startedAt+RICHADS_SESSION_TTL_MS;
         const session={status:'started',provider:'richads',userId,token,actionId,sessionId,startedAt,expiresAt};
         if(!(await writePersistentEvent(richadsSessionKey(token),session,3)))return res.status(503).json({success:false,retry:true,error:'Không lưu được phiên RichAds.'});
         if(!(await writePersistentEvent(richadsActiveKey(userId),{status:'active',provider:'richads',userId,token,actionId,sessionId,startedAt,expiresAt},3))){await writePersistentEvent(richadsSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},1).catch(()=>false);return res.status(503).json({success:false,retry:true,error:'Không khóa được phiên RichAds.'});}
-        return res.json({success:true,token,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID,dailyLimit:RICHADS_DAILY_LIMIT,cooldownMs:RICHADS_MANUAL_COOLDOWN_MS});
+        void recordRichadsDiagnostic('session_start',userId,{message:'created'}).catch(()=>false);return res.json({success:true,token,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID,dailyLimit:RICHADS_DAILY_LIMIT,cooldownMs:RICHADS_MANUAL_COOLDOWN_MS});
     }catch(e){console.error('RichAds session start:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không bắt đầu được RichAds.'});}
     finally{if(release){try{await release();}catch(_){}}}
 });
@@ -10610,7 +10651,7 @@ app.post('/api/richads/session/complete',async(req,res)=>{
         release=await acquirePersistentLeaseLock(persistentEventKey('richads-complete-user-lock',userId),60*1000);
         if(!release)return res.status(409).json({success:false,retry:true,error:'Lượt RichAds đang được xử lý.'});
         const completed=await readPersistentEvent(richadsCompletedKey(token));
-        if(completed?.result&&String(completed.userId||'')===userId){await releaseRichadsActive(userId,token,'completed');return res.json({...completed.result,idempotent:true});}
+        if(completed?.result&&String(completed.userId||'')===userId){await releaseRichadsActive(userId,token,'completed');void recordRichadsDiagnostic('session_complete',userId,{message:'idempotent'}).catch(()=>false);return res.json({...completed.result,idempotent:true});}
         const session=await readPersistentEvent(richadsSessionKey(token));
         if(!session||String(session.userId||'')!==userId||String(session.status||'')!=='started')return res.status(400).json({success:false,error:'Phiên RichAds không hợp lệ.'});
         const now=Date.now();
@@ -10623,7 +10664,7 @@ app.post('/api/richads/session/complete',async(req,res)=>{
         if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
         const completedAt=Date.now();
-        if(String(user.lastRichAdsAdToken||'')===token){let nextAllowedAt=await readRichadsManualNextAllowedAt(userId);if(!nextAllowedAt)nextAllowedAt=await writeRichadsManualCooldown(userId,token,Number(user.lastRichAdsCompletedAt||completedAt));const fresh=(await readUserRow(userId)).data||user;const result=richadsResponseFromUser(fresh,token,Number(fresh.lastRichAdsRewardCoins||0),Number(fresh.lastRichAdsRewardOrders||0),nextAllowedAt,{elapsed});await writePersistentEvent(richadsCompletedKey(token),{status:'completed',userId,token,completedAt,result},3);await releaseRichadsActive(userId,token,'completed');return res.json({...result,idempotent:true,recovered:true});}
+        if(String(user.lastRichAdsAdToken||'')===token){let nextAllowedAt=await readRichadsManualNextAllowedAt(userId);if(!nextAllowedAt)nextAllowedAt=await writeRichadsManualCooldown(userId,token,Number(user.lastRichAdsCompletedAt||completedAt));const fresh=(await readUserRow(userId)).data||user;const result=richadsResponseFromUser(fresh,token,Number(fresh.lastRichAdsRewardCoins||0),Number(fresh.lastRichAdsRewardOrders||0),nextAllowedAt,{elapsed});await writePersistentEvent(richadsCompletedKey(token),{status:'completed',userId,token,completedAt,result},3);await releaseRichadsActive(userId,token,'completed');void recordRichadsDiagnostic('session_complete',userId,{message:'recovered'}).catch(()=>false);return res.json({...result,idempotent:true,recovered:true});}
         const count=richadsDailyCountFromUser(user);
         if(count>=RICHADS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,richadsAdsToday:count,error:'Đã hết 15 lượt RichAds hôm nay.'});
         const nextBefore=await readRichadsManualNextAllowedAt(userId);if(Date.now()<nextBefore)return res.status(429).json({success:false,cooldown:true,nextAllowedAt:nextBefore,retryAfterMs:nextBefore-Date.now(),richadsAdsToday:count,error:'RichAds đang trong thời gian chờ 10 phút.'});
@@ -12350,6 +12391,14 @@ function requireAdminWebMutation(req,res,next){
 }
 function adminActor(req){ return `web:${String(req.adminWebSession?.username||ADMIN_WEB_USERNAME||'admin').slice(0,80)}`; }
 function adminValidUserId(value){ const s=String(value||'').trim(); return /^\d{3,20}$/.test(s)?s:''; }
+// Read-only Admin views may need to inspect legacy/demo rows such as guest_123456.
+// Sensitive mutations MUST continue to use adminValidUserId() above so legacy IDs can never be
+// treated as real Telegram identities for wallet/ban/reset/delete/referral operations.
+function adminReadableUserId(value){
+    const s=String(value||'').trim();
+    if(!s || s.length>80) return '';
+    return /^[A-Za-z0-9:_-]+$/.test(s)?s:'';
+}
 function adminPositiveInt(value,max=1_000_000_000){ const n=Number(value); return Number.isSafeInteger(n)&&n>0&&n<=max?n:null; }
 function adminSafeText(value,max=300){ return String(value??'').normalize('NFKC').trim().slice(0,max); }
 function adminPage(value){ const n=Number(value); return Number.isInteger(n)&&n>0?Math.min(n,100000):1; }
@@ -12530,24 +12579,65 @@ async function adminRemoveSubAdmin(userId,actor='admin'){
     const {error}=await adminDb().from('admins').delete().eq('id',id);if(error)throw error;await loadAdmins();await writeAdminAudit(actor,'remove_subadmin',id,{});return true;
 }
 async function adminGetUserDetail(userId){
-    const id=adminValidUserId(userId);if(!id)throw new Error('USER_ID_INVALID');
-    const {data:user,error}=await readUserRow(id);if(error||!user)throw new Error('USER_NOT_FOUND');
+    const id=adminReadableUserId(userId);
+    if(!id){const e=new Error('USER_ID_INVALID');e.code='USER_ID_INVALID';throw e;}
+    const {data:user,error}=await readUserRow(id);
+    if(error||!user){const e=new Error('USER_NOT_FOUND');e.code='USER_NOT_FOUND';throw e;}
+
+    const partialErrors=[];
+    const logPartial=(part,err)=>{
+        partialErrors.push(part);
+        console.error('Admin user detail optional source:',id,part,err?.message||err);
+    };
+
     const [antiFraud,withdrawalsResult,mailStats,lastMailIp,linkStats,transactionsResult]=await Promise.all([
-        getAntiFraudState(id).catch(()=>({state:{},stats:{score:0,level:'LOW'}})),
-        adminDb().from('withdrawals').select('id,txCode,amount,status,createdAt,method,accountInfo,bankName,accountName,accountNumber').eq('userId',id).order('createdAt',{ascending:false}).limit(100),
-        getJobMailUserStats(id).catch(()=>({total:0,pending:0,approved:0,rejected:0,rewardOrders:0})),
-        getLatestJobMailSourceIp(id).catch(()=>''),getLinkTaskUserStats(id).catch(()=>null),
-        adminDb().from('transactions').select('*').eq('userId',id).limit(30)
+        getAntiFraudState(id).catch(e=>{logPartial('anti_fraud',e);return {state:{},stats:{score:0,level:'LOW'}};}),
+        adminDb().from('withdrawals').select('id,txCode,amount,status,createdAt,method,accountInfo,bankName,accountName,accountNumber').eq('userId',id).order('createdAt',{ascending:false}).limit(100)
+            .then(r=>{if(r.error){logPartial('withdrawals',r.error);return {data:[]};}return r;})
+            .catch(e=>{logPartial('withdrawals',e);return {data:[]};}),
+        getJobMailUserStats(id).catch(e=>{logPartial('job_mail',e);return {total:0,pending:0,approved:0,rejected:0,rewardOrders:0};}),
+        getLatestJobMailSourceIp(id).catch(e=>{logPartial('job_mail_ip',e);return '';}),
+        getLinkTaskUserStats(id).catch(e=>{logPartial('link_task',e);return null;}),
+        adminDb().from('transactions').select('*').eq('userId',id).order('createdAt',{ascending:false}).limit(30)
+            .then(r=>{if(r.error){logPartial('transactions',r.error);return {data:[]};}return r;})
+            .catch(e=>{logPartial('transactions',e);return {data:[]};})
     ]);
-    const withdrawals=withdrawalsResult.data||[];const latestWithdrawal=withdrawals[0]||null;const pendingWithdrawal=withdrawals.find(w=>String(w.status||'').toLowerCase()==='pending')||null;
+
+    const withdrawals=withdrawalsResult?.data||[];
+    const latestWithdrawal=withdrawals[0]||null;
+    const pendingWithdrawal=withdrawals.find(w=>String(w.status||'').toLowerCase()==='pending')||null;
     const activeIp=normalizeIpForDuplicateCheck(user.ip)||'';
-    const withdrawalIp=latestWithdrawal?await getStoredWithdrawalSourceIp(latestWithdrawal).catch(()=>''):'';
-    const duplicates=activeIp?await duplicateAccountsByReliableIp(id,activeIp):[];
-    const risk=calculateFraudRisk(antiFraud.state||{},duplicates.length,Number(antiFraud.state?.duplicateDeviceAccounts||0));
-    const successStatuses=new Set(['success','approved','completed']),cancelledStatuses=new Set(['cancelled','rejected','refunded']);
+    const withdrawalIp=latestWithdrawal?await getStoredWithdrawalSourceIp(latestWithdrawal).catch(e=>{logPartial('withdrawal_ip',e);return '';}):'';
+
+    let duplicates=[];
+    if(activeIp){
+        try{duplicates=await duplicateAccountsByReliableIp(id,activeIp);}
+        catch(e){logPartial('duplicate_ip',e);duplicates=[];}
+    }
+
+    let risk={score:0,level:'LOW',reasons:[]};
+    try{
+        const calculated=calculateFraudRisk(antiFraud.state||{},duplicates.length,Number(antiFraud.state?.duplicateDeviceAccounts||0));
+        risk={score:Math.max(0,Math.min(100,Number(calculated.score||0))),level:calculated.level||'LOW',reasons:calculated.reasons||[]};
+    }catch(e){logPartial('risk',e);}
+
+    const successStatuses=new Set(['success','approved','completed']);
+    const cancelledStatuses=new Set(['cancelled','rejected','refunded']);
     const totalWithdrawn=withdrawals.filter(w=>successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
     const totalCancelled=withdrawals.filter(w=>cancelledStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
-    return {user:{...user,id,ip:activeIp},risk:{score:Math.max(0,Math.min(100,Number(risk.score||0))),level:risk.level||'LOW',reasons:risk.reasons||[]},duplicates,withdrawal:{totalWithdrawn,totalCancelled,latest:latestWithdrawal,pending:pendingWithdrawal,latestIp:withdrawalIp},jobMail:{...mailStats,lastIp:normalizeIpForDuplicateCheck(lastMailIp)||''},linkTask:linkStats,ads:{adsgramToday:null,monetagToday:null,richadsToday:richadsDailyCountFromUser(user)},transactions:transactionsResult.data||[]};
+    const mutable=!!adminValidUserId(id);
+
+    return {
+        user:{...user,id,ip:activeIp},
+        meta:{mutable,isLegacy:!mutable,partial:partialErrors.length>0,unavailable:[...new Set(partialErrors)]},
+        risk,
+        duplicates,
+        withdrawal:{totalWithdrawn,totalCancelled,latest:latestWithdrawal,pending:pendingWithdrawal,latestIp:withdrawalIp},
+        jobMail:{...mailStats,lastIp:normalizeIpForDuplicateCheck(lastMailIp)||''},
+        linkTask:linkStats,
+        ads:{adsgramToday:null,monetagToday:null,richadsToday:richadsDailyCountFromUser(user)},
+        transactions:transactionsResult?.data||[]
+    };
 }
 async function adminDashboardStats(force=false){
     if(!force&&adminDashboardCache&&Date.now()-adminDashboardCache.cachedAt<20000)return adminDashboardCache.value;
@@ -12700,7 +12790,21 @@ app.get('/api/admin/users',requireAdminWebSession,async(req,res)=>{
     }catch(e){console.error('Admin users:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được danh sách người dùng.'});}
 });
 
-app.get('/api/admin/users/:id',requireAdminWebSession,async(req,res)=>{try{return res.json({success:true,detail:await adminGetUserDetail(req.params.id)});}catch(e){return res.status(e.message==='USER_NOT_FOUND'?404:400).json({success:false,error:e.message==='USER_NOT_FOUND'?'Không tìm thấy người dùng.':'Không đọc được thông tin người dùng.'});}});
+app.get('/api/admin/users/:id',requireAdminWebSession,async(req,res)=>{
+    try{
+        return res.json({success:true,detail:await adminGetUserDetail(req.params.id)});
+    }catch(e){
+        const code=String(e?.code||e?.message||'USER_DETAIL_FAILED');
+        console.error('Admin user detail:',String(req.params.id||'').slice(0,90),code,e?.message||e);
+        const status=code==='USER_NOT_FOUND'?404:code==='USER_ID_INVALID'?400:500;
+        const message=code==='USER_NOT_FOUND'
+            ?'Không tìm thấy người dùng.'
+            :code==='USER_ID_INVALID'
+                ?'ID người dùng không hợp lệ.'
+                :'Không đọc được thông tin người dùng.';
+        return res.status(status).json({success:false,code,error:message});
+    }
+});
 app.post('/api/admin/users/:id/action',requireAdminWebMutation,async(req,res)=>{
     const actor=adminActor(req),id=adminValidUserId(req.params.id),action=String(req.body?.action||'');if(!id)return res.status(400).json({success:false,error:'User ID không hợp lệ.'});
     try{let result=null;const amount=adminPositiveInt(req.body?.amount,1_000_000_000);
@@ -12737,13 +12841,14 @@ app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{
     const db=await checkLinkTaskDatabaseReadiness({force:req.query.force==='1'}).catch(()=>({ready:false}));
     let supabaseOk=false;try{const x=await adminDb().from('users').select('id',{count:'exact',head:true});supabaseOk=!x.error;}catch(_){}
     let audit=[];try{const {data}=await adminDb().from('app_settings').select('key,value').like('key','admin_audit:%').order('key',{ascending:false}).limit(30);audit=(data||[]).map(r=>r.value);}catch(_){}
-    const [botLocked,adsgramTaskLock,monetagTaskLock,richadsTaskLock,adsgramDiagnostics,richadsReady]=await Promise.all([
+    const [botLocked,adsgramTaskLock,monetagTaskLock,richadsTaskLock,adsgramDiagnostics,richadsReady,richadsDiagnostics]=await Promise.all([
         readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED),
         readAdTaskLock('adsgram').catch(()=>normalizeAdTaskLockValue('adsgram',null)),
         readAdTaskLock('monetag').catch(()=>normalizeAdTaskLockValue('monetag',null)),
         readAdTaskLock('richads').catch(()=>normalizeAdTaskLockValue('richads',null)),
         readAdsgramDiagnostics().catch(()=>({interstitial:null,reward:null})),
-        richadsStorageReady().catch(()=>false)
+        richadsStorageReady().catch(()=>false),
+        readRichadsDiagnostics().catch(()=>({last:null,last_error:null,last_timeout:null,last_session_start:null,last_session_complete:null}))
     ]);
     return res.json({success:true,system:{
         botLocked:!!botLocked,maintenanceMessage:MAINTENANCE_MESSAGE,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),
@@ -12755,7 +12860,7 @@ app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{
             adsgramProviderState:'NOT_VERIFIED_FROM_SOURCE',
             adsgramLocked:!!adsgramTaskLock.locked,
             monetagLocked:!!monetagTaskLock.locked,
-            richadsLocked:!!richadsTaskLock.locked,richadsStorageReady:!!richadsReady,richadsSdkConfigured:!!(RICHADS_PUB_ID&&RICHADS_APP_ID),richadsApiConfigured:!!RICHADS_API_KEY,richadsPubId:RICHADS_PUB_ID,richadsAppId:RICHADS_APP_ID,richadsDailyLimit:RICHADS_DAILY_LIMIT,richadsManualCooldownMinutes:Math.round(RICHADS_MANUAL_COOLDOWN_MS/60000),
+            richadsLocked:!!richadsTaskLock.locked,richadsStorageReady:!!richadsReady,richadsSdkConfigured:!!(RICHADS_PUB_ID&&RICHADS_APP_ID),richadsApiConfigured:!!RICHADS_API_KEY,richadsPubId:RICHADS_PUB_ID,richadsAppId:RICHADS_APP_ID,richadsDailyLimit:RICHADS_DAILY_LIMIT,richadsManualCooldownMinutes:Math.round(RICHADS_MANUAL_COOLDOWN_MS/60000),richadsDiagnostics,
             adsgramDiagnostics,
             adsgramManualCooldownMinutes:Math.round(ADSGRAM_MANUAL_COOLDOWN_MS/60000),
             monetagManualCooldownMinutes:Math.round(MONETAG_MANUAL_COOLDOWN_MS/60000),
@@ -12808,6 +12913,89 @@ return String.raw`<!DOCTYPE html>
 .sidebar{box-shadow:18px 0 50px rgba(0,0,0,.26),inset -1px 0 0 rgba(62,231,255,.07)}.side-brand{box-shadow:0 12px 28px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.07),inset 0 -2px 0 rgba(0,0,0,.24)}.nav-btn{border:1px solid transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}.nav-btn.active{transform:translateX(4px);border-color:rgba(62,231,255,.24);box-shadow:inset 4px 0 0 var(--cyan),0 10px 24px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.06)}.topbar{box-shadow:0 14px 35px rgba(0,0,0,.23),inset 0 -1px 0 rgba(62,231,255,.06)}.command-hero,.section-head,.card,.status-box,.link-card,.table-wrap,.modal-card{box-shadow:0 20px 48px rgba(0,0,0,.26),0 3px 0 rgba(2,8,23,.58),inset 0 1px 0 rgba(255,255,255,.06)}.card,.status-box,.link-card{background-image:linear-gradient(145deg,rgba(255,255,255,.025),transparent 34%),linear-gradient(145deg,rgba(16,42,66,.98),rgba(8,23,39,.98))}.btn{box-shadow:0 7px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.11),inset 0 -2px 0 rgba(0,0,0,.2)}.btn:active:not(:disabled){transform:translateY(2px);box-shadow:0 3px 8px rgba(0,0,0,.2),inset 0 1px 4px rgba(0,0,0,.2)}.provider-console{position:relative;overflow:hidden;margin-top:14px;padding:18px;border:1px solid rgba(251,146,60,.25);border-radius:22px;background:linear-gradient(145deg,rgba(80,44,18,.34),rgba(13,31,51,.96) 52%,rgba(7,20,35,.98));box-shadow:0 24px 58px rgba(0,0,0,.30),inset 0 1px 0 rgba(255,255,255,.07)}.provider-console:after{content:'📺 📦';position:absolute;right:18px;top:10px;font-size:38px;opacity:.055;pointer-events:none}.provider-console-head{display:flex;align-items:center;justify-content:space-between;gap:12px;position:relative;z-index:1}.provider-console-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-top:13px}.provider-metric{padding:11px;border-radius:15px;border:1px solid rgba(255,255,255,.07);background:rgba(4,16,28,.52);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}.provider-metric span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}.provider-metric b{display:block;margin-top:5px;font-size:13px}.withdraw-stat-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;margin:0 0 12px}.wait-badge{white-space:nowrap;color:#ffd783;font-weight:850}.danger-soft{border-color:rgba(255,112,128,.25)!important;background:linear-gradient(145deg,rgba(90,28,43,.28),rgba(10,25,42,.96))!important}
 @media(max-width:1100px){.provider-console-grid,.withdraw-stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.provider-console-grid,.withdraw-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.provider-console{padding:13px}.provider-console-head{align-items:flex-start;flex-direction:column}}
+
+/* ==================== LIGHT PROFESSIONAL ADMIN 2026 ====================
+   Presentation-only override. Auth/session/CSRF/CSP/business DOM remain unchanged. */
+:root{
+  color-scheme:light;
+  --bg:#f5f7fb;--panel:#ffffff;--panel2:#f8fafc;--line:#e2e8f0;--line2:#cbd5e1;
+  --text:#0f172a;--muted:#64748b;--cyan:#06b6d4;--blue:#2563eb;--gold:#d97706;
+  --green:#16a34a;--red:#dc2626;--orange:#ea580c;--shadow:0 8px 26px rgba(15,23,42,.07);--radius:18px;
+}
+html,body{background:#f5f7fb;color:var(--text)}
+body{background:linear-gradient(180deg,#f8fafc 0,#f5f7fb 52%,#f1f5f9 100%);color:var(--text)}
+.login{background:radial-gradient(circle at 20% 0,rgba(37,99,235,.08),transparent 28%),#f8fafc}
+.login-card{border-color:#dbe4ef;background:#fff;box-shadow:0 24px 70px rgba(15,23,42,.12)}
+.brand{color:#0f172a}.brand-sub{color:#64748b}
+.field{border-color:#d7e0ea;background:#fff;color:#0f172a;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+.field::placeholder{color:#94a3b8}.field:focus{border-color:#60a5fa;box-shadow:0 0 0 3px rgba(37,99,235,.10)}
+.btn{background:#eaf1f8;color:#1e3a5f;box-shadow:0 2px 5px rgba(15,23,42,.06),inset 0 1px 0 rgba(255,255,255,.9)}
+.btn:hover{filter:none;background:#dce9f7}
+.btn.primary{background:#2563eb;color:#fff;box-shadow:0 5px 14px rgba(37,99,235,.18)}
+.btn.good{background:#eaf8ef;color:#15803d;border:1px solid #bbebc8}
+.btn.warn{background:#fff7e6;color:#a16207;border:1px solid #fde3a7}
+.btn.danger{background:#fff0f1;color:#b91c1c;border:1px solid #fecdd3}
+.btn.ghost{background:#fff;color:#334155;border:1px solid #dbe4ee}
+.btn:active:not(:disabled){transform:translateY(1px);box-shadow:0 1px 3px rgba(15,23,42,.08)}
+.sidebar{background:#fff;border-right:1px solid #e2e8f0;box-shadow:8px 0 28px rgba(15,23,42,.04);backdrop-filter:none}
+.sidebar:before{opacity:.035;filter:none}
+.side-brand{color:#0f172a;border-color:#e2e8f0;background:linear-gradient(145deg,#fff,#f8fafc);box-shadow:0 6px 20px rgba(15,23,42,.05),inset 0 1px 0 #fff}
+.side-brand small{color:#64748b}
+.nav-btn{color:#64748b;background:transparent;box-shadow:none}
+.nav-btn:hover{color:#1d4ed8;background:#f1f5f9;box-shadow:none}
+.nav-btn.active{color:#1d4ed8;background:#eff6ff;border-color:#bfdbfe;transform:none;box-shadow:inset 4px 0 0 #2563eb}
+.side-footer{border-top-color:#e2e8f0}
+.main{background:transparent}
+.topbar{background:rgba(255,255,255,.94);border-bottom:1px solid #e2e8f0;box-shadow:0 8px 24px rgba(15,23,42,.045);backdrop-filter:blur(12px)}
+.top-title{color:#0f172a}.top-kicker{color:#0284c7}
+.pill{background:#f8fafc;border-color:#dbe4ee;color:#334155}
+.section-head{border-color:#e2e8f0;background:linear-gradient(120deg,#fff,#f8fbff);box-shadow:0 5px 18px rgba(15,23,42,.045)}
+.section-head:after{background:radial-gradient(circle,rgba(37,99,235,.08),transparent 68%)}
+.section-head:before{opacity:.035}
+.section-head h2{color:#0f172a}.section-head p{color:#64748b}
+.command-hero{border-color:#dbeafe;background:linear-gradient(135deg,#fff 0%,#f8fbff 55%,#eff6ff 100%);box-shadow:0 8px 28px rgba(37,99,235,.07)}
+.command-hero:after{background:radial-gradient(circle,rgba(37,99,235,.08),transparent 68%)}
+.command-hero:before{opacity:.045}
+.hero-kicker{color:#0284c7}.hero-title{color:#0f172a}.hero-copy{color:#64748b}
+.hero-chip{border-color:#dbe4ee;background:#fff;box-shadow:0 3px 10px rgba(15,23,42,.04)}
+.hero-chip span{color:#64748b}.hero-chip b{color:#0f172a}
+.status-box,.card,.link-card{border-color:#e2e8f0;background:#fff;background-image:none;box-shadow:var(--shadow)}
+.card:hover,.link-card:hover{border-color:#cbd5e1;box-shadow:0 10px 28px rgba(15,23,42,.08);transform:translateY(-1px)}
+.status-box .s-label,.stat .k{color:#64748b}.status-box .s-value,.stat .v{color:#0f172a}
+.stat:after{background:rgba(37,99,235,.045)}.stat .ico{background:#eff6ff}
+.table-wrap{border-color:#e2e8f0;background:#fff;box-shadow:0 6px 20px rgba(15,23,42,.05)}
+table{background:#fff}
+th{background:#f8fafc;color:#475569;border-bottom-color:#dfe7ef}
+td{color:#0f172a;border-bottom-color:#edf2f7}
+tbody tr:nth-child(2n) td{background:#fbfdff}
+tbody tr:hover td{background:#f5f9ff}
+.tag{background:#eef2f7;color:#475569}
+.tag.good{background:#eaf8ef;color:#15803d;box-shadow:none}
+.tag.bad{background:#fff0f1;color:#b91c1c;box-shadow:none}
+.tag.warn{background:#fff7e6;color:#a16207}
+.link-card{background:#fff}.link-card h3{color:#0f172a}
+.diag,.pre{background:#f8fafc;border-color:#e2e8f0;color:#334155}
+.modal{background:rgba(15,23,42,.32);backdrop-filter:blur(5px)}
+.modal-card{border-color:#dbe4ee;background:#fff;box-shadow:0 30px 90px rgba(15,23,42,.18)}
+.modal-head{background:rgba(255,255,255,.97);border-bottom:1px solid #eef2f7}
+.detail-group{border-color:#e2e8f0;background:#fff}
+.detail-group h4{color:#1e3a8a}
+.mini{border-color:#e6edf5;background:#f8fafc}.mini span{color:#64748b}.mini b{color:#0f172a}
+.progress{background:#eef2f7;border-color:#e2e8f0}.progress>div{background:linear-gradient(90deg,#2563eb,#06b6d4)}
+.toast{background:#eff6ff;border-color:#bfdbfe;color:#1e3a8a;box-shadow:0 16px 42px rgba(15,23,42,.13)}
+.toast.err{background:#fff1f2;border-color:#fecdd3;color:#b91c1c}
+.drawer-overlay{background:rgba(15,23,42,.24)}
+.provider-console{border-color:#fed7aa;background:linear-gradient(145deg,#fff,#fffaf5 55%,#f8fbff);box-shadow:0 8px 26px rgba(15,23,42,.07)}
+.provider-console-grid{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}
+.provider-console:after{opacity:.035}
+.provider-metric{border-color:#e2e8f0;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.035)}
+.provider-metric span{color:#64748b}.provider-metric b{color:#0f172a}
+.wait-badge{color:#b45309}.danger-soft{border-color:#fecdd3!important;background:#fff7f8!important}
+.muted{color:#64748b}
+.mono{color:#334155}
+@media(max-width:820px){.sidebar{box-shadow:14px 0 40px rgba(15,23,42,.12)}}
+@media(max-width:460px){.topbar{background:#fff}.card,.status-box,.link-card{box-shadow:0 4px 14px rgba(15,23,42,.055)}}
+/* ==================== END LIGHT PROFESSIONAL ADMIN 2026 ==================== */
 </style></head><body>
 <div id="toast" class="toast hidden"></div>
 <div id="loginView" class="login"><form id="loginForm" class="login-card" autocomplete="off"><div class="brand">🚚 Logistics Command Center</div><div class="brand-sub">SECURE ADMIN CONSOLE</div><input id="loginUser" class="field" placeholder="Tài khoản" autocomplete="username" required><div style="height:9px"></div><input id="loginPass" class="field" type="password" placeholder="Mật khẩu" autocomplete="current-password" required><div style="height:12px"></div><button class="btn primary" style="width:100%">Đăng nhập an toàn</button><p id="loginError" class="muted" style="font-size:11px"></p></form></div>
@@ -12888,6 +13076,10 @@ return String.raw`<!DOCTYPE html>
       <div class="provider-metric"><span>SDK config</span><b id="richadsSdkStatus">...</b></div>
       <div class="provider-metric"><span>API ENV</span><b id="richadsApiStatus">...</b></div>
       <div class="provider-metric"><span>Daily / Cooldown</span><b id="richadsLimitStatus">15/user • 10 phút</b></div>
+      <div class="provider-metric"><span>Last SDK error</span><b id="richadsLastError">Chưa ghi nhận</b></div>
+      <div class="provider-metric"><span>Last timeout</span><b id="richadsLastTimeout">Chưa ghi nhận</b></div>
+      <div class="provider-metric"><span>Last session start</span><b id="richadsLastStart">Chưa ghi nhận</b></div>
+      <div class="provider-metric"><span>Last complete</span><b id="richadsLastComplete">Chưa ghi nhận</b></div>
     </div>
   </div>
   <div class="card" style="margin-top:12px"><h3>🧾 Audit gần nhất</h3><pre id="auditList" class="pre"></pre></div>
@@ -12900,7 +13092,7 @@ return String.raw`<!DOCTYPE html>
 <script nonce="${nonce}">
 (function(){
 'use strict';
-var csrf='',currentUserId='',userPage=1,wdPage=1,broadcastTimer=null,currentTab='overview';
+var csrf='',currentUserId='',currentUserMutable=false,userPage=1,wdPage=1,broadcastTimer=null,currentTab='overview';
 var titles={overview:'Tổng quan',users:'Người dùng',withdrawals:'Rút tiền',links:'Vượt Link',jobmail:'JOB MAIL',giftcodes:'Giftcode',admins:'Admin & Broadcast',system:'Hệ thống'};
 function $(id){return document.getElementById(id)}function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}function num(v){return Number(v||0).toLocaleString('vi-VN')}function fmtDate(v){if(!v)return 'N/A';try{return new Date(v).toLocaleString('vi-VN')}catch(_){return String(v)}}function waitAge(v,status){if(String(status||'')!=='pending'||!v)return '—';var ms=Math.max(0,Date.now()-new Date(v).getTime()),d=Math.floor(ms/86400000),h=Math.floor((ms%86400000)/3600000),m=Math.floor((ms%3600000)/60000);return d?'⏳ '+d+' ngày '+h+' giờ':h?'⏳ '+h+' giờ '+m+' phút':'⏳ '+m+' phút'}function fmtUptime(s){s=Math.max(0,Number(s||0));var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}function toast(msg,err){var el=$('toast');el.textContent=String(msg||'');el.className='toast'+(err?' err':'');clearTimeout(el._t);el._t=setTimeout(function(){el.classList.add('hidden')},3200)}function tag(txt,kind){return '<span class="tag '+(kind||'')+'">'+esc(txt)+'</span>'}function statCard(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+num(v)+'</div></div>'}function statCardText(k,v,ico){return '<div class="card stat"><div class="k"><span class="ico">'+ico+'</span> '+esc(k)+'</div><div class="v">'+esc(v==null?'N/A':v)+'</div></div>'}function mini(k,v){return '<div class="mini"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>'}function group(title,items){return '<div class="detail-group"><h4>'+title+'</h4><div class="detail-grid">'+items.map(function(x){return mini(x[0],x[1])}).join('')+'</div></div>'}
 async function api(url,opt){opt=opt||{};var headers=new Headers(opt.headers||{});if(opt.body&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');if(csrf&&String(opt.method||'GET').toUpperCase()!=='GET')headers.set('x-csrf-token',csrf);var res=await fetch(url,Object.assign({credentials:'same-origin',cache:'no-store'},opt,{headers:headers}));var data=await res.json().catch(function(){return {success:false,error:'Phản hồi server không hợp lệ.'}});if(res.status===401){csrf='';showLogin();throw new Error(data.error||'Phiên Admin đã hết hạn.')}if(!res.ok||data.success===false)throw new Error(data.error||('HTTP '+res.status));return data}
@@ -12974,19 +13166,45 @@ async function loadOverview(force){try{
  ].join('');
 }catch(e){toast(e.message,true)}}
 function pager(id,page,total,limit,cb){var el=$(id),pages=Math.max(1,Math.ceil(Number(total||0)/Number(limit||25)));el.innerHTML='<button class="btn ghost" id="'+id+'Prev" '+(page<=1?'disabled':'')+'>←</button><span class="muted">Trang '+page+'/'+pages+' • '+num(total)+' bản ghi</span><button class="btn ghost" id="'+id+'Next" '+(page>=pages?'disabled':'')+'>→</button>';$(id+'Prev').onclick=function(){if(page>1)cb(page-1)};$(id+'Next').onclick=function(){if(page<pages)cb(page+1)}}
-async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+tag('N/A','')+'</td><td>'+tag('N/A','')+'</td><td>'+num(u.richadsToday)+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="14" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
-async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100 '+d.risk.level;var dup=d.duplicates&&d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không';var reasons=d.risk&&d.risk.reasons&&d.risk.reasons.length?d.risk.reasons.join(', '):'Không có';$('userDetailGroups').innerHTML=[
- group('👤 Tài khoản',[['ID',d.user.id],['Tên',d.user.name||'User'],['Trạng thái',d.user.isBanned?'BANNED':'ACTIVE'],['Ngôn ngữ',d.user.language||'vi'],['Tạo lúc',fmtDate(d.user.accountCreatedAt)]]),
- group('💰 Ví',[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Truck Level',num(d.user.truckLevel)]]),
- group('🚚 Hoạt động',[['Giao hàng hôm nay',num(d.user.deliveryCount)],['Tổng giao hàng',num(d.user.deliveryCountLifetime)],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Tổng mở rương',num(d.user.chestOpensTotal)],['Referral hợp lệ',num(d.user.validInvites)]]),
- group('📺 Quảng cáo',[['QC hôm nay',num(d.user.adsToday)],['Rewarded hôm nay',num(d.user.rewardedAdsToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['AdsGram theo provider','N/A'],['Monetag theo provider','N/A'],['RichAds hôm nay',num(d.ads&&d.ads.richadsToday)]]),
- group('🔗 SmartLink',[['Hôm nay',num(d.user.smartlinksToday)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)]]),
- group('🧩 Vượt Link',[['Hoàn thành',d.linkTask?num(d.linkTask.completed):'N/A'],['Orders nhận',d.linkTask?num(d.linkTask.rewardOrders):'N/A']]),
- group('🌐 IP / Risk',[['IP gần nhất',d.user.ip||'Chưa có'],['Trùng IP với',dup],['Risk Score',d.risk.score+'/100'],['Risk Level',d.risk.level],['Lý do',reasons]]),
- group('💸 Withdrawal',[['Tổng đã rút',num(d.withdrawal.totalWithdrawn)+' VNĐ'],['Tổng bị hủy',num(d.withdrawal.totalCancelled)+' VNĐ'],['Pending hiện tại',d.withdrawal.pending?'CÓ':'KHÔNG'],['Mã pending',d.withdrawal.pending?('#'+String(d.withdrawal.pending.txCode||d.withdrawal.pending.id)):'—'],['Số tiền pending',d.withdrawal.pending?(num(d.withdrawal.pending.amount)+' VNĐ'):'—'],['Tạo lúc',d.withdrawal.pending?fmtDate(d.withdrawal.pending.createdAt):'—'],['IP đơn rút gần nhất',d.withdrawal.latestIp||'Chưa có']]),
- group('📩 JOB MAIL',[['Tổng gửi',num(d.jobMail.total)],['Được duyệt',num(d.jobMail.approved)],['Bị từ chối',num(d.jobMail.rejected)],['IP gửi mail gần nhất',d.jobMail.lastIp||'Chưa có']])
- ].join('');$('userTransactions').textContent=(d.transactions||[]).map(function(x){return String(x.type||'')+' '+String(x.amount||'')+' • '+String(x.reason||'')}).join('\n')||'Chưa có sao kê server.';$('userModal').classList.remove('hidden')}catch(e){toast(e.message,true)}}
-async function userAction(action){if(!currentUserId)return;var body={action:action};if(['addCoin','subCoin','addOrders','subOrders','addSpins','subSpins','addRef'].indexOf(action)>=0)body.amount=Number($('userAmount').value);if(action==='setLevel')body.level=Number($('userLevel').value);if(action==='rename')body.name=$('userNewName').value;if(action==='resetUser'){var c=prompt('Nhập chính xác RESET '+currentUserId);if(c===null)return;body.confirmText=c}if(action==='deleteUser'){var d=prompt('CẢNH BÁO: xóa vĩnh viễn. Nhập DELETE '+currentUserId);if(d===null)return;body.confirmText=d}if(!confirm('Xác nhận thao tác '+action+' với user '+currentUserId+'?'))return;try{await api('/api/admin/users/'+currentUserId+'/action',{method:'POST',body:JSON.stringify(body)});toast('✅ Thao tác thành công');if(action==='deleteUser'){$('userModal').classList.add('hidden');loadUsers()}else openUser(currentUserId)}catch(e){toast(e.message,true)}}
+async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'',mutable=/^\d{3,20}$/.test(String(u.id||''));return '<tr><td class="mono">'+esc(u.id)+(mutable?'':' '+tag('LEGACY','warn'))+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+tag('N/A','')+'</td><td>'+tag('N/A','')+'</td><td>'+num(u.richadsToday)+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="14" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
+async function openUser(id){
+ try{
+  var response=await api('/api/admin/users/'+encodeURIComponent(id)),d=response.detail||{},u=d.user||{},risk=d.risk||{score:0,level:'LOW',reasons:[]},meta=d.meta||{};
+  currentUserId=String(u.id||id||'');currentUserMutable=meta.mutable===true;
+  $('userModalTitle').textContent='👤 '+(u.name||'User');
+  $('userModalSub').textContent='ID '+currentUserId+' • Risk '+Number(risk.score||0)+'/100 '+String(risk.level||'LOW')+(currentUserMutable?'':' • LEGACY/READ-ONLY')+(meta.partial?' • DỮ LIỆU PHỤ CHƯA ĐẦY ĐỦ':'');
+  var dup=d.duplicates&&d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không';
+  var reasons=risk.reasons&&risk.reasons.length?risk.reasons.join(', '):'Không có';
+  var withdrawal=d.withdrawal||{},jobMail=d.jobMail||{},ads=d.ads||{};
+  $('userDetailGroups').innerHTML=[
+   group('👤 Tài khoản',[['ID',u.id||currentUserId],['Tên',u.name||'User'],['Loại',currentUserMutable?'Telegram user':'Legacy / chỉ xem'],['Trạng thái',u.isBanned?'BANNED':'ACTIVE'],['Ngôn ngữ',u.language||'vi'],['Tạo lúc',fmtDate(u.accountCreatedAt)]]),
+   group('💰 Ví',[['Coin',num(u.coins)],['Đơn Hàng',num(u.orders)],['Spin',num(u.spins)],['Truck Level',num(u.truckLevel)]]),
+   group('🚚 Hoạt động',[['Giao hàng hôm nay',num(u.deliveryCount)],['Tổng giao hàng',num(u.deliveryCountLifetime)],['Mở rương hôm nay',num(u.chestOpensToday)],['Tổng mở rương',num(u.chestOpensTotal)],['Referral hợp lệ',num(u.validInvites)]]),
+   group('📺 Quảng cáo',[['QC hôm nay',num(u.adsToday)],['Rewarded hôm nay',num(u.rewardedAdsToday)],['Tổng QC',num(u.lifetimeAdsWatched)],['AdsGram theo provider','N/A'],['Monetag theo provider','N/A'],['RichAds hôm nay',num(ads.richadsToday)]]),
+   group('🔗 SmartLink',[['Hôm nay',num(u.smartlinksToday)],['Tổng SmartLink',num(u.lifetimeSmartlinks)]]),
+   group('🧩 Vượt Link',[['Hoàn thành',d.linkTask?num(d.linkTask.completed):'N/A'],['Orders nhận',d.linkTask?num(d.linkTask.rewardOrders):'N/A']]),
+   group('🌐 IP / Risk',[['IP gần nhất',u.ip||'Chưa có'],['Trùng IP với',dup],['Risk Score',Number(risk.score||0)+'/100'],['Risk Level',risk.level||'LOW'],['Lý do',reasons]]),
+   group('💸 Withdrawal',[['Tổng đã rút',num(withdrawal.totalWithdrawn)+' VNĐ'],['Tổng bị hủy',num(withdrawal.totalCancelled)+' VNĐ'],['Pending hiện tại',withdrawal.pending?'CÓ':'KHÔNG'],['Mã pending',withdrawal.pending?('#'+String(withdrawal.pending.txCode||withdrawal.pending.id||'N/A')):'—'],['Số tiền pending',withdrawal.pending?(num(withdrawal.pending.amount)+' VNĐ'):'—'],['Tạo lúc',withdrawal.pending?fmtDate(withdrawal.pending.createdAt):'—'],['IP đơn rút gần nhất',withdrawal.latestIp||'Chưa có']]),
+   group('📩 JOB MAIL',[['Tổng gửi',num(jobMail.total)],['Được duyệt',num(jobMail.approved)],['Bị từ chối',num(jobMail.rejected)],['IP gửi mail gần nhất',jobMail.lastIp||'Chưa có']])
+  ].join('');
+  $('userTransactions').textContent=(d.transactions||[]).map(function(x){return String(x.type||'')+' '+String(x.amount||'')+' • '+String(x.reason||'')}).join('\n')||'Chưa có sao kê server.';
+  document.querySelectorAll('.userAct').forEach(function(b){b.disabled=!currentUserMutable;b.title=currentUserMutable?'':'Record legacy chỉ được xem, không được thao tác';});
+  ['userAmount','userLevel','userNewName'].forEach(function(key){var el=$(key);if(el)el.disabled=!currentUserMutable;});
+  $('userModal').classList.remove('hidden');
+ }catch(e){currentUserMutable=false;toast(e.message,true)}
+}
+async function userAction(action){
+ if(!currentUserId)return;
+ if(!currentUserMutable){toast('Record legacy chỉ được xem. Thao tác nhạy cảm chỉ áp dụng cho Telegram user hợp lệ.',true);return;}
+ var body={action:action};
+ if(['addCoin','subCoin','addOrders','subOrders','addSpins','subSpins','addRef'].indexOf(action)>=0)body.amount=Number($('userAmount').value);
+ if(action==='setLevel')body.level=Number($('userLevel').value);
+ if(action==='rename')body.name=$('userNewName').value;
+ if(action==='resetUser'){var c=prompt('Nhập chính xác RESET '+currentUserId);if(c===null)return;body.confirmText=c}
+ if(action==='deleteUser'){var d=prompt('CẢNH BÁO: xóa vĩnh viễn. Nhập DELETE '+currentUserId);if(d===null)return;body.confirmText=d}
+ if(!confirm('Xác nhận thao tác '+action+' với user '+currentUserId+'?'))return;
+ try{await api('/api/admin/users/'+encodeURIComponent(currentUserId)+'/action',{method:'POST',body:JSON.stringify(body)});toast('✅ Thao tác thành công');if(action==='deleteUser'){$('userModal').classList.add('hidden');loadUsers()}else openUser(currentUserId)}catch(e){toast(e.message,true)}
+}
 async function loadWithdrawals(){try{var pair=await Promise.all([api('/api/admin/withdrawals?page='+wdPage+'&limit=25&status='+encodeURIComponent($('wdStatus').value)+'&q='+encodeURIComponent($('wdSearch').value)),api('/api/admin/dashboard')]);var j=pair[0],s=pair[1].stats||{};$('wdStats').innerHTML=[statCard('Pending',s.pendingWithdrawals,'⏳'),statCard('Đã duyệt',s.successfulWithdrawals,'✅'),statCard('Đã hủy',s.rejectedWithdrawals,'❌'),statCard('Đã hoàn',s.refundedWithdrawals,'↩️'),statCard('Hôm nay',s.withdrawalsToday,'📅'),statCard('Tổng tiền đã duyệt',s.totalWithdrawn,'💸')].join('');$('wdBody').innerHTML=j.withdrawals.map(function(w){var info=[w.method,w.bankName,w.accountName,w.accountNumber||w.accountInfo].filter(Boolean).join(' • ');var acts=w.status==='pending'?'<div class="actions"><button class="btn good wd-act" data-id="'+esc(w.id)+'" data-a="approve">Duyệt</button><button class="btn danger wd-act" data-id="'+esc(w.id)+'" data-a="reject">Hủy</button><button class="btn warn wd-act" data-id="'+esc(w.id)+'" data-a="refund">Hoàn</button></div>':'';return '<tr><td>#'+esc(w.txCode||w.id)+'</td><td>'+esc(w.userId)+'</td><td>'+num(w.amount)+' VNĐ</td><td>'+esc(info)+'</td><td class="mono">'+esc(w.sourceIp||'Chưa lưu')+(w.duplicateAccounts&&w.duplicateAccounts.length?' '+tag('TRÙNG','bad'):'')+'</td><td>'+fmtDate(w.createdAt)+'</td><td class="wait-badge">'+esc(waitAge(w.createdAt,w.status))+'</td><td>'+tag(w.status,w.status==='success'?'good':w.status==='pending'?'warn':'bad')+'</td><td>'+acts+'</td></tr>'}).join('')||'<tr><td colspan="9" class="empty">Không có đơn</td></tr>';document.querySelectorAll('.wd-act').forEach(function(b){b.onclick=function(){withdrawAction(b.dataset.id,b.dataset.a)}});pager('wdPager',wdPage,j.total,j.limit,function(pg){wdPage=pg;loadWithdrawals()})}catch(e){toast(e.message,true)}}
 async function withdrawAction(id,a){var reason='';if(a==='reject')reason=prompt('Lý do hủy:')||'';if(!confirm('Xác nhận '+a+' đơn '+id+'?'))return;try{await api('/api/admin/withdrawals/'+encodeURIComponent(id)+'/action',{method:'POST',body:JSON.stringify({action:a,reason:reason})});toast('✅ Đã xử lý đơn');loadWithdrawals()}catch(e){toast(e.message,true)}}
 async function loadLinks(){try{var j=await api('/api/admin/link-tasks'),d=j.diagnostic,n=d.network||{};var ipLine=n.publicIpAvailable?'✅ '+(n.canonicalPublicIp||n.resolvedPublicIp||''):'❌ PUBLIC IP UNAVAILABLE';$('linkDiag').textContent='SYSTEM DIAGNOSTIC\nSUPABASE SERVICE ROLE: '+(d.serviceRole?'✅':'❌')+'\nIP HASH SECRET: '+(d.ipHashSecret?'✅':'❌')+'\nIP INTELLIGENCE: '+(d.ipIntelligence?'✅ CONFIGURED':'❌ NOT CONFIGURED')+' (OPTIONAL / NOT REQUIRED)\nLINK TASK DB: '+(d.database&&d.database.ready?'✅ READY':'❌ NOT READY')+'\nTRUST PROXY: '+String(n.trustProxy||'N/A')+'\nREMOTE ADDRESS: '+String(n.remoteAddress||'N/A')+'\nX-FORWARDED-FOR PRESENT: '+(n.forwardedForPresent?'✅ YES':'❌ NO')+'\nFORWARDED HOP COUNT: '+Number(n.forwardedHopCount||0)+'\nCANONICAL PUBLIC IP: '+ipLine+'\nWEB_APP_URL: '+String(d.webAppUrl||'');$('linkGrid').innerHTML=j.tasks.map(function(x){var strict='KHÔNG';return '<div class="link-card"><h3>🔗 '+esc(x.name)+'</h3><div>'+tag(x.envConfigured?'ENV ✅':'ENV ❌',x.envConfigured?'good':'bad')+' '+tag(x.adminLocked?'🔒 LOCKED':'🔓 ENABLED',x.adminLocked?'bad':'good')+'</div><p class="muted">💰 +'+num(x.rewardOrders)+' Đơn • '+esc(x.rule)+'</p><p class="muted">Quota IP: '+num(x.maxPerIp)+' • Device: '+num(x.maxPerDevice)+' • Dev/IP: '+num(x.maxPerDeviceIp)+'</p><p class="muted">Strict VPN check: <b>'+strict+'</b></p><p>✅ Completed hôm nay: <b>'+num(x.rewardedToday)+'</b> • ⏳ Active: <b>'+num(x.activeAttempts)+'</b></p>'+(x.lastProviderError?'<p class="muted">Provider error gần nhất: '+esc(x.lastProviderError)+'</p>':'')+'<button class="btn '+(x.adminLocked?'good':'danger')+' link-toggle" data-id="'+esc(x.id)+'" data-lock="'+(x.adminLocked?'0':'1')+'">'+(x.adminLocked?'🔓 Mở nhiệm vụ':'🔒 Khóa nhiệm vụ')+'</button></div>'}).join('');document.querySelectorAll('.link-toggle').forEach(function(b){b.onclick=function(){toggleLink(b.dataset.id,b.dataset.lock==='1')}})}catch(e){toast(e.message,true)}}
@@ -13037,6 +13255,11 @@ async function loadSystem(force){try{
  $('richadsSdkStatus').textContent=a.richadsSdkConfigured?'✅ READY':'❌ ERROR';
  $('richadsApiStatus').textContent=a.richadsApiConfigured?'✅ CONFIGURED':'ℹ️ NOT REQUIRED';
  $('richadsLimitStatus').textContent=String(a.richadsDailyLimit||15)+'/user • '+String(a.richadsManualCooldownMinutes||10)+' phút';
+ var rd=a.richadsDiagnostics||{},rdErr=rd.last_error||null,rdTimeout=rd.last_timeout||null,rdStart=rd.last_session_start||null,rdComplete=rd.last_session_complete||null;
+ $('richadsLastError').textContent=rdErr?(String(rdErr.kind||'ERROR')+' • '+fmtDate(rdErr.at)+(rdErr.message?' • '+String(rdErr.message):'')):'Chưa ghi nhận';
+ $('richadsLastTimeout').textContent=rdTimeout?fmtDate(rdTimeout.at):'Chưa ghi nhận';
+ $('richadsLastStart').textContent=rdStart?fmtDate(rdStart.at):'Chưa ghi nhận';
+ $('richadsLastComplete').textContent=rdComplete?fmtDate(rdComplete.at):'Chưa ghi nhận';
  $('auditList').textContent=(s.audit||[]).map(function(x){return String(x.at||'')+' • '+String(x.actor||'')+' • '+String(x.action||'')+' • '+String(x.target||'')}).join('\n')||'Chưa có audit.';
  $('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked;
  $('adsgramLock').disabled=!!a.adsgramLocked;$('adsgramUnlock').disabled=!a.adsgramLocked;
