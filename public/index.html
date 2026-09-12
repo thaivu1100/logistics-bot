@@ -67,6 +67,19 @@
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet" />
     <!-- Đã bỏ Font Awesome CDN: toàn bộ icon dùng emoji có sẵn để không lỗi hiển thị khi CDN ngoài không tải được trên 1 số thiết bị/mạng -->
+
+    <script>
+        // Presentation-only theme preference. Business data remains server/Supabase authoritative.
+        (function bootstrapThemePreference() {
+            try {
+                const mode = localStorage.getItem('shipper_theme') === 'light' ? 'light' : 'dark';
+                document.documentElement.classList.remove('theme-light', 'theme-dark');
+                document.documentElement.classList.add('theme-' + mode);
+            } catch (_) {
+                document.documentElement.classList.add('theme-dark');
+            }
+        })();
+    </script>
     <style>
         [x-cloak] { display: none !important; }
         html { -webkit-text-size-adjust: 100%; }
@@ -1153,9 +1166,146 @@
         .low-graphics .premium-logistics-ui .ui-bottom-nav{box-shadow:none !important;backdrop-filter:none !important;transform:none !important}
         /* ==================== END LOGISTICS MOBILE GAME LIGHT 2026 ==================== */
 
+
+        /* ==================== READABILITY / THEME / COMPACT TASKS / FPS ==================== */
+        :root {
+            --app-bg:#0b1120; --app-bg-2:#0f172a; --app-card:#172033; --app-card-2:#1e293b;
+            --app-text:#f8fafc; --app-text-2:#cbd5e1; --app-muted:#94a3b8; --app-line:rgba(255,255,255,.10);
+            --app-blue:#3b82f6; --app-gold:#fbbf24; --app-green:#22c55e;
+        }
+        html.theme-light {
+            --app-bg:#f6f8fb; --app-bg-2:#f8fafc; --app-card:#ffffff; --app-card-2:#f8fafc;
+            --app-text:#0f172a; --app-text-2:#334155; --app-muted:#64748b; --app-line:#e2e8f0;
+            --app-blue:#2563eb; --app-gold:#d97706; --app-green:#16a34a;
+            color-scheme:light;
+        }
+        html.theme-dark { color-scheme:dark; }
+        html.theme-light body {
+            background:
+                radial-gradient(circle at 15% 0%, rgba(37,99,235,.10) 0%, transparent 32%),
+                linear-gradient(180deg,#f8fafc 0%,#f6f8fb 56%,#eef2f7 100%) !important;
+            color:var(--app-text) !important;
+        }
+        html.theme-dark body { color:var(--app-text); }
+        html.theme-light .glass {
+            background:linear-gradient(150deg,rgba(255,255,255,.98),rgba(248,250,252,.96)) !important;
+            border-color:#e2e8f0 !important;
+            box-shadow:0 10px 26px rgba(15,23,42,.08), inset 0 1px 0 rgba(255,255,255,.95) !important;
+            color:var(--app-text) !important;
+        }
+        html.theme-light header.glass { background:rgba(255,255,255,.96) !important; }
+        html.theme-light .text-white { color:#0f172a !important; }
+        html.theme-light .text-slate-100, html.theme-light .text-slate-200, html.theme-light .text-slate-300 { color:#334155 !important; }
+        html.theme-light .text-slate-400, html.theme-light .text-slate-500 { color:#64748b !important; }
+        html.theme-light .text-blue-300, html.theme-light .text-blue-400 { color:#1d4ed8 !important; }
+        html.theme-light .text-cyan-300, html.theme-light .text-cyan-400 { color:#0e7490 !important; }
+        html.theme-light .text-green-300, html.theme-light .text-green-400 { color:#15803d !important; }
+        html.theme-light .text-amber-200, html.theme-light .text-amber-300, html.theme-light .text-yellow-300, html.theme-light .text-yellow-400 { color:#a16207 !important; }
+        html.theme-light .text-orange-200, html.theme-light .text-orange-300 { color:#c2410c !important; }
+        html.theme-light .text-red-300, html.theme-light .text-red-400 { color:#b91c1c !important; }
+        html.theme-light .bg-slate-950,
+        html.theme-light .bg-slate-900,
+        html.theme-light .bg-slate-800,
+        html.theme-light .bg-slate-700 { background:#f1f5f9 !important; }
+        html.theme-light .border-white\/5,
+        html.theme-light .border-white\/10 { border-color:#e2e8f0 !important; }
+        html.theme-light input:not([type="range"]),
+        html.theme-light select,
+        html.theme-light textarea {
+            background:#fff !important; color:#0f172a !important; border-color:#cbd5e1 !important;
+        }
+        html.theme-light input::placeholder, html.theme-light textarea::placeholder { color:#64748b !important; opacity:1 !important; }
+        html.theme-light .modal-content { background:#fff !important; color:#0f172a !important; border-color:#f59e0b !important; }
+        html.theme-light .task-card { background:#f8fafc !important; border-color:#e2e8f0 !important; }
+        html.theme-light .task-icon-wrap { background:linear-gradient(145deg,#eff6ff,#f8fafc) !important; border-color:#bfdbfe !important; }
+        html.theme-light .sponsor-banner-slot { background:#fff !important; border-color:#e2e8f0 !important; }
+        html.theme-light .job-mail-rule { background:#f8fafc !important; border-color:#e2e8f0 !important; }
+        html.theme-light .job-mail-danger { background:#fff7f7 !important; border-color:#fecaca !important; }
+        html.theme-light nav.glass, html.theme-light .ui-bottom-nav { background:rgba(255,255,255,.97) !important; border-color:#e2e8f0 !important; }
+        html.theme-light .text-neon { color:#b45309 !important; text-shadow:none !important; }
+        html.theme-light .gold-glow { box-shadow:0 8px 18px rgba(217,119,6,.16), inset 0 1px 0 rgba(255,255,255,.9) !important; border-color:#fcd34d !important; }
+
+        /* Critical mobile readability: never use 6–9px for user-facing content. */
+        .ui-app-shell [class~="text-[6px]"],
+        .ui-app-shell [class~="text-[7px]"],
+        .ui-app-shell [class~="text-[8px]"] { font-size:10px !important; line-height:1.38 !important; }
+        .ui-app-shell [class~="text-[9px]"] { font-size:10.5px !important; line-height:1.4 !important; }
+        .ui-app-shell button[class*="text-["],
+        .ui-app-shell a[class*="text-["] { min-height:34px; }
+        .ui-tasks .task-card { min-height:58px; padding:9px 10px !important; }
+        .ui-tasks .task-card p { line-height:1.32; }
+        .ui-tasks .task-route { margin-top:5px !important; height:5px; }
+        .ui-tasks .task-route-truck { display:none; }
+        .ui-tasks .task-claim-btn { min-height:32px; font-size:10px !important; padding:6px 10px !important; }
+
+        .task-section-switcher {
+            display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;
+            padding:10px; border:1px solid var(--app-line); border-radius:22px;
+            background:var(--app-card);
+            box-shadow:0 8px 22px rgba(15,23,42,.08);
+        }
+        .task-section-btn {
+            min-height:48px; display:flex; align-items:center; justify-content:space-between; gap:8px;
+            padding:8px 10px; border-radius:15px; border:1px solid var(--app-line);
+            background:var(--app-card-2); color:var(--app-text);
+            text-align:left; font-size:11px; line-height:1.2; font-weight:900;
+        }
+        .task-section-btn .task-section-meta { display:block; margin-top:3px; color:var(--app-muted); font-size:9px; font-weight:800; }
+        .task-section-btn.active { background:linear-gradient(145deg,rgba(37,99,235,.16),rgba(6,182,212,.08)); border-color:rgba(59,130,246,.45); color:var(--app-text); }
+        .task-section-chevron { color:var(--app-muted); font-size:14px; }
+        .task-section-panel { animation:taskPanelIn .18s ease-out; }
+        @keyframes taskPanelIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+        .settings-group-title {
+            margin:0 2px 6px; color:var(--app-muted); font-size:10px; font-weight:900;
+            letter-spacing:.09em; text-transform:uppercase;
+        }
+        .settings-row {
+            display:flex; align-items:center; justify-content:space-between; gap:12px;
+            min-height:50px; padding:10px 12px; border:1px solid var(--app-line);
+            border-radius:16px; background:var(--app-card-2);
+        }
+        .settings-row-title { color:var(--app-text); font-size:12px; font-weight:900; line-height:1.3; }
+        .settings-row-desc { margin-top:3px; color:var(--app-muted); font-size:10px; font-weight:700; line-height:1.4; }
+        .settings-segment { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
+        .settings-segment button {
+            min-height:34px; padding:7px 10px; border-radius:11px; border:1px solid var(--app-line);
+            background:var(--app-card); color:var(--app-text-2); font-size:10px; font-weight:900;
+        }
+        .settings-segment button.is-active {
+            background:#2563eb !important; border-color:#2563eb !important; color:#fff !important;
+            box-shadow:0 5px 12px rgba(37,99,235,.18);
+        }
+        .settings-segment button.is-active.is-green {
+            background:#16a34a !important; border-color:#16a34a !important;
+        }
+
+        .fps-overlay {
+            position:fixed; top:calc(env(safe-area-inset-top,0px) + 8px); right:8px; z-index:4600;
+            min-width:58px; padding:5px 8px; border-radius:999px; pointer-events:none;
+            text-align:center; font:900 10px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+            color:#fff; background:rgba(15,23,42,.82); border:1px solid rgba(255,255,255,.18);
+            box-shadow:0 4px 14px rgba(0,0,0,.18); backdrop-filter:blur(8px);
+        }
+        .fps-overlay.fps-good { background:rgba(21,128,61,.90); }
+        .fps-overlay.fps-mid { background:rgba(161,98,7,.92); }
+        .fps-overlay.fps-low { background:rgba(185,28,28,.92); }
+
+        @media (max-width:340px) {
+            .task-section-switcher { grid-template-columns:1fr; }
+            .settings-row { align-items:flex-start; flex-direction:column; }
+            .settings-segment { justify-content:flex-start; width:100%; }
+        }
+        .low-graphics .task-section-panel { animation:none !important; }
+        .low-graphics .fps-overlay { backdrop-filter:none !important; box-shadow:none !important; }
+
 </style>
 </head>
 <body class="premium-logistics-ui" x-data="app()" x-init="initApp()">
+    <div x-show="showFps && !isAppLoading && !maintenanceLocked && !bannedScreen"
+         x-cloak class="fps-overlay"
+         :class="fpsValue >= 50 ? 'fps-good' : (fpsValue >= 30 ? 'fps-mid' : 'fps-low')"
+         x-text="'FPS ' + fpsValue"></div>
 
     <!-- ADBLOCK DETECTION (bổ sung): phần tử "mồi" dùng class name phổ biến (adsbox/ad-banner/ads/advertisement)
     mà các bộ lọc quảng cáo phổ biến (uBlock Origin, AdGuard, trình duyệt có chặn QC sẵn...) thường ẩn đi bằng CSS.
@@ -1212,7 +1362,7 @@
         <div class="absolute inset-0 opacity-10" style="background: radial-gradient(circle at 50% 30%, #2563eb, transparent 60%);"></div>
         <div class="national-day-loading-bg"></div>
         <div class="national-day-flag-card" aria-hidden="true">
-            <svg viewBox="0 0 300 200" role="img" aria-label="Cờ Việt Nam">
+            <svg viewBox="0 0 300 200" role="img" :aria-label="language==='en' ? 'Vietnamese flag' : 'Cờ Việt Nam'">
                 <rect width="300" height="200" fill="#da251d"></rect>
                 <polygon fill="#ffdf00" points="150,42 164,83 207,83 172,108 185,150 150,125 115,150 128,108 93,83 136,83"></polygon>
             </svg>
@@ -1360,7 +1510,7 @@
                 <div class="bg-slate-900/65 rounded-2xl p-3 border border-white/5"><div class="text-[9px] text-slate-400 uppercase font-black">💰 Tổng Coin hiện có</div><div class="text-xl font-black mt-1 text-yellow-300" x-text="formatNumber(publicStats.totalCoins)"></div></div>
             </div>
             <p x-show="publicStatsLoading" class="text-[10px] text-slate-400 mt-3">⏳ Đang cập nhật thống kê...</p>
-            <p x-show="publicStatsError" class="text-[10px] text-amber-300 mt-3" x-text="'⚠️ '+publicStatsError"></p>
+            <p x-show="publicStatsError" class="text-[10px] text-amber-300 mt-3" x-text="'⚠️ '+translateRuntimeText(publicStatsError, language)"></p>
             <a x-show="publicTelegramMiniAppUrl" :href="publicTelegramMiniAppUrl" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex w-full items-center justify-center py-3.5 rounded-2xl bg-blue-600 text-white font-black text-sm shadow-lg">🚀 MỞ MINI APP TRÊN TELEGRAM</a>
             <a x-show="publicTelegramBotUrl" :href="publicTelegramBotUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-flex w-full items-center justify-center py-3 rounded-2xl bg-slate-800 text-white font-black text-xs">🤖 MỞ BOT TELEGRAM</a>
         </div>
@@ -1407,12 +1557,12 @@
                 <div class="game-resource-chip spins"><span>🎟️</span><b x-text="formatNumber(spins)"></b></div>
             </div>
         </header>
-        <div class="national-day-banner" aria-label="Mừng Quốc khánh Việt Nam 02/09">
+        <div class="national-day-banner" :aria-label="language==='en' ? 'Vietnam National Day 02/09' : 'Mừng Quốc khánh Việt Nam 02/09'">
             <span class="national-star">★</span><span>🇻🇳 MỪNG QUỐC KHÁNH 02/09</span><span class="national-star">★</span>
         </div>
 
         <!-- Sponsor 320x50: one static, clearly separated placement. Không che CTA/navigation và không tự refresh. -->
-        <section class="sponsor-banner-slot" aria-label="Quảng cáo tài trợ">
+        <section class="sponsor-banner-slot" :aria-label="language==='en' ? 'Sponsored advertisement' : 'Quảng cáo tài trợ'">
             <div class="sponsor-banner-label">Quảng cáo</div>
             <div class="sponsor-banner-frame">
                 <script>
@@ -1538,7 +1688,27 @@
             <!-- NHIỆM VỤ -->
             <div x-show="tab === 'tasks'" x-transition class="tab-enter ui-tab ui-tasks space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase" x-text="texts.tasksTitle"></h2>
-                <div x-show="newUserTutorial.eligible" x-cloak class="glass p-3 rounded-[25px] space-y-3 card-padding border border-emerald-500/30 bg-emerald-950/10">
+                <div class="task-section-switcher">
+                    <button type="button" class="task-section-btn" :class="taskSections.daily ? 'active' : ''" @click="toggleTaskSection('daily')">
+                        <span>🎯 <span x-text="texts.taskSectionDaily"></span><small class="task-section-meta" x-text="dailyTasks.filter(t=>t.done).length + '/' + dailyTasks.length"></small></span><span class="task-section-chevron" x-text="taskSections.daily ? '▾' : '▸'"></span>
+                    </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.ads ? 'active' : ''" @click="toggleTaskSection('ads')">
+                        <span>📺 <span x-text="texts.taskSectionAds"></span><small class="task-section-meta" x-text="(bonusAdsToday||0) + ' • ' + (richadsAdsToday||0)"></small></span><span class="task-section-chevron" x-text="taskSections.ads ? '▾' : '▸'"></span>
+                    </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.smartlink ? 'active' : ''" @click="toggleTaskSection('smartlink')">
+                        <span>🔗 SmartLink<small class="task-section-meta" x-text="smartlinksToday + '/' + smartlinkDailyLimit"></small></span><span class="task-section-chevron" x-text="taskSections.smartlink ? '▾' : '▸'"></span>
+                    </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.link ? 'active' : ''" @click="toggleTaskSection('link')">
+                        <span>🧩 <span x-text="texts.taskSectionLink"></span><small class="task-section-meta" x-text="linkTasks.length ? (linkTasks.filter(t=>t.status==='rewarded').length + '/' + linkTasks.length) : texts.loadingShort"></small></span><span class="task-section-chevron" x-text="taskSections.link ? '▾' : '▸'"></span>
+                    </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.streak ? 'active' : ''" @click="toggleTaskSection('streak')">
+                        <span>🔥 <span x-text="texts.taskSectionStreak"></span><small class="task-section-meta" x-text="(loginStreakState.currentDay || 1) + '/7'"></small></span><span class="task-section-chevron" x-text="taskSections.streak ? '▾' : '▸'"></span>
+                    </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.special ? 'active' : ''" @click="toggleTaskSection('special')">
+                        <span>🎁 <span x-text="texts.taskSectionSpecial"></span><small class="task-section-meta" x-text="texts.oneTimeAndNewbie"></small></span><span class="task-section-chevron" x-text="taskSections.special ? '▾' : '▸'"></span>
+                    </button>
+                </div>
+                <div x-show="taskSections.special && newUserTutorial.eligible" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding border border-emerald-500/30 bg-emerald-950/10">
                     <div class="flex items-center justify-between gap-2">
                         <h3 class="text-sm font-black uppercase text-emerald-300" x-text="texts.newbieTitle"></h3>
                         <span x-show="newUserTutorial.rewardClaimed" class="text-[9px] font-black text-green-400" x-text="texts.newbieCompleted"></span>
@@ -1555,7 +1725,7 @@
                     </div>
                     <div class="p-2 rounded-xl border border-yellow-500/20 bg-yellow-500/10 text-center text-[10px] font-black text-yellow-300" x-text="newUserTutorial.rewardClaimed ? texts.newbieCompleted : texts.newbieReward"></div>
                 </div>
-                <div class="glass p-3 rounded-[25px] space-y-3 card-padding border border-blue-500/20">
+                <div x-show="taskSections.smartlink" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding border border-blue-500/20">
                     <div class="flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <h3 class="text-sm font-black uppercase opacity-80 flex items-center gap-1.5">
@@ -1581,7 +1751,7 @@
                     </button>
                 </div>
 
-                <div class="glass p-3 rounded-[25px] space-y-3 card-padding border border-cyan-500/20">
+                <div x-show="taskSections.link" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding border border-cyan-500/20">
                     <div class="flex items-center justify-between gap-2">
                         <div><h3 class="text-sm font-black uppercase text-cyan-300">🔗 NHIỆM VỤ VƯỢT LINK</h3><p class="text-[8px] text-slate-400 mt-1">Vượt link → nhận mã xác nhận → quay lại nhập mã để nhận thưởng.</p></div>
                         <button @click="syncLinkTasks()" :disabled="!!_linkTaskStarting" class="px-2.5 py-1.5 rounded-xl bg-slate-800 text-[8px] font-black disabled:opacity-40">↻ LÀM MỚI</button>
@@ -1592,10 +1762,10 @@
                     <template x-for="task in linkTasks" :key="task.id">
                         <div class="p-3 rounded-2xl bg-slate-800/50 border border-white/5">
                             <div class="flex items-start justify-between gap-2">
-                                <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' Đơn Hàng'"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+task.rule"></p><p x-show="task.warning" x-cloak class="text-[8px] leading-relaxed text-red-300 font-bold mt-1" x-text="'⚠️ '+task.warning"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+task.unavailableReason"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':task.status==='expired'||task.status==='cancelled'?'text-amber-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p><p x-show="linkTaskIsActive(task)" class="text-[9px] text-amber-300 font-black mt-1" x-text="'⏳ Còn '+linkTaskCountdownText(task)"></p></div>
-                                <div class="text-right flex-shrink-0"><p class="text-[9px] font-black text-cyan-300" x-text="'Còn '+Math.max(0,Number(task.remaining||0))+' lượt'"></p></div>
+                                <div class="min-w-0"><p class="text-xs font-black" x-text="'🔗 '+task.name"></p><p class="text-[9px] text-yellow-300 font-black mt-1" x-text="'💰 +'+formatNumber(task.rewardOrders)+' '+texts.ordersTarget"></p><p class="text-[8px] text-slate-400 mt-1" x-text="'🌐 '+translateRuntimeText(task.rule, language)"></p><p x-show="task.warning" x-cloak class="text-[8px] leading-relaxed text-red-300 font-bold mt-1" x-text="'⚠️ '+translateRuntimeText(task.warning, language)"></p><p x-show="task.unavailableReason" class="text-[8px] text-red-300 mt-1" x-text="'⚠️ '+translateRuntimeText(task.unavailableReason, language)"></p><p class="text-[8px] mt-1" :class="task.status==='rewarded'?'text-green-300':task.status==='landed'?'text-cyan-300':task.status==='expired'||task.status==='cancelled'?'text-amber-300':'text-slate-400'" x-text="linkTaskStatusText(task)"></p><p x-show="linkTaskIsActive(task)" class="text-[9px] text-amber-300 font-black mt-1" x-text="(language==='en'?'⏳ Remaining ':'⏳ Còn ')+linkTaskCountdownText(task)"></p></div>
+                                <div class="text-right flex-shrink-0"><p class="text-[9px] font-black text-cyan-300" x-text="(language==='en'?'Remaining ':'Còn ')+Math.max(0,Number(task.remaining||0))+(language==='en'?' attempts':' lượt')"></p></div>
                             </div>
-                            <button x-show="!linkTaskIsActive(task) && !task.shortUrl" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?'⏳ ĐANG TẠO LINK...':'BẮT ĐẦU'"></span></button>
+                            <button x-show="!linkTaskIsActive(task) && !task.shortUrl" @click="startLinkTask(task)" :disabled="!task.available || Number(task.remaining||0)<=0 || _linkTaskStarting===task.id" class="w-full mt-2 py-2.5 rounded-2xl bg-cyan-600 text-white font-black text-[10px] uppercase disabled:opacity-40"><span x-text="_linkTaskStarting===task.id?(language==='en'?'⏳ CREATING LINK...':'⏳ ĐANG TẠO LINK...'):(language==='en'?'START':'BẮT ĐẦU')"></span></button>
                             <button x-show="task.status==='created' && !task.shortUrl" x-cloak disabled class="w-full mt-2 py-2.5 rounded-2xl bg-slate-700 text-slate-300 font-black text-[10px] uppercase opacity-70">⏳ ĐANG TẠO NHIỆM VỤ...</button>
                             <div x-show="task.shortUrl" x-cloak class="mt-2 p-2.5 rounded-2xl bg-slate-950/55 border border-blue-500/20 space-y-2">
                                 <p class="text-[9px] font-black text-blue-300">🔗 LINK NHIỆM VỤ</p>
@@ -1618,21 +1788,21 @@
                                 <button @click="verifyLinkTaskCode(task)"
                                     :disabled="linkTaskSecondsRemaining(task)<=0 || !!_linkCodeVerifying[task.id] || linkTaskCodeCooldownSeconds(task.id)>0 || String(linkTaskCodeInputs[task.id]||'').length!==6"
                                     class="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase disabled:opacity-40"
-                                    x-text="_linkCodeVerifying[task.id]?'⏳ ĐANG XÁC NHẬN...':(linkTaskCodeCooldownSeconds(task.id)>0?'⏳ CHỜ '+linkTaskCodeCooldownSeconds(task.id)+' GIÂY':'XÁC NHẬN MÃ')"></button>
-                                <p x-show="linkTaskCodeCooldownSeconds(task.id)>0" class="text-[8px] text-amber-300 text-center" x-text="'Vui lòng chờ '+linkTaskCodeCooldownSeconds(task.id)+' giây trước khi thử mã tiếp theo.'"></p>
+                                    x-text="_linkCodeVerifying[task.id]?(language==='en'?'⏳ VERIFYING...':'⏳ ĐANG XÁC NHẬN...'):(linkTaskCodeCooldownSeconds(task.id)>0?(language==='en'?'⏳ WAIT ':'⏳ CHỜ ')+linkTaskCodeCooldownSeconds(task.id)+(language==='en'?' SECONDS':' GIÂY'):(language==='en'?'VERIFY CODE':'XÁC NHẬN MÃ'))"></button>
+                                <p x-show="linkTaskCodeCooldownSeconds(task.id)>0" class="text-[8px] text-amber-300 text-center" x-text="language==='en' ? ('Please wait '+linkTaskCodeCooldownSeconds(task.id)+' seconds before trying another code.') : ('Vui lòng chờ '+linkTaskCodeCooldownSeconds(task.id)+' giây trước khi thử mã tiếp theo.')"></p>
                             </div>
                             <button x-show="linkTaskIsActive(task)" x-cloak @click="changeLinkTask(task)"
                                 :disabled="!task.available || linkTaskSecondsRemaining(task)<=0 || _linkTaskStarting===task.id || !!_linkCodeVerifying[task.id] || task.adminLocked"
                                 class="w-full mt-2 py-2.5 rounded-2xl bg-amber-600/90 text-white font-black text-[10px] uppercase disabled:opacity-40"
-                                x-text="_linkTaskStarting===task.id?'⏳ ĐANG ĐỔI NHIỆM VỤ...':'🔄 ĐỔI NHIỆM VỤ'"></button>
+                                x-text="_linkTaskStarting===task.id?(language==='en'?'⏳ CHANGING TASK...':'⏳ ĐANG ĐỔI NHIỆM VỤ...'):(language==='en'?'🔄 CHANGE TASK':'🔄 ĐỔI NHIỆM VỤ')"></button>
                         </div>
                     </template>
-                    <p x-show="linkTaskStatusError" class="text-[9px] text-amber-300 text-center" x-text="'⚠️ ' + linkTaskStatusError"></p>
+                    <p x-show="linkTaskStatusError" class="text-[9px] text-amber-300 text-center" x-text="'⚠️ ' + translateRuntimeText(linkTaskStatusError, language)"></p>
                     <p x-show="!linkTasks.length && !linkTaskStatusError" class="text-[9px] text-slate-500 text-center">Đang tải nhiệm vụ vượt link...</p>
                 </div>
 
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
+                <div x-show="taskSections.daily" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <h3 class="text-sm font-black uppercase opacity-80 flex items-center gap-1.5">
                         <span class="tasks-header-truck">🚚</span> <span x-text="texts.dailyTasks"></span>
                     </h3>
                     <template x-for="(task, idx) in dailyTasks" :key="task.id">
@@ -1647,7 +1817,7 @@
                                     <p class="text-xs font-black flex items-center gap-1 flex-wrap">
                                         <span x-text="task.name"></span>
                                     </p>
-                                    <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
+                                    <p class="text-[10px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5">
                                         <span x-text="'+' + task.reward + ' 💰'"></span>
                                         <span x-show="task.rewardOrders" x-text="'+' + task.rewardOrders + ' 📦'"></span>
                                         <span x-show="task.rewardSpins" x-text="'+' + task.rewardSpins + ' 🎁'"></span>
@@ -1656,14 +1826,14 @@
                                         <div class="task-route-fill" :style="'width:' + taskProgressPercent(task) + '%'"></div>
                                         <span class="task-route-truck" :style="'left:' + taskProgressPercent(task) + '%'">🚚</span>
                                     </div>
-                                    <div x-show="!task.done" class="text-[7px] text-blue-300 mt-1" x-text="taskProgressText(task)"></div>
+                                    <div x-show="!task.done" class="text-[10px] text-blue-300 mt-1" x-text="taskProgressText(task)"></div>
                                 </div>
                             </div>
                             <div class="flex-shrink-0 pl-2">
-                                <span x-show="task.done" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
+                                <span x-show="task.done" class="text-green-400 text-[10px] font-black uppercase" x-text="texts.claimed"></span>
                                 <button x-show="!task.done && task.claimable" @click="claimTaskReward(idx)" :disabled="_taskClaimInFlight" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text disabled:opacity-50" x-text="_taskClaimingId===task.id ? (language==='vi'?'⏳ ĐANG NHẬN...':'⏳ CLAIMING...') : texts.claim"></button>
-                                <span x-show="!task.done && !task.claimable" class="text-slate-500 text-[7px] font-black uppercase" x-text="taskProgressText(task)"></span>
-                                <span x-show="!task.done && task.claimable" class="text-green-400 text-[7px] font-black" x-text="language === 'vi' ? '✅ Hoàn thành — Có thể nhận' : '✅ Complete — Claimable'"></span>
+                                <span x-show="!task.done && !task.claimable" class="text-slate-500 text-[10px] font-black uppercase" x-text="texts.inProgress"></span>
+                                <span x-show="!task.done && task.claimable" class="text-green-400 text-[10px] font-black" x-text="language === 'vi' ? '✅ Hoàn thành — Có thể nhận' : '✅ Complete — Claimable'"></span>
                             </div>
                         </div>
                     </template>
@@ -1676,7 +1846,7 @@
                     </div>
                 </div>
 
-                <div class="glass p-3 rounded-[25px] space-y-3 card-padding streak-panel" :class="streakCelebrating ? 'streak-celebrating' : ''">
+                <div x-show="taskSections.streak" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding streak-panel" :class="streakCelebrating ? 'streak-celebrating' : ''">
                     <h3 class="text-sm font-black uppercase opacity-60 text-center" x-text="texts.streakTitle"></h3>
                     <div class="grid grid-cols-7 gap-1">
                         <template x-for="day in 7" :key="day">
@@ -1696,8 +1866,8 @@
                     <div x-show="streakCelebrating" class="text-center text-yellow-300 font-black text-sm animate-pulse" x-text="texts.streakDay7"></div>
                 </div>
                 <!-- NHIỆM VỤ THAM GIA NHÓM: mỗi campaign chỉ claim 1 lần trọn đời, server kiểm tra membership thật. -->
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <h3 class="text-sm font-black uppercase opacity-60 flex items-center gap-1.5">
+                <div x-show="taskSections.special" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-2 card-padding">
+                    <h3 class="text-sm font-black uppercase opacity-80 flex items-center gap-1.5">
                         <span>👥</span> <span x-text="texts.groupTaskTitle"></span>
                     </h3>
 
@@ -1707,11 +1877,11 @@
                             <div class="task-icon-wrap" :class="groupTaskKiemtienClaimed ? 'icon-done' : ''"><span class="text-base" x-text="groupTaskKiemtienClaimed ? '✅' : '👥'"></span></div>
                             <div class="text-left flex-1 min-w-0">
                                 <p class="text-xs font-black flex items-center gap-1 flex-wrap"><span x-text="texts.groupTaskKiemtienName"></span><span class="task-once-badge" x-text="texts.onceOnly"></span></p>
-                                <p class="text-[7px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5"><span>+200 💰</span><span>+200 📦</span></p>
+                                <p class="text-[10px] font-bold text-yellow-400 flex items-center gap-1 flex-wrap mt-0.5"><span>+200 💰</span><span>+200 📦</span></p>
                             </div>
                         </div>
                         <div class="flex-shrink-0 pl-2">
-                            <span x-show="groupTaskKiemtienClaimed" class="text-green-400 text-[9px] font-black uppercase" x-text="texts.claimed"></span>
+                            <span x-show="groupTaskKiemtienClaimed" class="text-green-400 text-[10px] font-black uppercase" x-text="texts.claimed"></span>
                             <div x-show="!groupTaskKiemtienClaimed" class="flex flex-col items-end gap-1">
                                 <a href="https://t.me/kiemtienmuakfc" target="_blank" rel="noopener" class="task-claim-btn bg-blue-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-blue-600/30 btn-text text-center" x-text="texts.groupTaskJoinBtn"></a>
                                 <button @click="claimGroupTask('kiemtienmuakfc_2026_09')" class="task-claim-btn bg-green-600 px-2.5 py-1.5 rounded-full font-black text-[7px] uppercase shadow-lg shadow-green-600/30 btn-text" x-text="texts.groupTaskCheckBtn"></button>
@@ -1719,7 +1889,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding border border-cyan-500/15">
+                <div x-show="taskSections.ads" x-transition x-cloak class="task-section-panel glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding border border-cyan-500/15">
                     <div class="flex items-center justify-between gap-2">
                         <h3 class="text-sm font-black uppercase text-cyan-300">📺 QC ADSGRAM</h3>
                         <div class="text-[10px] font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></div>
@@ -1727,10 +1897,10 @@
                     <div class="ad-reward-box"><span class="text-[9px] font-bold text-slate-400">🎁 Phần thưởng</span><b class="text-[10px] text-yellow-300 text-right">10–25 Coin + 10–25 Đơn Hàng</b></div>
                     <div class="ad-progress-track"><span :style="'width:' + Math.min(100, Math.max(0, Number(bonusAdsToday||0) / 15 * 100)) + '%'"></span></div>
                     <p x-show="adsgramTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
-                    <p x-show="!adsgramTaskLocked && adsgramManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="'⏳ Có thể xem tiếp sau ' + formatCooldownSeconds(adsgramManualCooldown)"></p>
+                    <p x-show="!adsgramTaskLocked && adsgramManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="(language==='en'?'⏳ Next ad in ':'⏳ Có thể xem tiếp sau ') + formatCooldownSeconds(adsgramManualCooldown)"></p>
                     <button @click="watchAdsGramTask()" :disabled="adsgramTaskLocked || (bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _richadsRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
                 </div>
-                <div class="glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding">
+                <div x-show="taskSections.ads" x-transition x-cloak class="task-section-panel glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding">
                     <div class="flex items-center justify-between gap-2">
                         <h3 class="text-sm font-black uppercase text-blue-300">📺 QC MONETAG</h3>
                         <div class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></div>
@@ -1738,10 +1908,10 @@
                     <div class="ad-reward-box"><span class="text-[9px] font-bold text-slate-400">🎁 Phần thưởng</span><b class="text-[10px] text-yellow-300 text-right">Coin + Đơn Hàng ngẫu nhiên</b></div>
                     <div class="ad-progress-track"><span :style="'width:' + Math.min(100, Math.max(0, Number(bonusAdsToday||0) / 15 * 100)) + '%'"></span></div>
                     <p x-show="monetagTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
-                    <p x-show="!monetagTaskLocked && monetagManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="'⏳ Có thể xem tiếp sau ' + formatCooldownSeconds(monetagManualCooldown)"></p>
+                    <p x-show="!monetagTaskLocked && monetagManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="(language==='en'?'⏳ Next ad in ':'⏳ Có thể xem tiếp sau ') + formatCooldownSeconds(monetagManualCooldown)"></p>
                     <button @click="watchBonusAdTask()" :disabled="monetagTaskLocked || (bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _richadsRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-300 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
                 </div>
-                <div class="glass ad-provider-card richads-card space-y-2 card-padding">
+                <div x-show="taskSections.ads" x-transition x-cloak class="task-section-panel glass ad-provider-card richads-card space-y-2 card-padding">
                     <div class="flex items-center justify-between gap-2">
                         <h3 class="text-sm font-black uppercase text-orange-300">📺 QC RICHADS</h3>
                         <div class="text-[10px] font-black text-orange-300" x-text="(richadsAdsToday||0) + '/15 ' + texts.today"></div>
@@ -1750,7 +1920,7 @@
                     <div class="ad-progress-track"><span :style="'width:' + Math.min(100, Math.max(0, Number(richadsAdsToday||0) / 15 * 100)) + '%'"></span></div>
                     <p x-show="richadsTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
                     <p x-show="!richadsTaskLocked && !richadsStorageReady" class="text-[9px] text-amber-200 font-bold">⚠️ RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.</p>
-                    <p x-show="!richadsTaskLocked && richadsStorageReady && richadsManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="'⏳ Có thể xem tiếp sau ' + formatCooldownSeconds(richadsManualCooldown)"></p>
+                    <p x-show="!richadsTaskLocked && richadsStorageReady && richadsManualCooldown > 0" class="text-[9px] text-slate-300 font-bold" x-text="(language==='en'?'⏳ Next ad in ':'⏳ Có thể xem tiếp sau ') + formatCooldownSeconds(richadsManualCooldown)"></p>
                     <button @click="watchRichAdsTask()" :disabled="richadsTaskLocked || !richadsStorageReady || (richadsAdsToday||0) >= 15 || richadsManualCooldown > 0 || _richadsRunning || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2.5 bg-orange-500/20 border border-orange-400/60 rounded-[25px] font-black text-[10px] uppercase text-orange-200 hover:bg-orange-500/30 transition disabled:opacity-40 btn-text" x-text="richadsButtonText()"></button>
                 </div>
             </div>
@@ -1930,7 +2100,7 @@
                     <button @click="requestWithdraw()"
                         :disabled="withdrawSubmitting || withdrawPending || withdrawRemain <= 0 || !withdrawEligible || !withdrawOrdersAmount || withdrawOrdersAmount < 30000 || orders < withdrawOrdersAmount || !/^[0-9]+$/.test(String(withdrawAccountNumber || '')) || !String(withdrawAccountName || '').trim() || (withdrawMethod === 'bank' && !supportedBanks.includes(withdrawBankName)) || (withdrawMethod === 'ewallet' && !['momo','zalopay'].includes(withdrawWalletType))"
                         class="cta-shine w-full py-2 gold-glow bg-[#fbbf24] text-slate-900 rounded-[25px] font-black uppercase text-sm shadow-2xl active:scale-95 transition disabled:opacity-40 btn-text">
-                        <span x-text="withdrawSubmitting ? texts.processing : (withdrawPending ? '⏳ CHỜ ADMIN DUYỆT' : texts.withdraw + ' (' + formatNumber(withdrawOrdersAmount || 0) + ' 📦)')"></span>
+                        <span x-text="withdrawSubmitting ? texts.processing : (withdrawPending ? (language==='en'?'⏳ WAITING FOR ADMIN':'⏳ CHỜ ADMIN DUYỆT') : texts.withdraw + ' (' + formatNumber(withdrawOrdersAmount || 0) + ' 📦)')"></span>
                     </button>
                 </div>
 
@@ -1968,7 +2138,7 @@
                     </div>
                 </div>
 
-                <div class="job-mail-requirements glass rounded-[24px] p-4 space-y-4" aria-label="Yêu cầu tạo mail">
+                <div class="job-mail-requirements glass rounded-[24px] p-4 space-y-4" :aria-label="language==='en' ? 'Email creation requirements' : 'Yêu cầu tạo mail'">
                     <section class="job-mail-rule">
                         <div class="job-mail-separator">━━━━━━━━━━━━━━━━━━</div>
                         <h3>📝 THÔNG TIN MAIL YÊU CẦU</h3>
@@ -2100,7 +2270,7 @@
                             <h3 class="text-sm font-black text-yellow-300">📩 GỬI GMAIL</h3>
                             <p class="text-[10px] text-slate-400 mt-1">Chỉ nhập địa chỉ Gmail. Hệ thống không yêu cầu và không lưu mật khẩu.</p>
                             <p class="text-[10px] text-blue-300 mt-1">📌 Tối thiểu mỗi lần: <b x-text="jobMailMinBatch"></b> Gmail.</p>
-                            <textarea x-model="jobMailInput" class="job-mail-textarea mt-3 bg-slate-950/70 rounded-2xl border border-white/10 p-3 text-xs outline-none focus:border-blue-500" placeholder="Nhập Gmail tại đây...&#10;Mỗi tài khoản Gmail một dòng.&#10;&#10;Ví dụ:&#10;buimanh2736@gmail.com&#10;nguyenduc452@gmail.com"></textarea>
+                            <textarea x-model="jobMailInput" class="job-mail-textarea mt-3 bg-slate-950/70 rounded-2xl border border-white/10 p-3 text-xs outline-none focus:border-blue-500" :placeholder="language==='en' ? 'Enter Gmail addresses here...\\nOne Gmail account per line.\\n\\nExample:\\nbuimanh2736@gmail.com\\nnguyenduc452@gmail.com' : 'Nhập Gmail tại đây...\\nMỗi tài khoản Gmail một dòng.\\n\\nVí dụ:\\nbuimanh2736@gmail.com\\nnguyenduc452@gmail.com'"></textarea>
                             <button @click="submitJobMails()" :disabled="jobMailSubmitting || !jobMailInput.trim() || !jobMailAvailabilityLoaded || !jobMailOpen" class="mt-3 w-full py-3 rounded-2xl bg-blue-600 disabled:opacity-40 font-black text-sm">
                                 <span x-show="!jobMailSubmitting">📨 GỬI MAIL DUYỆT</span><span x-show="jobMailSubmitting">⏳ ĐANG GỬI...</span>
                             </button>
@@ -2153,7 +2323,7 @@
                                         <button @click="jobMailVideoOpen = jobMailVideoOpen === v.id ? '' : v.id" class="w-full flex items-center justify-between gap-2 text-left text-[11px] font-black"><span x-text="v.title"></span><span x-text="jobMailVideoOpen === v.id ? '▲' : '▼'"></span></button>
                                         <template x-if="jobMailVideoOpen === v.id">
                                             <div class="mt-3">
-                                                <iframe class="job-mail-video-frame" :src="v.embed" title="Video hướng dẫn JOB MAIL" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+                                                <iframe class="job-mail-video-frame" :src="v.embed" :title="language==='en' ? 'JOB MAIL tutorial video' : 'Video hướng dẫn JOB MAIL'" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
                                                 <a :href="v.url" target="_blank" rel="noopener" class="mt-2 flex items-center justify-center w-full py-2 rounded-xl bg-red-600/80 font-black text-[10px]">▶️ MỞ VIDEO</a>
                                             </div>
                                         </template>
@@ -2168,48 +2338,83 @@
             <!-- CÀI ĐẶT -->
             <div x-show="tab === 'settings'" x-transition class="tab-enter ui-tab ui-settings space-y-3">
                 <h2 class="text-xl font-extrabold italic text-neon text-center uppercase tracking-widest mb-2" x-text="texts.settings"></h2>
-                <div class="glass p-3 rounded-[25px] space-y-2 text-sm card-padding">
-                    <div class="flex justify-between"><span>🆔 ID</span><span class="font-bold" x-text="user.id"></span></div>
-                    <div class="flex justify-between"><span>👤 <span x-text="texts.userName"></span></span><span class="font-bold" x-text="user.name"></span></div>
-                    <div class="flex justify-between"><span>📅 <span x-text="texts.joinDateLabel"></span></span><span class="font-bold" x-text="user.joinDate"></span></div>
-                    <div class="flex justify-between"><span>🚛 <span x-text="texts.truckLevelLabel"></span></span><span class="font-bold" x-text="truckLevel"></span></div>
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsAccount"></p>
+                    <div class="space-y-2">
+                        <div class="settings-row"><span class="settings-row-title">🆔 ID</span><span class="font-bold text-sm" x-text="user.id"></span></div>
+                        <div class="settings-row"><span class="settings-row-title">👤 <span x-text="texts.userName"></span></span><span class="font-bold text-sm text-right" x-text="user.name"></span></div>
+                        <div class="settings-row"><span class="settings-row-title">📅 <span x-text="texts.joinDateSimple"></span></span><span class="font-bold text-sm text-right" x-text="user.joinDate"></span></div>
+                        <div class="settings-row"><span class="settings-row-title">🚛 <span x-text="texts.truckLevelLabel"></span></span><span class="font-bold text-sm" x-text="truckLevel"></span></div>
+                    </div>
                 </div>
-                <div class="glass p-3 rounded-[25px] flex justify-between items-center card-padding">
-                    <span>🌐 <span x-text="texts.languageLabel"></span></span>
-                    <select x-model="language" @change="changeLanguage()" class="bg-slate-800 text-white rounded-xl px-2 py-1 text-sm">
-                        <option value="vi">🇻🇳 Tiếng Việt</option>
-                        <option value="en">🇬🇧 English</option>
-                    </select>
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsLanguage"></p>
+                    <div class="settings-row">
+                        <div><p class="settings-row-title">🌐 <span x-text="texts.languageLabel"></span></p><p class="settings-row-desc" x-text="texts.languageDesc"></p></div>
+                        <select x-model="language" @change="changeLanguage()" class="rounded-xl px-3 py-2 text-sm font-black border border-white/10">
+                            <option value="vi">🇻🇳 Tiếng Việt</option>
+                            <option value="en">🇬🇧 English</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <div class="flex items-center justify-between">
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsAppearance"></p>
+                    <div class="settings-row">
+                        <div><p class="settings-row-title">🎨 <span x-text="texts.appearance"></span></p><p class="settings-row-desc" x-text="texts.themeDesc"></p></div>
+                        <div class="settings-segment">
+                            <button type="button" @click="setTheme('light')" :class="themeMode === 'light' ? 'is-active' : ''" x-text="texts.lightTheme"></button>
+                            <button type="button" @click="setTheme('dark')" :class="themeMode === 'dark' ? 'is-active' : ''" x-text="texts.darkTheme"></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsPerformance"></p>
+                    <div class="settings-row">
+                        <div><p class="settings-row-title">⚡ <span x-text="texts.graphics"></span></p><p class="settings-row-desc" x-text="texts.graphicsDesc"></p></div>
+                        <div class="settings-segment">
+                            <button type="button" @click="setGraphicsMode('fullhd')" :class="graphicsMode === 'fullhd' ? 'is-active' : ''">🖥️ FULL HD</button>
+                            <button type="button" @click="setGraphicsMode('fixlag')" :class="graphicsMode === 'fixlag' ? 'is-active is-green' : ''">⚡ FIX LAG</button>
+                        </div>
+                    </div>
+                    <div class="settings-row mt-2">
+                        <div><p class="settings-row-title">🎯 <span x-text="texts.showFps"></span></p><p class="settings-row-desc" x-text="texts.fpsDesc"></p></div>
+                        <div class="settings-segment">
+                            <button type="button" @click="setFpsEnabled(true)" :class="showFps ? 'is-active is-green' : ''" x-text="texts.on"></button>
+                            <button type="button" @click="setFpsEnabled(false)" :class="!showFps ? 'is-active' : ''" x-text="texts.off"></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsAudio"></p>
+                    <div class="settings-row">
+                        <div><p class="settings-row-title">🎵 <span x-text="texts.backgroundMusic"></span></p><p class="settings-row-desc" x-text="musicOn ? (texts.musicPlaying + musicVideoIds.length + texts.musicLoop) : texts.musicOff"></p></div>
+                        <button @click="toggleMusic()" class="px-4 py-2 rounded-xl font-black text-xs transition"
+                                :class="musicOn ? 'bg-green-600 text-white shadow-lg shadow-green-600/20' : 'bg-slate-800 text-slate-400 border border-white/10'"
+                                x-text="musicOn ? texts.musicOn : texts.musicOffButton"></button>
+                    </div>
+                </div>
+
+                <div class="glass p-3 rounded-[25px] card-padding">
+                    <p class="settings-group-title" x-text="texts.settingsSupport"></p>
+                    <div class="settings-row" style="align-items:flex-start">
                         <div>
-                            <p class="text-sm font-black">🎨 Đồ họa</p>
-                            <p class="text-[9px] text-slate-400">FULL HD giữ nguyên hiệu ứng · FIX LAG giảm hiệu ứng để máy yếu mượt hơn</p>
+                            <p class="settings-row-title">☎️ <span x-text="texts.contactAdmin"></span></p>
+                            <p class="settings-row-desc" x-text="texts.supportDesc"></p>
                         </div>
-                        <div class="flex gap-2">
-                            <button @click="setGraphicsMode('fullhd')" class="px-3 py-2 rounded-xl text-[10px] font-black" :class="graphicsMode === 'fullhd' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 border border-white/10'">🖥️ FULL HD</button>
-                            <button @click="setGraphicsMode('fixlag')" class="px-3 py-2 rounded-xl text-[10px] font-black" :class="graphicsMode === 'fixlag' ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-400 border border-white/10'">⚡ FIX LAG</button>
+                        <div class="text-right text-sm space-y-1">
+                            <a href="https://t.me/noameazonus" target="_blank" class="block text-blue-400 font-bold">@noameazonus</a>
+                            <a href="https://t.me/khohangkiemtien" target="_blank" class="block text-blue-400 font-bold" x-text="texts.channel"></a>
+                            <a href="https://t.me/khohangchatkiemtien" target="_blank" class="block text-blue-400 font-bold" x-text="texts.group"></a>
                         </div>
                     </div>
                 </div>
-                <!-- NHẠC NỀN: chỉ BẬT/TẮT (không cho chọn bài). 4 bài tự phát lặp lại tuần tự -->
-                <div class="glass p-3 rounded-[25px] flex justify-between items-center card-padding">
-                    <div>
-                        <p class="text-sm font-black">🎵 Nhạc nền</p>
-                        <p class="text-[9px] text-slate-400" x-text="musicOn ? (texts.musicPlaying + musicVideoIds.length + texts.musicLoop) : texts.musicOff"></p>
-                    </div>
-                    <button @click="toggleMusic()" class="px-4 py-2 rounded-xl font-black text-xs transition"
-                            :class="musicOn ? 'bg-green-600 text-white shadow-lg shadow-green-600/30' : 'bg-slate-800 text-slate-400 border border-white/10'"
-                            x-text="musicOn ? texts.musicOn : texts.musicOffButton"></button>
-                </div>
-                <div class="glass p-3 rounded-[25px] space-y-1 card-padding">
-                    <p class="font-bold text-xs opacity-60">☎️ <span x-text="texts.contactAdmin"></span></p>
-                    <a href="https://t.me/noameazonus" target="_blank" class="block text-blue-400 text-sm">@noameazonus</a>
-                    <a href="https://t.me/khohangkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.channel"></a>
-                    <a href="https://t.me/khohangchatkiemtien" target="_blank" class="block text-blue-400 text-sm" x-text="texts.group"></a>
-                </div>
-                <div class="p-2 text-center text-[8px] opacity-30 italic font-black">LH v2.0 • API SECURE</div>
+
+                <div class="p-2 text-center text-[10px] opacity-60 italic font-black">LH v2.0 • API SECURE</div>
             </div>
 
             <!-- MỤC NHẬP CODE - TÁCH RIÊNG thành 1 tab độc lập, có ô nhập code + lịch sử nhập code (mã, phần
@@ -2238,7 +2443,7 @@
                             <div class="stagger-item text-xs border-b border-white/5 py-2" :style="'animation-delay:' + (Math.min(idx, 15) * 60) + 'ms'">
                                 <div class="flex justify-between items-center">
                                     <span class="font-black text-blue-400" x-text="'🎁 ' + h.code"></span>
-                                    <span class="text-[10px] text-slate-400" x-text="new Date(h.createdAt).toLocaleString('vi-VN')"></span>
+                                    <span class="text-[10px] text-slate-400" x-text="new Date(h.createdAt).toLocaleString(language === 'en' ? 'en-US' : 'vi-VN')"></span>
                                 </div>
                                 <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] mt-1 text-slate-300">
                                     <span x-show="h.rewardCoin > 0" x-text="'🪙 +' + formatNumber(h.rewardCoin) + ' Coin'"></span>
@@ -2383,6 +2588,10 @@
                 copy: 'Copy', share: 'CHIA SẺ CHO MN', invited: 'Đã mời', valid: 'Hợp lệ',
                 withdraw: 'Rút Tiền', withdrawHistory: 'Lịch sử rút', noTransactions: 'Chưa có giao dịch',
                 settings: 'Cài Đặt', userName: 'Tên', truckLevelLabel: 'Cấp xe', languageLabel: 'Ngôn ngữ',
+                settingsAccount:'👤 TÀI KHOẢN', settingsLanguage:'🌐 NGÔN NGỮ', settingsAppearance:'🎨 HIỂN THỊ', settingsPerformance:'⚡ HIỆU NĂNG', settingsAudio:'🎵 ÂM THANH', settingsSupport:'☎️ HỖ TRỢ',
+                joinDateSimple:'Ngày tham gia', languageDesc:'Thay đổi ngôn ngữ toàn bộ Mini App ngay lập tức.', appearance:'Giao diện', themeDesc:'Chọn giao diện sáng hoặc tối. Màu chữ tự điều chỉnh để luôn dễ đọc.', lightTheme:'☀️ SÁNG', darkTheme:'🌙 TỐI',
+                graphics:'Đồ họa', graphicsDesc:'FULL HD giữ đầy đủ hiệu ứng · FIX LAG giảm hiệu ứng để máy yếu mượt hơn.', showFps:'Hiển thị FPS', fpsDesc:'Hiển thị FPS thực tế của giao diện, không ép tần số quét thiết bị.', on:'BẬT', off:'TẮT', backgroundMusic:'Nhạc nền', supportDesc:'Liên hệ Admin hoặc cộng đồng khi cần hỗ trợ.',
+                taskSectionDaily:'NHIỆM VỤ HÔM NAY', taskSectionAds:'QUẢNG CÁO', taskSectionLink:'VƯỢT LINK', taskSectionStreak:'ĐIỂM DANH 7 NGÀY', taskSectionSpecial:'TÂN THỦ / ĐẶC BIỆT', oneTimeAndNewbie:'Một lần & tân thủ', loadingShort:'Đang tải', inProgress:'CHƯA XONG',
                 contactAdmin: 'Liên hệ Admin', enterCode: 'Mã...', redeem: 'Nhận',
                 redeemHistoryLabel: 'Lịch sử nhập code', noRedeemHistory: 'Chưa nhập mã nào', privateOnlyMe: 'Chỉ mình bạn thấy',
                 giftcodePageTitle: '🎟️ Nhập Code', giftcodeDesc: 'Nhập mã để nhận thưởng ngay. Phần thưởng chỉ mình bạn thấy được.',
@@ -2459,6 +2668,10 @@
                 copy: 'Copy', share: 'SHARE', invited: 'Invited', valid: 'Valid',
                 withdraw: 'Withdraw', withdrawHistory: 'Withdraw history', noTransactions: 'No transactions',
                 settings: 'Settings', userName: 'Name', truckLevelLabel: 'Truck Level', languageLabel: 'Language',
+                settingsAccount:'👤 ACCOUNT', settingsLanguage:'🌐 LANGUAGE', settingsAppearance:'🎨 APPEARANCE', settingsPerformance:'⚡ PERFORMANCE', settingsAudio:'🎵 AUDIO', settingsSupport:'☎️ SUPPORT',
+                joinDateSimple:'Join date', languageDesc:'Switch the entire Mini App language instantly.', appearance:'Appearance', themeDesc:'Choose Light or Dark. Text colors automatically stay readable.', lightTheme:'☀️ LIGHT', darkTheme:'🌙 DARK',
+                graphics:'Graphics', graphicsDesc:'FULL HD keeps all effects · FIX LAG reduces effects for smoother low-end performance.', showFps:'Show FPS', fpsDesc:'Shows real rendered FPS without forcing the device refresh rate.', on:'ON', off:'OFF', backgroundMusic:'Background Music', supportDesc:'Contact Admin or the community when you need help.',
+                taskSectionDaily:"TODAY'S TASKS", taskSectionAds:'ADS', taskSectionLink:'LINK TASKS', taskSectionStreak:'7-DAY CHECK-IN', taskSectionSpecial:'NEW USER / SPECIAL', oneTimeAndNewbie:'One-time & new user', loadingShort:'Loading', inProgress:'IN PROGRESS',
                 contactAdmin: 'Contact Admin', enterCode: 'Code...', redeem: 'Redeem',
                 redeemHistoryLabel: 'Redeem history', noRedeemHistory: 'No codes redeemed yet', privateOnlyMe: 'Only visible to you',
                 giftcodePageTitle: '🎟️ Redeem Code', giftcodeDesc: 'Enter a code to get your reward instantly. Only you can see it.',
@@ -2543,7 +2756,134 @@
             '🇻🇳 Tiếng Việt': '🇻🇳 Vietnamese',
             '🎨 Đồ họa': '🎨 Graphics',
             'FULL HD giữ nguyên hiệu ứng · FIX LAG giảm hiệu ứng để máy yếu mượt hơn': 'FULL HD keeps all effects · FIX LAG reduces effects for smoother performance',
-            '🎵 Nhạc nền': '🎵 Background music'
+            '🎵 Nhạc nền': '🎵 Background music',
+            '🔗 NHIỆM VỤ VƯỢT LINK':'🔗 LINK TASKS',
+            'Vượt link → nhận mã xác nhận → quay lại nhập mã để nhận thưởng.':'Complete the link → get a verification code → return and enter it to claim the reward.',
+            '↻ LÀM MỚI':'↻ REFRESH',
+            '⚠️ Nếu Quá 10 Phút Không Hoàn Thành Nhiệm Vụ Thì Nhiệm Vụ Sẽ Tự Hủy Và Không Được Tính.':'⚠️ If the task is not completed within 10 minutes, it will automatically expire and will not count.',
+            'BẮT ĐẦU':'START',
+            '⏳ ĐANG TẠO NHIỆM VỤ...':'⏳ CREATING TASK...',
+            '🔗 LINK NHIỆM VỤ':'🔗 TASK LINK',
+            '📋 SAO CHÉP':'📋 COPY',
+            '🌐 MỞ LINK':'🌐 OPEN LINK',
+            '🔐 NHẬP MÃ XÁC NHẬN':'🔐 ENTER VERIFICATION CODE',
+            'Sau khi vượt link thành công, hãy sao chép mã 6 số ở trang xác nhận rồi quay lại nhập tại đây.':'After completing the link, copy the 6-digit code from the verification page and enter it here.',
+            '⏳ Hệ thống chưa ghi nhận bạn tới trang xác nhận. Nếu bạn vừa hoàn thành link, hãy quay lại ứng dụng hoặc bấm LÀM MỚI.':'⏳ The verification page has not been recorded yet. If you just completed the link, return to the app or tap REFRESH.',
+            'XÁC NHẬN MÃ':'VERIFY CODE',
+            '🔄 ĐỔI NHIỆM VỤ':'🔄 CHANGE TASK',
+            'Đang tải nhiệm vụ vượt link...':'Loading link tasks...',
+            '🎁 Phần thưởng':'🎁 Reward',
+            '10–25 Coin + 10–25 Đơn Hàng':'10–25 Coin + 10–25 Orders',
+            'Coin + Đơn Hàng ngẫu nhiên':'Random Coin + Orders',
+            '🔒 Nhiệm vụ đang tạm khóa.':'🔒 Task temporarily locked.',
+            '⚠️ RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.':'⚠️ RichAds is not ready right now. Please try again later.',
+            '📱 Cách tạo Gmail trên điện thoại':'📱 How to create Gmail on a phone',
+            '💻 Cách tạo Gmail trên PC':'💻 How to create Gmail on PC',
+            '📱 Cách xóa tài khoản Gmail trên điện thoại':'📱 How to remove a Gmail account on a phone',
+            '💻 Cách đăng xuất tài khoản trên PC':'💻 How to sign out on PC',
+            "🇻🇳 MỪNG QUỐC KHÁNH 02/09 🇻🇳": "🇻🇳 VIETNAM NATIONAL DAY 02/09 🇻🇳",
+            "ĐÓNG MINI APP": "CLOSE MINI APP",
+            "📦 KHO HÀNG KIẾM TIỀN": "📦 LOGISTICS WAREHOUSE",
+            "Kho Hàng được sử dụng trực tiếp trong Telegram Mini App. Mở Telegram để đăng nhập đúng tài khoản và sử dụng đầy đủ tính năng.": "Kho Hàng is designed for the Telegram Mini App. Open Telegram to sign in with the correct account and use all features.",
+            "👥 Tổng người dùng": "👥 Total users",
+            "📦 Tổng Đơn Hàng hiện có": "📦 Total current Orders",
+            "💰 Tổng Coin hiện có": "💰 Total current Coin",
+            "⏳ Đang cập nhật thống kê...": "⏳ Updating statistics...",
+            "🚀 MỞ MINI APP TRÊN TELEGRAM": "🚀 OPEN MINI APP IN TELEGRAM",
+            "🤖 MỞ BOT TELEGRAM": "🤖 OPEN TELEGRAM BOT",
+            "🇻🇳 MỪNG QUỐC KHÁNH 02/09": "🇻🇳 VIETNAM NATIONAL DAY 02/09",
+            "Quảng cáo": "Advertisement",
+            "⏳ Bạn đang có một yêu cầu rút tiền chờ Admin duyệt.": "⏳ You have a withdrawal request waiting for Admin approval.",
+            "📩📩 YÊU CẦU TẠO MAIL 📩📩": "📩📩 EMAIL CREATION REQUIREMENTS 📩📩",
+            "📦 Tương đương: 40.000 ĐƠN HÀNG / 1 MAIL": "📦 Equivalent: 40,000 ORDERS / 1 EMAIL",
+            "📝 THÔNG TIN MAIL YÊU CẦU": "📝 REQUIRED EMAIL INFORMATION",
+            "👤 Tên Mail: Dùng TÊN TIẾNG VIỆT": "👤 Email name: Use a VIETNAMESE NAME",
+            "📌 Ví dụ:": "📌 Example:",
+            "🔐 Mật khẩu: Huy12345": "🔐 Password: Huy12345",
+            "🎂 Ngày, tháng sinh: Tùy chọn": "🎂 Day and month of birth: Optional",
+            "📅 Năm sinh: BẮT BUỘC đặt NĂM 2000": "📅 Birth year: MUST be set to 2000",
+            "🆕 Mail phải là MAIL MỚI TẠO.": "🆕 The email must be NEWLY CREATED.",
+            "⏳ QUY ĐỊNH SAU KHI TẠO": "⏳ RULES AFTER CREATION",
+            "📱 Tạo xong phải ĐỂ MAIL TRONG MÁY 3 NGÀY.": "📱 After creation, KEEP THE EMAIL ON THE DEVICE FOR 3 DAYS.",
+            "🚪 Khi chuẩn bị giao cho Admin:": "🚪 Before submitting to Admin:",
+            "➡️ ĐĂNG XUẤT MAIL RA KHỎI THIẾT BỊ": "➡️ SIGN THE EMAIL OUT OF THE DEVICE",
+            "➡️ XÓA TÀI KHOẢN MAIL KHỎI THIẾT BỊ TRƯỚC KHI GỬI": "➡️ REMOVE THE EMAIL ACCOUNT FROM THE DEVICE BEFORE SUBMITTING",
+            "🚫🚫 TUYỆT ĐỐI KHÔNG BACK MAIL SAU KHI ĐÃ GIAO!": "🚫🚫 NEVER RECOVER/TAKE BACK AN EMAIL AFTER SUBMISSION!",
+            "🚨 NHỮNG ĐIỀU TUYỆT ĐỐI CẤM": "🚨 STRICTLY PROHIBITED",
+            "❌ TUYỆT ĐỐI KHÔNG DÍNH SĐT": "❌ NO PHONE NUMBER LINKED",
+            "❌ TUYỆT ĐỐI KHÔNG CÓ MAIL KHÔI PHỤC": "❌ NO RECOVERY EMAIL",
+            "❌ TUYỆT ĐỐI KHÔNG TẠO MAIL TỪ BOX ẢO": "❌ DO NOT CREATE EMAILS USING VIRTUAL BOXES",
+            "❌ TUYỆT ĐỐI KHÔNG DÙNG TOOL TẠO MAIL": "❌ DO NOT USE EMAIL-CREATION TOOLS",
+            "✋ Mail phải được TẠO BẰNG TAY 100%.": "✋ Emails must be CREATED MANUALLY 100%.",
+            "⚠️ Các trường hợp sử dụng BOX ẢO / TOOL đều NGHIÊM CẤM.": "⚠️ Using VIRTUAL BOXES / TOOLS is STRICTLY PROHIBITED.",
+            "✅ THỜI GIAN DUYỆT": "✅ REVIEW TIME",
+            "⚡ Thông thường: DUYỆT TRONG NGÀY": "⚡ Usually: REVIEWED THE SAME DAY",
+            "⏳ Trường hợp đặc biệt:": "⏳ Special cases:",
+            "➡️ Có thể mất khoảng 3 – 4 NGÀY": "➡️ May take about 3–4 DAYS",
+            "🌙 Mail gửi SAU 21:00 TỐI": "🌙 Emails submitted AFTER 21:00",
+            "➡️ Sẽ được tính sang NGÀY HÔM SAU.": "➡️ Will be counted on the NEXT DAY.",
+            "🛡️ BẢO HÀNH MAIL": "🛡️ EMAIL WARRANTY",
+            "📌 BẢO HÀNH MAIL DIE TRONG 7 NGÀY": "📌 WARRANTY FOR EMAILS THAT FAIL WITHIN 7 DAYS",
+            "⚠️ Nếu mail DIE trong thời gian bảo hành:": "⚠️ If an email fails during the warranty period:",
+            "➡️ Admin nhắn yêu cầu xử lý nhưng KHÔNG TRẢ LỜI / KHÔNG PHỐI HỢP": "➡️ If Admin asks for support and you DO NOT RESPOND / COOPERATE",
+            "🚫 = BAND VĨNH VIỄN": "🚫 = PERMANENT BAN",
+            "⛔ QUY ĐỊNH BAND JOB MAIL": "⛔ JOB MAIL BAN RULES",
+            "🚨 Mail có SĐT / MAIL KHÔI PHỤC = KHÔNG ĐẠT": "🚨 Email has PHONE NUMBER / RECOVERY EMAIL = REJECTED",
+            "🚨 Tạo bằng BOX ẢO / TOOL = NGHIÊM CẤM": "🚨 Created with VIRTUAL BOX / TOOL = STRICTLY PROHIBITED",
+            "🚨 Không xử lý mail DIE trong thời gian bảo hành": "🚨 Failure to handle a dead email during warranty",
+            "➡️ BAND VĨNH VIỄN": "➡️ PERMANENT BAN",
+            "🚨 SAI YÊU CẦU HOẶC SAI THÔNG TIN TỪ 5 LẦN TRỞ LÊN": "🚨 5 OR MORE SUBMISSIONS WITH WRONG REQUIREMENTS OR INFORMATION",
+            "📢📢 MỌI NGƯỜI NHỚ ĐỌC THẬT KỸ TOÀN BỘ YÊU CẦU TRƯỚC KHI LÀM!": "📢📢 PLEASE READ ALL REQUIREMENTS CAREFULLY BEFORE STARTING!",
+            "✅ Làm đúng yêu cầu": "✅ Follow the requirements",
+            "✅ Kiểm tra kỹ thông tin trước khi gửi": "✅ Check all information carefully before submitting",
+            "✅ Tuân thủ đầy đủ quy định bảo hành": "✅ Follow all warranty rules",
+            "❤️ CẢM ƠN MỌI NGƯỜI ĐÃ HỢP TÁC! ❤️": "❤️ THANK YOU FOR YOUR COOPERATION! ❤️",
+            "⏳ Đang kiểm tra trạng thái JOB MAIL...": "⏳ Checking JOB MAIL status...",
+            "🟢 JOB MAIL ĐANG MỞ": "🟢 JOB MAIL IS OPEN",
+            "⏰ Nhận mail đến 21:00 hôm nay.": "⏰ Accepting emails until 21:00 today.",
+            "🔴 JOB MAIL ĐÃ ĐÓNG": "🔴 JOB MAIL IS CLOSED",
+            "⏰ Thời gian nhận mail:": "⏰ Submission hours:",
+            "🔐 Admin đang tạm khóa nhận JOB MAIL mới.": "🔐 Admin has temporarily disabled new JOB MAIL submissions.",
+            "🌅 Hệ thống sẽ tự mở lại lúc 06:00 sáng.": "🌅 The system will automatically reopen at 06:00.",
+            "Hệ thống chỉ nhận lại khi Admin bỏ khóa và đang trong khung 06:00–21:00.": "Submissions resume only after Admin unlocks them and during 06:00–21:00.",
+            "JOB MAIL ĐÃ BỊ KHÓA": "JOB MAIL IS LOCKED",
+            "Tài khoản của bạn hiện không được phép tham gia JOB MAIL.": "Your account is currently not allowed to participate in JOB MAIL.",
+            "Vui lòng liên hệ Admin nếu cần hỗ trợ.": "Please contact Admin if you need assistance.",
+            "📧✨ 5 CÁCH TẠO GMAIL ÍT BỊ HẠN CHẾ SĐT ✨📧": "📧✨ 5 WAYS TO CREATE GMAIL WITH FEWER PHONE VERIFICATION PROMPTS ✨📧",
+            "📍 Bạn có thể thử tạo Gmail qua các cách sau:": "📍 You can try creating Gmail using these methods:",
+            "🎮 1. Tạo trực tiếp trong một số app/game": "🎮 1. Create directly in certain apps/games",
+            "▶️ 2. Tạo thông qua YouTube": "▶️ 2. Create through YouTube",
+            "🛒 3. Tạo trên CH Play": "🛒 3. Create through Google Play",
+            "📩 4. Tạo trực tiếp trong ứng dụng Gmail": "📩 4. Create directly in the Gmail app",
+            "🌐 5. Tạo trên trình duyệt Web/ẩn danh": "🌐 5. Create in a web browser/incognito mode",
+            "⚠️ LƯU Ý QUAN TRỌNG": "⚠️ IMPORTANT NOTE",
+            "📱 Theo kinh nghiệm sử dụng, 1 thiết bị chỉ nên tạo khoảng 2–3 Gmail/tuần.": "📱 Based on usage experience, one device should create only about 2–3 Gmail accounts per week.",
+            "⏳ Sau khoảng 1 tuần có thể thử tạo tiếp.": "⏳ After about one week, you can try creating more.",
+            "🚫 Không nên tạo quá nhiều tài khoản liên tục trong thời gian ngắn vì Google có thể yêu cầu xác minh số điện thoại hoặc các bước xác minh bổ sung.": "🚫 Avoid creating too many accounts in a short time because Google may require phone or additional verification.",
+            "💡 Tần suất xác minh thực tế có thể thay đổi tùy thiết bị, mạng và hệ thống kiểm tra của Google.": "💡 Verification frequency can vary by device, network, and Google’s checks.",
+            "📩 GỬI GMAIL": "📩 SUBMIT GMAIL",
+            "Chỉ nhập địa chỉ Gmail. Hệ thống không yêu cầu và không lưu mật khẩu.": "Enter Gmail addresses only. The system does not request or store passwords.",
+            "📌 Tối thiểu mỗi lần:": "📌 Minimum per submission:",
+            "📨 GỬI MAIL DUYỆT": "📨 SUBMIT FOR REVIEW",
+            "⏳ ĐANG GỬI...": "⏳ SUBMITTING...",
+            "📩 ĐÃ NHẬN MAIL": "📩 EMAILS RECEIVED",
+            "Tổng nhập:": "Entered:",
+            "✅ Hợp lệ:": "✅ Valid:",
+            "♻️ Trùng trong lần gửi:": "♻️ Duplicates in this submission:",
+            "♻️ Trùng hệ thống:": "♻️ Already in system:",
+            "❌ Sai định dạng:": "❌ Invalid format:",
+            "⏳ Đang chờ duyệt thêm:": "⏳ Still pending review:",
+            "📊 JOB MAIL CỦA BẠN": "📊 YOUR JOB MAIL",
+            "📩 Tổng gửi": "📩 Total submitted",
+            "⏳ Chờ duyệt": "⏳ Pending",
+            "✅ Đã duyệt": "✅ Approved",
+            "❌ Từ chối": "❌ Rejected",
+            "📦 Tổng thưởng:": "📦 Total rewards:",
+            "Đơn Hàng": "Orders",
+            "Chưa có lịch sử JOB MAIL.": "No JOB MAIL history yet.",
+            "◀️ TRƯỚC": "◀️ PREVIOUS",
+            "🎬 HƯỚNG DẪN": "🎬 TUTORIALS",
+            "▶️ MỞ VIDEO": "▶️ OPEN VIDEO",
         };
         const QUIZ_TEXT_MAP_EN = {
             'Hành tinh nào gần Mặt Trời nhất?': 'Which planet is closest to the Sun?',
@@ -2556,12 +2896,21 @@
             'Oxy': 'Oxygen', 'Ozon': 'Ozone', 'Oganesson': 'Oganesson', 'Osmium': 'Osmium'
         };
         function translateStaticNodeText(text, language) {
-            const clean = String(text || '').trim();
+            const raw = String(text || '');
+            const clean = raw.trim();
             if (!clean) return text;
-            if (language === 'en') return UI_STATIC_TEXT[clean] || text;
+            if (language === 'en') {
+                if (UI_STATIC_TEXT[clean]) return raw.replace(clean, UI_STATIC_TEXT[clean]);
+                const dynamic = clean
+                    .replace(/^Còn (\d+) lượt$/,'Remaining $1 attempts')
+                    .replace(/^Còn (\d+)$/,'Remaining $1')
+                    .replace(/^Hôm nay:\s*/i,'Today: ')
+                    .replace(/^Đã xem:\s*/i,'Watched: ');
+                return dynamic === clean ? text : raw.replace(clean, dynamic);
+            }
             const pairs = Object.entries(UI_STATIC_TEXT);
             const hit = pairs.find(([,en]) => en === clean);
-            return hit ? hit[0] : text;
+            return hit ? raw.replace(clean, hit[0]) : text;
         }
         function translateRuntimeText(text, language='vi') {
             if (!text || language !== 'en') return text;
@@ -2582,6 +2931,16 @@
             };
             if (exact[text]) return exact[text];
             return String(text)
+                .replace("🔒 Vui lòng xác minh onboarding trong Bot trước.","🔒 Please complete onboarding verification in the Bot first.")
+                .replace(". Quảng cáo đã được xác minh, không cần xem lại QC.",". The ad was verified; you do not need to watch it again.")
+                .replace("⏳ Hệ thống đang tạo nhiệm vụ. Vui lòng chờ một chút...","⏳ The system is creating the task. Please wait a moment...")
+                .replace("⏳ Hệ thống đang đổi nhiệm vụ. Vui lòng chờ một chút...","⏳ The system is changing the task. Please wait a moment...")
+                .replace("⏳ Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.","⏳ Please wait 7 seconds before trying the next code.")
+                .replace("✅ Hôm nay bạn đã điểm danh rồi.","✅ You already checked in today.")
+                .replace("⚠️ Không mở được link điểm danh. Vui lòng thử lại.","⚠️ Could not open the check-in link. Please try again.")
+                .replace("🔗 Sau khi xem link, quay lại và bấm XEM QC ĐỂ ĐIỂM DANH.","🔗 After opening the link, return here and tap WATCH AD TO CHECK IN.")
+                .replace("⚠️ Vui lòng bắt đầu điểm danh trước.","⚠️ Please start check-in first.")
+                .replace("✅ ĐÃ ĐIỂM DANH THÀNH CÔNG!","✅ CHECK-IN COMPLETED!")
                 .replace('❌ CAPTCHA không đúng. Vui lòng nhập lại!','❌ Incorrect CAPTCHA. Please try again!')
                 .replace('⚠️ Máy chủ tạm thời chậm, đã khôi phục dữ liệu cục bộ gần nhất.','⚠️ The server is temporarily slow; the latest local backup was restored.')
                 .replace('⚠️ Lỗi tải dữ liệu. Vui lòng tải lại trang!','⚠️ Failed to load data. Please reload the page.')
@@ -2639,7 +2998,77 @@
                  .replace('Đang xử lý giao hàng...','Delivery is already being processed.')
                  .replace('Chưa cấp được lượt giao hàng.','Delivery is still being processed. Please return to the app to retry.')
                  .replace('SmartLink đã hoàn tất nhưng chưa đồng bộ xong. Hãy quay lại ứng dụng để thử lại.','The SmartLink was completed but is still syncing. Return to the app to retry.')
-                 .replace('Nhận ','Received ');
+                 .replace('Nhận ','Received ')
+                 .replace('Nhiệm vụ đang tạm khóa.','Task temporarily locked.')
+                 .replace('RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.','RichAds is not ready right now. Please try again later.')
+                 .replace('Có thể xem tiếp sau ','Next ad in ')
+                 .replace('Đơn Hàng','Orders')
+                 .replace('Đang tải nhiệm vụ vượt link...','Loading link tasks...')
+                 .replace('Vui lòng chờ ','Please wait ')
+                 .replace(' giây trước khi thử mã tiếp theo.',' seconds before trying another code.')
+                .replace("JOB MAIL chưa được cấu hình đầy đủ trên máy chủ.","JOB MAIL is not fully configured on the server.")
+                .replace("Không tải được JOB MAIL lúc này.","JOB MAIL cannot be loaded right now.")
+                .replace("Chưa xác định được trạng thái JOB MAIL. Vui lòng thử lại.","Could not determine JOB MAIL status. Please try again.")
+                .replace("Mỗi lần gửi cần ít nhất ","Each submission requires at least ")
+                .replace(" Gmail."," Gmail accounts.")
+                .replace("Không có Gmail đúng định dạng để gửi.","No valid Gmail addresses to submit.")
+                .replace("Không thể gửi JOB MAIL lúc này.","JOB MAIL cannot be submitted right now.")
+                .replace("Đã nhận ","Received ")
+                .replace(" Gmail hợp lệ, đang chờ duyệt."," valid Gmail accounts; waiting for review.")
+                .replace("Lỗi kết nối server khi gửi JOB MAIL.","Server connection error while submitting JOB MAIL.")
+                .replace("Không đọc được dữ liệu mới nhất từ máy chủ. Vui lòng thử lại!","Could not read the latest data from the server. Please try again!")
+                .replace("Quảng cáo đã được xác minh; không cần xem lại QC.","The ad was verified; you do not need to watch it again.")
+                .replace("Lỗi kết nối máy chủ.","Server connection error.")
+                .replace("Đến chu kỳ CAPTCHA giao hàng. Vui lòng bấm Giao Hàng để xác minh lại.","Delivery CAPTCHA is required. Tap Deliver to verify again.")
+                .replace("CAPTCHA của lượt giao cũ không còn hợp lệ. Vui lòng bấm Giao Hàng để bắt đầu flow mới.","The previous delivery CAPTCHA is no longer valid. Tap Deliver to start a new flow.")
+                .replace("Hãy bấm Giao Hàng để mở một quảng cáo mới.","Tap Deliver to open a new ad.")
+                .replace("GIỜ VÀNG X2!","GOLDEN HOUR X2!")
+                .replace("Quảng cáo đã được xác minh; vui lòng bấm Nâng Cấp Xe để đồng bộ lại nếu cần.","The ad was verified; tap Upgrade Truck to sync again if needed.")
+                .replace("Bạn đã xem đủ QC hôm nay (tối đa ","You have reached today’s ad limit (maximum ")
+                .replace("Cần ít nhất 500 Đơn Hàng để đổi lượt mở rương.","You need at least 500 Orders to exchange for a chest spin.")
+                .replace("Đổi thành công! +1 Lượt Mở Rương","Exchange successful! +1 Chest Spin")
+                .replace("Đã khôi phục nhiệm vụ đang làm. Bạn vẫn phải hoàn thành trước thời hạn.","Your active task was restored. You still need to finish it before the deadline.")
+                .replace("Đã tạo nhiệm vụ. ⏳ Bạn có 10 phút để hoàn thành và nhập mã xác nhận.","Task created. ⏳ You have 10 minutes to finish it and enter the verification code.")
+                .replace("Nhiệm vụ đã vượt link. Hãy nhập mã xác nhận trước khi hết 10 phút.","Link task completed. Enter the verification code before the 10-minute limit expires.")
+                .replace("Hệ thống đang tạo nhiệm vụ. Vui lòng chờ một chút...","The system is creating the task. Please wait a moment...")
+                .replace("Nhiệm vụ đã sẵn sàng. ⏳ Hãy hoàn thành trước khi hết 10 phút.","Task ready. ⏳ Complete it before the 10-minute limit expires.")
+                .replace("Nhiệm vụ đã vượt link. Hãy nhập mã xác nhận.","Link task completed. Enter the verification code.")
+                .replace("Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.","This task is temporarily locked by Admin. Please try again later.")
+                .replace("Nhà cung cấp link đang tạm thời bận. Vui lòng thử lại sau.","The link provider is temporarily busy. Please try again later.")
+                .replace("Không thể tạo nhiệm vụ vượt link. Vui lòng thử lại sau.","Could not create the link task. Please try again later.")
+                .replace("Đã đổi nhiệm vụ mới. ⏳ Bạn có 10 phút để hoàn thành.","Task changed. ⏳ You have 10 minutes to complete it.")
+                .replace("Hệ thống đang đổi nhiệm vụ. Vui lòng chờ một chút...","The system is changing the task. Please wait a moment...")
+                .replace("Nhiệm vụ mới đã sẵn sàng. ⏳ Bạn có 10 phút để hoàn thành.","The new task is ready. ⏳ You have 10 minutes to complete it.")
+                .replace("Nhiệm vụ này đang tạm khóa bởi Admin. Attempt hiện tại không bị xóa.","This task is temporarily locked by Admin. Your current attempt is preserved.")
+                .replace("Không thể đổi nhiệm vụ lúc này. Vui lòng thử lại sau.","The task cannot be changed right now. Please try again later.")
+                .replace("Không thể kết nối máy chủ để đổi nhiệm vụ. Vui lòng thử lại.","Could not connect to the server to change the task. Please try again.")
+                .replace("Đã sao chép link nhiệm vụ!","Task link copied!")
+                .replace("Không thể tự sao chép. Hãy nhấn giữ vào link để copy.","Automatic copy failed. Press and hold the link to copy it.")
+                .replace("Vui lòng chờ đủ 7 giây trước khi thử mã tiếp theo.","Please wait 7 seconds before trying the next code.")
+                .replace("Mã xác nhận phải gồm đúng 6 chữ số.","The verification code must contain exactly 6 digits.")
+                .replace("Không thể xác nhận mã lúc này.","The code cannot be verified right now.")
+                .replace("XÁC NHẬN THÀNH CÔNG","VERIFICATION SUCCESSFUL")
+                .replace("Không thể kết nối máy chủ để xác nhận mã. Vui lòng thử lại.","Could not connect to the server to verify the code. Please try again.")
+                .replace("Phần thưởng đang được cập nhật. Vui lòng thử lại sau ít giây.","The reward is being updated. Please try again in a few seconds.")
+                .replace("Bạn nhận được:","You received:")
+                .replace("Bạn đã đạt giới hạn 15 lượt RichAds hôm nay.","You have reached today’s 15 RichAds limit.")
+                .replace("RichAds chưa thể hiển thị quảng cáo. Vui lòng thử lại sau.","RichAds could not display an ad. Please try again later.")
+                .replace("RichAds hiện chưa khả dụng.","RichAds is currently unavailable.")
+                .replace("Lượt QC trước đã hết hạn. Vui lòng thử lại.","The previous ad session expired. Please try again.")
+                .replace("Phần thưởng trước đang được cập nhật. Vui lòng thử lại sau ít giây.","The previous reward is still being updated. Please try again in a few seconds.")
+                .replace("Quảng cáo AdsGram đang tạm khóa.","AdsGram ads are temporarily locked.")
+                .replace("Bạn đã đạt giới hạn 15 lượt QC nhận thưởng hôm nay.","You have reached today’s 15 rewarded-ad limit.")
+                .replace("QC AdsGram hiện chưa khả dụng. Vui lòng thử lại sau.","AdsGram is currently unavailable. Please try again later.")
+                .replace("Phần thưởng đang được cập nhật. Vui lòng bấm lại sau ít giây.","The reward is being updated. Please tap again in a few seconds.")
+                .replace("Bạn đã đạt giới hạn 15 lượt QC hôm nay.","You have reached today’s 15-ad limit.")
+                .replace("Đang khôi phục SmartLink trước đó...","Restoring the previous SmartLink...")
+                .replace("Giới hạn giao hàng là 5/5 lượt mỗi ngày; không còn lượt giao thêm bằng quảng cáo.","The delivery limit is 5/5 per day; no extra ad-based deliveries are available.")
+                .replace("Bạn đang có một yêu cầu rút tiền chờ Admin duyệt.","You have a withdrawal request waiting for Admin approval.")
+                .replace("Đến chu kỳ CAPTCHA giao hàng. Vui lòng xác minh CAPTCHA.","Delivery CAPTCHA is required. Please complete the CAPTCHA.")
+                .replace("Quảng cáo Monetag đang tạm khóa.","Monetag ads are temporarily locked.")
+                .replace("Vui lòng tắt trình chặn quảng cáo để nhận thưởng.","Please disable your ad blocker to receive rewards.")
+                .replace("Quảng cáo đã được xác minh nhưng thao tác chưa hoàn tất. Đang thử đồng bộ lại.","The ad was verified, but the action is not complete yet. Syncing again...")
+                .replace("Quảng cáo đã được xác minh nhưng thao tác phía máy chủ chưa hoàn tất.","The ad was verified, but the server action is not complete yet.");
         }
 
         // 5 CÂU HỎI QUIZ MỖI NGÀY (answer = index đáp án đúng trong mảng options)
@@ -2721,6 +3150,9 @@
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 withdrawWalletType: 'momo', withdrawSubmitting: false, upgradeSubmitting: false, giftcodeSubmitting: false,
                 graphicsMode: localStorage.getItem('graphicsMode') === 'fixlag' ? 'fixlag' : 'fullhd',
+                themeMode: localStorage.getItem('shipper_theme') === 'light' ? 'light' : 'dark',
+                showFps: localStorage.getItem('shipper_show_fps') === '1', fpsValue:0, _fpsRaf:0, _fpsFrames:0, _fpsLastSample:0, _fpsVisibilityBound:false,
+                taskSections:{daily:true,ads:false,smartlink:false,link:false,streak:false,special:false},
                 securitySessionId: '', securityRiskScore: 0, securityRiskLevel: 'LOW',
                 fraudClickIntervals: [], lastSecurityClickAt: 0, securityHeartbeatTimer: null,
                 antiFraudInstallId: '',
@@ -2909,13 +3341,13 @@
                 },
                 
                 jobMailStatusText(status) {
-                    if (status === 'approved') return '✅ Duyệt';
-                    if (status === 'rejected') return '❌ Từ chối';
-                    return '⏳ Chờ';
+                    if (status === 'approved') return this.language === 'en' ? '✅ Approved' : '✅ Duyệt';
+                    if (status === 'rejected') return this.language === 'en' ? '❌ Rejected' : '❌ Từ chối';
+                    return this.language === 'en' ? '⏳ Pending' : '⏳ Chờ';
                 },
                 jobMailFormatDate(value) {
                     if (!value) return '';
-                    try { return new Intl.DateTimeFormat('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)); }
+                    try { return new Intl.DateTimeFormat(this.language === 'en' ? 'en-GB' : 'vi-VN',{timeZone:'Asia/Ho_Chi_Minh',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)); }
                     catch (_) { return String(value); }
                 },
                 applyJobMailAvailability(result = {}) {
@@ -3284,7 +3716,7 @@
                             }
 
 
-                            if (!this.user.joinDate) this.user.joinDate = new Date().toLocaleDateString('vi-VN');
+                            if (!this.user.joinDate) this.user.joinDate = new Date().toLocaleDateString(this.language === 'en' ? 'en-US' : 'vi-VN');
                         } else {
                             throw new Error(`Failed to fetch user data: ${res.status} ${res.statusText}`);
                         }
@@ -3512,6 +3944,8 @@
                 // component; dùng $watch để theo dõi isAppLoading XUYÊN SUỐT vòng đời app (không riêng lần đầu),
                 // hễ isAppLoading bật true là tự chạy thanh loading và ép tắt sau tối đa 10 giây.
                 init() {
+                    this.initTheme();
+                    this.initFpsMonitor();
                     const armLoadingWatchdog = () => {
                         clearInterval(this._loadingProgressTimer);
                         clearTimeout(this._loadingFailsafeTimer);
@@ -3536,7 +3970,10 @@
                 async checkAccessGate() {
                     const platform=String(window.Telegram?.WebApp?.platform||'').toLowerCase();
                     if(!['android','android_x','ios'].includes(platform)){
-                        this.accessBlocked=true;this.accessBlockIcon='📱';this.accessBlockTitle='MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';this.accessBlockMessage='Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';return false;
+                        this.accessBlocked=true;this.accessBlockIcon='📱';
+                        this.accessBlockTitle=this.language==='en'?'MOBILE TELEGRAM REQUIRED':'MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';
+                        this.accessBlockMessage=this.language==='en'?'Open the bot in Telegram on Android or iPhone to continue.':'Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';
+                        return false;
                     }
                     try{
                         const res=await fetchWithTimeout(`${API_URL}/api/access-check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})},9000);
@@ -3547,12 +3984,12 @@
                             this.accessBlocked=false;this.accessBlockTitle='';this.accessBlockMessage='';return true;
                         }
                         this.accessBlocked=true;
-                        if(data.desktopBlocked){this.accessBlockIcon='📱';this.accessBlockTitle='MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';this.accessBlockMessage='Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';}
-                        else if(data.accountBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle='TÀI KHOẢN BỊ KHÓA';this.accessBlockMessage='Tài khoản hiện không thể sử dụng Mini App.';}
-                        else if(data.authBlocked||res.status===401){this.accessBlockIcon='🔐';this.accessBlockTitle='PHIÊN ĐĂNG NHẬP KHÔNG HỢP LỆ';this.accessBlockMessage='Vui lòng đóng Mini App và mở lại từ Telegram Bot.';}
-                        else{this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ XÁC MINH PHIÊN';this.accessBlockMessage='Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.';}
+                        if(data.desktopBlocked){this.accessBlockIcon='📱';this.accessBlockTitle=this.language==='en'?'MOBILE TELEGRAM REQUIRED':'MINI APP CHỈ HỖ TRỢ ĐIỆN THOẠI';this.accessBlockMessage=this.language==='en'?'Open the bot in Telegram on Android or iPhone to continue.':'Vui lòng mở bot bằng Telegram trên Android hoặc iPhone để tiếp tục.';}
+                        else if(data.accountBlocked){this.accessBlockIcon='🚫';this.accessBlockTitle=this.language==='en'?'ACCOUNT LOCKED':'TÀI KHOẢN BỊ KHÓA';this.accessBlockMessage=this.language==='en'?'This account cannot currently use the Mini App.':'Tài khoản hiện không thể sử dụng Mini App.';}
+                        else if(data.authBlocked||res.status===401){this.accessBlockIcon='🔐';this.accessBlockTitle=this.language==='en'?'INVALID LOGIN SESSION':'PHIÊN ĐĂNG NHẬP KHÔNG HỢP LỆ';this.accessBlockMessage=this.language==='en'?'Close the Mini App and reopen it from the Telegram Bot.':'Vui lòng đóng Mini App và mở lại từ Telegram Bot.';}
+                        else{this.accessBlockIcon='⚠️';this.accessBlockTitle=this.language==='en'?'SESSION VERIFICATION FAILED':'KHÔNG THỂ XÁC MINH PHIÊN';this.accessBlockMessage=this.language==='en'?'The server cannot verify this session right now. Please try again.':'Máy chủ tạm thời chưa thể xác minh phiên truy cập. Vui lòng thử lại.';}
                         return false;
-                    }catch(_){this.accessBlocked=true;this.accessBlockIcon='⚠️';this.accessBlockTitle='KHÔNG THỂ KẾT NỐI MÁY CHỦ';this.accessBlockMessage='Không thể kết nối máy chủ. Vui lòng kiểm tra mạng và thử lại.';return false;}
+                    }catch(_){this.accessBlocked=true;this.accessBlockIcon='⚠️';this.accessBlockTitle=this.language==='en'?'SERVER CONNECTION FAILED':'KHÔNG THỂ KẾT NỐI MÁY CHỦ';this.accessBlockMessage=this.language==='en'?'Could not connect to the server. Check your network and try again.':'Không thể kết nối máy chủ. Vui lòng kiểm tra mạng và thử lại.';return false;}
                 },
 
                 async checkMaintenanceLock() {
@@ -3601,7 +4038,7 @@
                         const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
                         const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
                         const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-                        this.countdownText = `${days}ng ${hours}h ${minutes}m ${seconds}s`;
+                        this.countdownText = this.language === 'en' ? `${days}d ${hours}h ${minutes}m ${seconds}s` : `${days}ng ${hours}h ${minutes}m ${seconds}s`;
                     };
                     updateCountdown();
                     if (this._countdownTimer) clearInterval(this._countdownTimer);
@@ -3614,7 +4051,10 @@
                     this.dailyTasks = this.localizeDailyTasks(this.dailyTasks);
                     document.documentElement.lang = this.language;
                     document.title = this.language === 'en' ? 'Logistics Warehouse' : 'Kho Hàng Logistics';
-                    this.$nextTick(() => this.translateStaticUi());
+                    this.$nextTick(() => {
+                        this.translateStaticUi();
+                        requestAnimationFrame(() => this.translateStaticUi());
+                    });
                     this.saveState();
                 },
                 translateStaticUi() {
@@ -4520,23 +4960,24 @@
                 },
                 linkTaskStatusText(task) {
                     if(!task)return '';
-                    // Active attempt được mô tả trước lỗi của lượt MỚI để user không hiểu nhầm link/mã hiện tại bị hủy.
-                    if(task.adminLocked && this.linkTaskIsActive(task))return '🔒 Admin đã khóa lượt mới — attempt hiện tại vẫn có thể hoàn thành';
+                    const en=this.language==='en';
+                    // Active attempt is still completable even when new attempts are locked.
+                    if(task.adminLocked && this.linkTaskIsActive(task))return en?'🔒 New attempts locked — current attempt can still be completed':'🔒 Admin đã khóa lượt mới — lượt hiện tại vẫn có thể hoàn thành';
                     if(!task.available){
-                        if(task.unavailableCode==='task_admin_locked')return '🔒 Admin đang tạm khóa nhận nhiệm vụ mới';
-                        if(task.unavailableCode==='ip_unavailable')return '🌐 Chưa nhận được IP public từ reverse proxy';
-                        if(task.unavailableCode==='missing_provider_token')return '🔑 Nhà cung cấp chưa được cấu hình';
-                        if(task.unavailableCode==='link_task_db_not_ready'||task.unavailableCode==='link_task_db_access_denied')return '🗄 Database nhiệm vụ chưa sẵn sàng';
-                        return 'Tạm chưa khả dụng';
+                        if(task.unavailableCode==='task_admin_locked')return en?'🔒 New tasks are temporarily locked':'🔒 Admin đang tạm khóa nhận nhiệm vụ mới';
+                        if(task.unavailableCode==='ip_unavailable')return en?'🌐 Public IP is not available from the reverse proxy':'🌐 Chưa nhận được IP public từ reverse proxy';
+                        if(task.unavailableCode==='missing_provider_token')return en?'🔑 Provider is not configured':'🔑 Nhà cung cấp chưa được cấu hình';
+                        if(task.unavailableCode==='link_task_db_not_ready'||task.unavailableCode==='link_task_db_access_denied')return en?'🗄 Link Task database is not ready':'🗄 Database nhiệm vụ chưa sẵn sàng';
+                        return en?'Temporarily unavailable':'Tạm chưa khả dụng';
                     }
-                    if(task.status==='rewarded')return '✅ Đã nhận thưởng — có thể làm lại khi quota cho phép';
-                    if(task.status==='landed')return '🔐 Đã vượt link — nhập mã xác nhận bên dưới trước khi hết 10 phút';
-                    if(task.status==='shortened')return '⏳ Nhiệm vụ đang chờ hoàn thành';
-                    if(task.status==='created')return '⏳ Hệ thống đang tạo link nhiệm vụ';
-                    if(task.status==='expired')return '⌛ Nhiệm vụ đã tự hủy do quá 10 phút — có thể nhận nhiệm vụ mới';
-                    if(task.status==='cancelled')return '♻️ Nhiệm vụ trước đã hủy — có thể nhận nhiệm vụ mới';
-                    if(Number(task.remaining||0)<=0)return '✅ Đã dùng hết lượt hiện tại';
-                    return 'Sẵn sàng';
+                    if(task.status==='rewarded')return en?'✅ Reward claimed — retry when quota allows':'✅ Đã nhận thưởng — có thể làm lại khi quota cho phép';
+                    if(task.status==='landed')return en?'🔐 Link completed — enter the verification code before 10 minutes expire':'🔐 Đã vượt link — nhập mã xác nhận bên dưới trước khi hết 10 phút';
+                    if(task.status==='shortened')return en?'⏳ Waiting for completion':'⏳ Nhiệm vụ đang chờ hoàn thành';
+                    if(task.status==='created')return en?'⏳ Creating task link':'⏳ Hệ thống đang tạo link nhiệm vụ';
+                    if(task.status==='expired')return en?'⌛ Task expired after 10 minutes — you may start a new one':'⌛ Nhiệm vụ đã tự hủy do quá 10 phút — có thể nhận nhiệm vụ mới';
+                    if(task.status==='cancelled')return en?'♻️ Previous task cancelled — you may start a new one':'♻️ Nhiệm vụ trước đã hủy — có thể nhận nhiệm vụ mới';
+                    if(Number(task.remaining||0)<=0)return en?'✅ No attempts remaining':'✅ Đã dùng hết lượt hiện tại';
+                    return en?'Ready':'Sẵn sàng';
                 },
                 async syncLinkTasks() {
                     if(!this.user?.id||!this.joinedGroups||this.accessBlocked)return false;
@@ -4582,12 +5023,12 @@
                     return last||this.linkTasks.find(x=>String(x?.id||'')===id)||null;
                 },
                 linkTaskPollingFailureMessage(task) {
-                    if(task?.unavailableCode==='task_admin_locked')return '🔒 Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.';
-                    if(task?.unavailableCode==='missing_provider_token')return '⚠️ Nhiệm vụ này chưa được cấu hình API trên máy chủ.';
-                    if(task?.unavailableReason)return '⚠️ '+task.unavailableReason;
-                    if(task?.status==='cancelled')return '⚠️ Không thể tạo nhiệm vụ. Phiên tạo link đã được hủy, vui lòng thử lại.';
-                    if(task?.status==='expired')return '⌛ Nhiệm vụ đã hết hạn. Vui lòng nhận nhiệm vụ mới.';
-                    return '⚠️ Nhiệm vụ mất quá nhiều thời gian để tạo. Vui lòng thử lại hoặc dùng ĐỔI NHIỆM VỤ.';
+                    if(task?.unavailableCode==='task_admin_locked')return this.language==='en' ? '🔒 This task is temporarily locked by Admin. Please try again later.' : '🔒 Nhiệm vụ này đang tạm khóa bởi Admin. Vui lòng thử lại sau.';
+                    if(task?.unavailableCode==='missing_provider_token')return this.language==='en' ? '⚠️ This task provider is not configured on the server yet.' : '⚠️ Nhiệm vụ này chưa được cấu hình API trên máy chủ.';
+                    if(task?.unavailableReason)return '⚠️ '+translateRuntimeText(task.unavailableReason,this.language);
+                    if(task?.status==='cancelled')return this.language==='en' ? '⚠️ Could not create the task. The link session was cancelled; please try again.' : '⚠️ Không thể tạo nhiệm vụ. Phiên tạo link đã được hủy, vui lòng thử lại.';
+                    if(task?.status==='expired')return this.language==='en' ? '⌛ This task has expired. Please get a new task.' : '⌛ Nhiệm vụ đã hết hạn. Vui lòng nhận nhiệm vụ mới.';
+                    return this.language==='en' ? '⚠️ This task took too long to create. Please try again or use CHANGE TASK.' : '⚠️ Nhiệm vụ mất quá nhiều thời gian để tạo. Vui lòng thử lại hoặc dùng ĐỔI NHIỆM VỤ.';
                 },
                 async startLinkTask(task) {
                     if(!task?.id||this._linkTaskStarting||!task.available||Number(task.remaining||0)<=0)return false;
@@ -4889,8 +5330,8 @@
                     if(!this.richadsStorageReady)return this.language==='en'?'⚠️ TRY AGAIN LATER':'⚠️ TẠM CHƯA SẴN SÀNG';
                     if(Number(this.richadsAdsToday||0)>=15)return this.language==='en'?'DAILY LIMIT REACHED':'ĐÃ HẾT 15 LƯỢT HÔM NAY';
                     if(this.richadsManualCooldown>0)return `⏳ ${this.formatCooldownSeconds(this.richadsManualCooldown)}`;
-                    if(this._richadsRunning)return '⏳ ĐANG XỬ LÝ RICHADS...';
-                    return '▶️ XEM QC RICHADS';
+                    if(this._richadsRunning)return this.language==='en'?'⏳ PROCESSING RICHADS...':'⏳ ĐANG XỬ LÝ RICHADS...';
+                    return this.language==='en'?'▶️ WATCH RICHADS':'▶️ XEM QC RICHADS';
                 },
                 getRichAdsController() {
                     const state=window.__richAdsSdkState||{};
@@ -5063,8 +5504,8 @@
                     if (this.adsgramManualCooldown > 0) {
                         return `⏳ ${this.formatCooldownSeconds(this.adsgramManualCooldown)}`;
                     }
-                    if (this._adsgramRunning || this._autoAdInFlight) return '⏳ ĐANG XỬ LÝ ADSGRAM...';
-                    return '▶️ XEM QC ADSGRAM';
+                    if (this._adsgramRunning || this._autoAdInFlight) return this.language === 'en' ? '⏳ PROCESSING ADSGRAM...' : '⏳ ĐANG XỬ LÝ ADSGRAM...';
+                    return this.language === 'en' ? '▶️ WATCH ADSGRAM' : '▶️ XEM QC ADSGRAM';
                 },
                 adsgramActionId() {
                     try {
@@ -7066,6 +7507,73 @@
                     this.antiFraudDeviceSignals();
                     this.sendSecurityHeartbeat();
                     this.securityHeartbeatTimer = setInterval(() => this.sendSecurityHeartbeat(), 60000);
+                },
+                toggleTaskSection(key) {
+                    if (!Object.prototype.hasOwnProperty.call(this.taskSections || {}, key)) return;
+                    const opening = !this.taskSections[key];
+                    Object.keys(this.taskSections).forEach(k => { this.taskSections[k] = false; });
+                    if (opening) this.taskSections[key] = true;
+                },
+                applyTheme() {
+                    const mode = this.themeMode === 'light' ? 'light' : 'dark';
+                    this.themeMode = mode;
+                    document.documentElement.classList.toggle('theme-light', mode === 'light');
+                    document.documentElement.classList.toggle('theme-dark', mode === 'dark');
+                    if (document.body) {
+                        document.body.classList.toggle('theme-light', mode === 'light');
+                        document.body.classList.toggle('theme-dark', mode === 'dark');
+                    }
+                },
+                setTheme(mode) {
+                    this.themeMode = mode === 'light' ? 'light' : 'dark';
+                    try { localStorage.setItem('shipper_theme', this.themeMode); } catch (_) {}
+                    this.applyTheme();
+                },
+                initTheme() {
+                    try { this.themeMode = localStorage.getItem('shipper_theme') === 'light' ? 'light' : 'dark'; } catch (_) { this.themeMode = 'dark'; }
+                    this.applyTheme();
+                },
+                stopFpsMonitor() {
+                    if (this._fpsRaf) cancelAnimationFrame(this._fpsRaf);
+                    this._fpsRaf = 0;
+                    this._fpsFrames = 0;
+                    this._fpsLastSample = 0;
+                },
+                startFpsMonitor() {
+                    this.stopFpsMonitor();
+                    if (!this.showFps || document.hidden) return;
+                    this._fpsFrames = 0;
+                    this._fpsLastSample = performance.now();
+                    const step = (now) => {
+                        if (!this.showFps || document.hidden) { this.stopFpsMonitor(); return; }
+                        this._fpsFrames += 1;
+                        const elapsed = now - this._fpsLastSample;
+                        if (elapsed >= 750) {
+                            this.fpsValue = Math.max(0, Math.min(240, Math.round((this._fpsFrames * 1000) / elapsed)));
+                            this._fpsFrames = 0;
+                            this._fpsLastSample = now;
+                        }
+                        this._fpsRaf = requestAnimationFrame(step);
+                    };
+                    this._fpsRaf = requestAnimationFrame(step);
+                },
+                setFpsEnabled(enabled) {
+                    this.showFps = !!enabled;
+                    try { localStorage.setItem('shipper_show_fps', this.showFps ? '1' : '0'); } catch (_) {}
+                    if (this.showFps) this.startFpsMonitor();
+                    else { this.stopFpsMonitor(); this.fpsValue = 0; }
+                },
+                initFpsMonitor() {
+                    try { this.showFps = localStorage.getItem('shipper_show_fps') === '1'; } catch (_) { this.showFps = false; }
+                    if (!this._fpsVisibilityBound) {
+                        this._fpsVisibilityBound = true;
+                        document.addEventListener('visibilitychange', () => {
+                            if (document.hidden) this.stopFpsMonitor();
+                            else if (this.showFps) this.startFpsMonitor();
+                        });
+                        window.addEventListener('pagehide', () => this.stopFpsMonitor());
+                    }
+                    if (this.showFps) this.startFpsMonitor();
                 },
                 setGraphicsMode(mode) {
                     this.graphicsMode = mode === 'fixlag' ? 'fixlag' : 'fullhd';
