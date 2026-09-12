@@ -13108,6 +13108,29 @@ td.mono{color:var(--text-2)}
   .hero-copy{font-size:11.5px}
   .dashboard-section-head{align-items:flex-start;flex-direction:column}
 }
+
+/* ===== LIGHT LOGISTICS ADMIN — readability/polish layer ===== */
+.dashboard-section{position:relative;isolation:isolate}
+.dashboard-section:before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:3px;border-radius:999px;background:linear-gradient(180deg,#2563eb,#06b6d4);opacity:.72}
+.dashboard-section:hover{border-color:#cbd5e1;box-shadow:0 9px 26px rgba(15,23,42,.065)}
+.dashboard-section-head{padding-left:5px}
+.grid .stat{min-height:112px;background:linear-gradient(150deg,#fff 0%,#fbfdff 100%);border-color:#e5eaf1}
+.grid .stat:hover{border-color:#bfdbfe;box-shadow:0 10px 24px rgba(37,99,235,.075)}
+.grid .stat .v{font-variant-numeric:tabular-nums}
+.admin-refresh-meta{display:inline-flex;align-items:center;gap:5px;color:#64748b;font-size:10px;font-weight:800;white-space:nowrap}
+.admin-refresh-meta:before{content:"●";color:#16a34a;font-size:8px}
+.top-actions{flex-wrap:wrap;justify-content:flex-end}
+.table-wrap{scrollbar-color:#cbd5e1 #f8fafc;scrollbar-width:thin}
+.table-wrap::-webkit-scrollbar{height:9px;width:9px}
+.table-wrap::-webkit-scrollbar-track{background:#f8fafc}
+.table-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border:2px solid #f8fafc;border-radius:999px}
+.field::placeholder{color:#64748b;opacity:.88}
+.btn:focus-visible,.field:focus-visible,.nav-btn:focus-visible{outline:3px solid rgba(37,99,235,.18);outline-offset:2px}
+@media(max-width:760px){
+  .admin-refresh-meta{display:none}
+  .dashboard-section{padding:14px}
+  .grid .stat{min-height:100px}
+}
 </style></head><body>
 <div id="toast" class="toast hidden"></div>
 <div id="loginView" class="login"><form id="loginForm" class="login-card" autocomplete="off"><div class="brand">🚚 Logistics Command Center</div><div class="brand-sub">SECURE ADMIN CONSOLE</div><input id="loginUser" class="field" placeholder="Tài khoản" autocomplete="username" required><div style="height:9px"></div><input id="loginPass" class="field" type="password" placeholder="Mật khẩu" autocomplete="current-password" required><div style="height:12px"></div><button class="btn primary" style="width:100%">Đăng nhập an toàn</button><p id="loginError" class="muted" style="font-size:11px"></p></form></div>
@@ -13128,14 +13151,14 @@ td.mono{color:var(--text-2)}
 </aside>
 
 <main class="main">
-<header class="topbar"><div class="top-left"><button id="menuBtn" class="btn ghost menu-btn">☰</button><div><div class="top-kicker">LOGISTICS ADMIN</div><div id="pageTitle" class="top-title">Tổng quan</div></div></div><div class="top-actions"><span id="topBotBadge" class="pill">● BOT</span><button id="refreshBtn" class="btn ghost">↻ Làm mới</button></div></header>
+<header class="topbar"><div class="top-left"><button id="menuBtn" class="btn ghost menu-btn">☰</button><div><div class="top-kicker">LOGISTICS ADMIN</div><div id="pageTitle" class="top-title">Tổng quan</div></div></div><div class="top-actions"><span id="adminLastUpdated" class="admin-refresh-meta">Chưa đồng bộ</span><span id="topBotBadge" class="pill">● BOT</span><button id="refreshBtn" class="btn ghost">↻ Làm mới</button></div></header>
 
 <section id="sec-overview" class="section active">
   <div class="command-hero">
     <div><div class="hero-kicker">TRUNG TÂM ĐIỀU HÀNH HỆ THỐNG</div><div class="hero-title">📦 KHO HÀNG LOGISTICS</div><div class="hero-copy">Theo dõi trạng thái hệ thống và các chỉ số vận hành từ dữ liệu thật trên server/Supabase. Chỉ số không có nguồn dữ liệu đáng tin cậy được hiển thị N/A.</div></div>
     <div class="hero-panel"><div class="hero-chip"><span>BOT</span><b id="heroBot">Đang tải...</b></div><div class="hero-chip"><span>SUPABASE</span><b id="heroDb">Đang tải...</b></div><div class="hero-chip"><span>NODE</span><b id="heroNode">Đang tải...</b></div><div class="hero-chip"><span>UPTIME</span><b id="heroUptime">Đang tải...</b></div></div>
   </div>
-  <div class="section-head"><div><h2>Trạng thái vận hành</h2><p>Dữ liệu thật từ server/Supabase, không tạo số giả.</p></div></div>
+  <div class="section-head"><div><h2>⚙️ Hệ thống</h2><p>Bot, database, process và provider status từ dữ liệu thật; không tạo số giả.</p></div></div>
   <div id="overviewStatus" class="status-strip"></div>
 
   <div class="dashboard-section">
@@ -13159,8 +13182,13 @@ td.mono{color:var(--text-2)}
   </div>
 
   <div class="dashboard-section">
-    <div class="dashboard-section-head"><div><h3>📩 JOB MAIL & Giftcode</h3><p>Thống kê xử lý Mail và Giftcode từ dữ liệu thật.</p></div></div>
+    <div class="dashboard-section-head"><div><h3>📩 JOB MAIL</h3><p>Thống kê xử lý mail từ dữ liệu thật.</p></div></div>
     <div id="overviewOperations" class="grid"></div>
+  </div>
+
+  <div class="dashboard-section">
+    <div class="dashboard-section-head"><div><h3>🎁 Giftcode</h3><p>Chỉ hiển thị metric có nguồn dữ liệu thật; phần chưa có nguồn sẽ là N/A.</p></div></div>
+    <div id="overviewGiftcodes" class="grid"></div>
   </div>
 </section>
 
@@ -13325,9 +13353,15 @@ async function loadOverview(force){try{
   statCard('Mail Rejected',j.rejected,'❌'),
   statCard('Mail gửi hôm nay',j.todaySubmitted,'📨'),
   statCard('Mail duyệt hôm nay',j.todayApproved,'🗂️'),
-  statCard('Orders đã thưởng Mail',j.rewardOrders,'📦'),
-  statCardText('Tổng Giftcode',s.giftcodeCount==null?'N/A':num(s.giftcodeCount),'🎁')
+  statCard('Orders đã thưởng Mail',j.rewardOrders,'📦')
  ].join('');
+
+ $('overviewGiftcodes').innerHTML=[
+  statCardText('Tổng Giftcode',s.giftcodeCount==null?'N/A':num(s.giftcodeCount),'🎁'),
+  statCardText('Lượt dùng Giftcode','N/A','🎟️'),
+  statCardText('Giftcode đang hoạt động','N/A','🟢')
+ ].join('');
+ if($('adminLastUpdated'))$('adminLastUpdated').textContent='Đồng bộ '+new Intl.DateTimeFormat('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date());
 }catch(e){toast(e.message,true)}}
 
 function pager(id,page,total,limit,cb){var el=$(id),pages=Math.max(1,Math.ceil(Number(total||0)/Number(limit||25)));el.innerHTML='<button class="btn ghost" id="'+id+'Prev" '+(page<=1?'disabled':'')+'>←</button><span class="muted">Trang '+page+'/'+pages+' • '+num(total)+' bản ghi</span><button class="btn ghost" id="'+id+'Next" '+(page>=pages?'disabled':'')+'>→</button>';$(id+'Prev').onclick=function(){if(page>1)cb(page-1)};$(id+'Next').onclick=function(){if(page<pages)cb(page+1)}}
