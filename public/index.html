@@ -7,29 +7,50 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
     <script>
-        // RichAds official TMA controller: initialize exactly once for the whole WebView lifecycle.
-        // pubId/appId are public integration identifiers; no API secret is shipped to the client.
-        (function initRichAdsControllerOnce() {
+        // RichAds TMA loader: one SDK script + one controller for the whole Telegram WebView lifecycle.
+        // pubId/appId are public placement identifiers; RICHADS_API_KEY stays server-side only.
+        (function setupRichAdsLoaderOnce() {
             window.__richAdsControllerInstance = window.__richAdsControllerInstance || null;
+            window.__richAdsSdkState = window.__richAdsSdkState || { loaded:false, initialized:false, initError:'', loadError:'' };
             window.__initRichAdsOnce = window.__initRichAdsOnce || function () {
-                if (window.__richAdsControllerInstance) return window.__richAdsControllerInstance;
+                if (window.__richAdsControllerInstance && window.__richAdsSdkState.initialized) return window.__richAdsControllerInstance;
                 try {
                     const Controller = window.TelegramAdsController;
-                    if (typeof Controller !== 'function') return null;
-                    const controller = new Controller();
-                    controller.initialize({ pubId: "1022542", appId: "8872" });
+                    if (typeof Controller !== 'function') {
+                        window.__richAdsSdkState.initError = 'controller_unavailable';
+                        return null;
+                    }
+                    const controller = window.__richAdsControllerInstance || new Controller();
+                    if (!window.__richAdsSdkState.initialized) {
+                        controller.initialize({ pubId: "1022542", appId: "8872", debug: false });
+                        window.__richAdsSdkState.initialized = true;
+                        window.__richAdsSdkState.initError = '';
+                    }
                     window.__richAdsControllerInstance = controller;
                     return controller;
                 } catch (error) {
-                    console.warn('RichAds unavailable:', error?.message || error);
+                    window.__richAdsSdkState.initialized = false;
+                    window.__richAdsSdkState.initError = String(error?.message || 'initialize_failed').slice(0,160);
+                    console.warn('RichAds initialize failed:', window.__richAdsSdkState.initError);
                     return null;
                 }
             };
-            window.__initRichAdsOnce();
+            window.__onRichAdsSdkLoad = window.__onRichAdsSdkLoad || function () {
+                window.__richAdsSdkState.loaded = true;
+                window.__richAdsSdkState.loadError = '';
+                window.__initRichAdsOnce();
+            };
+            window.__onRichAdsSdkError = window.__onRichAdsSdkError || function () {
+                window.__richAdsSdkState.loaded = false;
+                window.__richAdsSdkState.loadError = 'sdk_load_failed';
+                console.warn('RichAds SDK load failed');
+            };
         })();
     </script>
+    <script id="richads-sdk" src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"
+            onload="window.__onRichAdsSdkLoad && window.__onRichAdsSdkLoad()"
+            onerror="window.__onRichAdsSdkError && window.__onRichAdsSdkError()"></script>
     <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
     <script src="https://thatlobster.com/6d/40/5a/6d405ae063c5343d0ad8658f24c728ae.js"></script>
     
@@ -942,6 +963,196 @@
         .low-graphics .premium-logistics-ui .ui-app-header { box-shadow:none !important;transform:none !important; }
         /* ==================== END LOGISTICS 3D DEPTH PASS ==================== */
 
+        /* ==================== LOGISTICS MOBILE GAME LIGHT 2026 ====================
+           Visual-only pass inspired by the supplied compact game layout. All balances,
+           task state and actions remain bound to the existing Alpine/server data. */
+        body.premium-logistics-ui{
+            --log-bg:#eef8f5;--log-bg-deep:#e8f4ee;--log-surface:#fffdf7;--log-surface-2:#fff8e8;
+            --log-surface-3:#eef8ff;--log-border:rgba(94,119,128,.16);--log-border-strong:rgba(71,103,114,.24);
+            --log-text:#1f2937;--log-muted:#52606d;--log-subtle:#718096;--log-primary:#2f80ed;
+            --log-primary-strong:#2563eb;--log-accent:#f3b43f;--log-success:#2e9f68;--log-danger:#d95c5c;
+            color:#1f2937 !important;
+            background:
+              radial-gradient(circle at 14% -4%,rgba(125,211,252,.35),transparent 29%),
+              radial-gradient(circle at 92% 12%,rgba(253,224,71,.20),transparent 24%),
+              linear-gradient(180deg,#dff5f2 0%,#eef8ef 35%,#fff3d9 100%) !important;
+            background-attachment:fixed;
+        }
+        html{background:#eef8ef !important}
+        .premium-logistics-ui .ui-app-shell{max-width:460px !important;padding-left:9px !important;padding-right:9px !important;padding-bottom:calc(92px + env(safe-area-inset-bottom,0px)) !important}
+        .premium-logistics-ui .ui-main-content{padding-top:9px !important}
+        .premium-logistics-ui .ui-app-header{
+            margin-top:6px !important;min-height:70px;border-radius:18px !important;
+            background:linear-gradient(145deg,#fffaf0,#ffffff) !important;border:1px solid rgba(148,121,71,.16) !important;
+            box-shadow:0 8px 20px rgba(67,80,68,.11),0 2px 0 rgba(255,255,255,.9),inset 0 -1px 0 rgba(188,150,80,.10) !important;
+            color:#243242 !important;
+        }
+        .premium-logistics-ui .ui-app-header{
+            padding:9px 10px !important;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;
+        }
+        .premium-logistics-ui .game-profile-row{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 210px}
+        .premium-logistics-ui .game-avatar{
+            width:40px;height:40px;display:grid;place-items:center;flex:0 0 40px;border-radius:14px;font-size:20px;
+            background:linear-gradient(145deg,#71b8ff,#3e7ee7);color:#fff;border:1px solid rgba(255,255,255,.72);
+            box-shadow:0 6px 13px rgba(37,99,235,.20),0 2px 0 rgba(39,87,173,.20),inset 0 1px 0 rgba(255,255,255,.65);
+        }
+        .premium-logistics-ui .game-profile-main{min-width:0;flex:1}
+        .premium-logistics-ui .game-name-row{display:flex;align-items:center;gap:6px;min-width:0}
+        .premium-logistics-ui .game-user-name{font-size:12px;font-weight:950;color:#27364a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .premium-logistics-ui .game-level-pill{
+            flex:0 0 auto;padding:2px 6px;border-radius:999px;background:#e6f1ff;border:1px solid #cfe3ff;color:#2866b6;
+            font-size:8px;font-weight:950;line-height:1.15
+        }
+        .premium-logistics-ui .game-user-sub{margin-top:1px;color:#728093;font-size:7px;font-weight:800;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .premium-logistics-ui .game-capacity-row{display:grid;grid-template-columns:auto minmax(44px,1fr) auto;align-items:center;gap:5px;margin-top:4px;font-size:7px;color:#64748b;font-weight:850}
+        .premium-logistics-ui .game-capacity-track{height:5px;border-radius:999px;overflow:hidden;background:#e4eaec;border:1px solid #d4dde0}
+        .premium-logistics-ui .game-capacity-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#54b979,#8fce6b);transition:width .35s ease}
+        .premium-logistics-ui .game-resource-row{display:flex;justify-content:flex-end;gap:5px;flex:0 0 auto}
+        .premium-logistics-ui .game-resource-chip{
+            min-width:54px;max-width:78px;height:29px;padding:0 7px;display:flex;align-items:center;justify-content:center;gap:4px;
+            border-radius:12px;border:1px solid #eadfc6;background:linear-gradient(180deg,#fffdf5,#fff4d9);
+            color:#60451e;box-shadow:0 4px 9px rgba(82,73,49,.09),inset 0 1px 0 #fff;font-size:10px
+        }
+        .premium-logistics-ui .game-resource-chip b{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:950}
+        .premium-logistics-ui .game-resource-chip.orders{background:linear-gradient(180deg,#eef8ff,#e4f2ff);border-color:#d1e5f7;color:#315d7f}
+        .premium-logistics-ui .game-resource-chip.spins{background:linear-gradient(180deg,#f7f0ff,#efe6ff);border-color:#dfd0f5;color:#664f8c}
+        .premium-logistics-ui .ui-app-header .header-text{color:#1f2937 !important}
+        @media(max-width:370px){
+            .premium-logistics-ui .game-resource-row{width:100%;justify-content:space-between}
+            .premium-logistics-ui .game-resource-chip{flex:1 1 0;max-width:none}
+        }
+        .premium-logistics-ui .ui-app-header .bg-slate-800\/80{
+            background:#fff7df !important;border:1px solid #f4ddb0 !important;color:#6b4b18 !important;
+            box-shadow:inset 0 1px 0 #fff !important;
+        }
+        .premium-logistics-ui .ui-tab::before{
+            background:radial-gradient(circle at 80% 16%,rgba(250,191,60,.18),transparent 30%),radial-gradient(circle at 12% 28%,rgba(78,181,211,.17),transparent 32%) !important;
+            opacity:.75;
+        }
+        .premium-logistics-ui .ui-tab::after{opacity:.065;filter:none}
+        .premium-logistics-ui .ui-tab>h2{color:#27364a !important;font-size:20px !important;margin:3px 4px 10px !important}
+        .premium-logistics-ui .glass,
+        .premium-logistics-ui .ui-tab>.glass{
+            color:#243242 !important;background:linear-gradient(150deg,#fffdf8,#fff8e9) !important;
+            border:1px solid rgba(148,121,71,.16) !important;border-radius:22px !important;
+            box-shadow:0 9px 22px rgba(85,92,72,.10),0 3px 0 rgba(226,204,164,.42),inset 0 1px 0 rgba(255,255,255,.95) !important;
+            backdrop-filter:none !important;-webkit-backdrop-filter:none !important;
+        }
+        .premium-logistics-ui .ui-tab>.glass:first-of-type{
+            box-shadow:0 12px 27px rgba(85,92,72,.12),0 3px 0 rgba(226,204,164,.44),inset 0 1px 0 #fff !important;
+        }
+        .premium-logistics-ui .text-slate-200,.premium-logistics-ui .text-slate-300{color:#425466 !important}
+        .premium-logistics-ui .text-slate-400{color:#667788 !important}
+        .premium-logistics-ui .text-slate-500{color:#7c8895 !important}
+        .premium-logistics-ui .opacity-50{opacity:.66 !important}.premium-logistics-ui .opacity-60{opacity:.72 !important}
+        .premium-logistics-ui .text-neon{color:#27364a !important;text-shadow:none !important}
+        .premium-logistics-ui .ui-home>.neon-blue{
+            color:#fff !important;padding:18px !important;border-radius:24px !important;
+            background:
+              radial-gradient(circle at 84% 18%,rgba(255,224,124,.40),transparent 24%),
+              linear-gradient(140deg,#358ad8 0%,#3ca7c4 58%,#5eaa82 100%) !important;
+            border:1px solid rgba(255,255,255,.48) !important;
+            box-shadow:0 12px 26px rgba(48,116,147,.20),0 3px 0 rgba(31,99,132,.28),inset 0 1px 0 rgba(255,255,255,.55) !important;
+        }
+        .premium-logistics-ui .ui-home>.neon-blue .text-slate-300,
+        .premium-logistics-ui .ui-home>.neon-blue .text-slate-400,
+        .premium-logistics-ui .ui-home>.neon-blue .text-neon{color:#fff7da !important}
+        .premium-logistics-ui .ui-home>.neon-blue h2,.premium-logistics-ui .ui-home>.neon-blue .text-white{color:#fff !important}
+        .premium-logistics-ui .golden-hour-card{
+            background:linear-gradient(145deg,#fff0bd,#ffd879) !important;color:#70420d !important;
+            border-color:#f3c761 !important;box-shadow:0 7px 17px rgba(183,128,29,.14),inset 0 1px 0 #fff4d0 !important;
+        }
+        .premium-logistics-ui .golden-hour-desc{color:#7b541d !important}
+        .premium-logistics-ui .golden-hour-countdown{background:rgba(255,255,255,.58) !important;color:#78490e !important}
+        .premium-logistics-ui .conveyor-belt-anim{
+            background:linear-gradient(180deg,#e2e8ea,#c9d3d7) !important;border-color:#acbbc0 !important;
+            box-shadow:inset 0 3px 7px rgba(48,68,77,.14) !important;
+        }
+        .premium-logistics-ui .conveyor-belt-anim .conveyor-line{background:repeating-linear-gradient(90deg,#71818a 0 8px,#a6b3b9 8px 16px) !important}
+        .premium-logistics-ui button,
+        .premium-logistics-ui a.inline-flex,
+        .premium-logistics-ui .task-claim-btn{
+            box-shadow:0 5px 11px rgba(61,74,69,.13),inset 0 1px 0 rgba(255,255,255,.42) !important;
+        }
+        .premium-logistics-ui button:not(:disabled):active{transform:translateY(2px) scale(.985) !important;box-shadow:0 2px 6px rgba(61,74,69,.12) !important}
+        .premium-logistics-ui .bg-blue-600{background:linear-gradient(180deg,#4c9af1,#2f7bd8) !important;color:#fff !important}
+        .premium-logistics-ui .bg-green-600{background:linear-gradient(180deg,#4ab781,#309768) !important;color:#fff !important}
+        .premium-logistics-ui .bg-purple-600{background:linear-gradient(180deg,#9470ec,#7554d7) !important;color:#fff !important}
+        .premium-logistics-ui .bg-slate-700,.premium-logistics-ui .bg-slate-800{background:#eef3f5 !important;color:#334155 !important}
+        .premium-logistics-ui button.bg-\[\#fbbf24\],.premium-logistics-ui .bg-\[\#fbbf24\]{
+            background:linear-gradient(180deg,#ffd46c,#f2ad37) !important;color:#50330d !important;border-color:#e7ac3b !important;
+        }
+        .premium-logistics-ui input,.premium-logistics-ui select,.premium-logistics-ui textarea{
+            background:#fff !important;color:#243242 !important;border-color:#d6dfdf !important;
+            box-shadow:inset 0 1px 2px rgba(51,65,85,.05) !important;
+        }
+        .premium-logistics-ui input::placeholder,.premium-logistics-ui textarea::placeholder{color:#98a3aa !important}
+        .premium-logistics-ui input:focus,.premium-logistics-ui select:focus,.premium-logistics-ui textarea:focus{
+            border-color:#7ab7ee !important;box-shadow:0 0 0 3px rgba(59,130,246,.11) !important;
+        }
+        .premium-logistics-ui .task-card{
+            color:#253446 !important;background:linear-gradient(145deg,#fffdf7,#fff7e5) !important;
+            border-color:rgba(171,139,84,.16) !important;border-radius:18px !important;
+            box-shadow:0 6px 15px rgba(89,93,75,.075),inset 0 1px 0 #fff !important;
+        }
+        .premium-logistics-ui .task-card.task-done{background:#eef9f0 !important;border-color:#bfe4c8 !important}
+        .premium-logistics-ui .task-card.task-claimable{background:#eff8ff !important;border-color:#b7dcf5 !important}
+        .premium-logistics-ui .task-icon-wrap{background:#eef4f5 !important;border:1px solid #dce6e8 !important}
+        .premium-logistics-ui .ad-provider-card{
+            color:#26364a !important;background:linear-gradient(145deg,#ffffff,#fff9ec) !important;
+            border-color:#dce5e2 !important;box-shadow:0 7px 17px rgba(81,91,78,.08),inset 0 1px 0 #fff !important;
+        }
+        .premium-logistics-ui .ad-provider-card.richads-card{
+            background:linear-gradient(145deg,#fffaf0,#fff2d8) !important;border-color:#f2cf91 !important;
+        }
+        .premium-logistics-ui .ad-reward-box{background:#f8fbfb !important;border-color:#e4eceb !important;color:#334155 !important;box-shadow:inset 0 1px 0 #fff !important}
+        .premium-logistics-ui .ad-progress-track,.premium-logistics-ui .richads-meter{background:#e9eff0 !important;border-color:#d9e1e3 !important;box-shadow:inset 0 1px 3px rgba(56,72,82,.12) !important}
+        .premium-logistics-ui .provider-status{background:#edf9f1 !important;color:#237a4b !important;border-color:#c8ead4 !important}
+        .premium-logistics-ui .provider-status.locked{background:#fff6df !important;color:#9a6508 !important;border-color:#f5dfa9 !important}
+        .premium-logistics-ui .ui-chest .chest-container{background:radial-gradient(circle,#fff2af 0,#dff3ff 42%,transparent 72%) !important}
+        .premium-logistics-ui .rank-1{background:linear-gradient(135deg,#ffd45c,#f5b83e) !important;color:#583b0b !important}
+        .premium-logistics-ui .rank-2{background:linear-gradient(135deg,#eef2f5,#cbd5db) !important;color:#334155 !important}
+        .premium-logistics-ui .rank-3{background:linear-gradient(135deg,#e7b07c,#c9824a) !important;color:#4b2b13 !important}
+        .premium-logistics-ui .ui-settings .glass,
+        .premium-logistics-ui .ui-friends .glass,
+        .premium-logistics-ui .ui-withdraw .glass,
+        .premium-logistics-ui .ui-giftcode .glass,
+        .premium-logistics-ui .ui-jobmail .glass{background:linear-gradient(145deg,#fffdf8,#fff8e9) !important}
+        .premium-logistics-ui .job-mail-rule{background:#fffdf8 !important;border-color:#e8dfce !important;color:#344253 !important}
+        .premium-logistics-ui .job-mail-danger{background:#fff5f3 !important;border-color:#f0c7c0 !important}
+        .premium-logistics-ui .job-mail-tip-title{color:#93620d !important}
+        .premium-logistics-ui .job-mail-tip-body{color:#4b5b69 !important}
+        .premium-logistics-ui .sponsor-banner-slot{background:#fffaf0 !important;border-color:#eee0c3 !important}
+        .premium-logistics-ui .sponsor-banner-label{color:#8a7b66 !important}
+        .premium-logistics-ui .ui-bottom-nav{
+            height:66px !important;background:rgba(255,249,236,.97) !important;border-top:1px solid #e9dcc1 !important;
+            box-shadow:0 -8px 24px rgba(88,86,66,.12),inset 0 1px 0 rgba(255,255,255,.95) !important;
+            backdrop-filter:blur(12px) !important;-webkit-backdrop-filter:blur(12px) !important;
+        }
+        .premium-logistics-ui .ui-bottom-nav button{color:#69737b !important;opacity:.78 !important;filter:none !important;min-width:58px}
+        .premium-logistics-ui .ui-bottom-nav button.text-blue-500{color:#178258 !important;opacity:1 !important}
+        .premium-logistics-ui .ui-bottom-nav .nav-pill{background:#72c88c !important;box-shadow:0 2px 8px rgba(46,159,104,.22) !important}
+        .premium-logistics-ui .banner-notification{background:linear-gradient(145deg,#fff3bf,#ffd36d) !important;color:#573912 !important;box-shadow:0 8px 22px rgba(118,84,24,.17) !important}
+        .premium-logistics-ui .modal-overlay{background:rgba(33,45,51,.46) !important;backdrop-filter:blur(5px)}
+        .premium-logistics-ui .modal-content{
+            background:linear-gradient(145deg,#fffdf8,#fff7e7) !important;color:#27364a !important;border:1px solid #ead8ad !important;
+            box-shadow:0 24px 65px rgba(40,50,50,.20) !important;
+        }
+        .premium-logistics-ui .modal-content .text-slate-300,.premium-logistics-ui .modal-content .text-slate-400{color:#596978 !important}
+        .premium-logistics-ui .ui-withdraw .border-white\/5,
+        .premium-logistics-ui .ui-giftcode .border-white\/5,
+        .premium-logistics-ui .ui-jobmail .border-white\/5{border-color:#e9e1d1 !important}
+        @media(max-width:340px){
+            .premium-logistics-ui .ui-app-shell{padding-left:6px !important;padding-right:6px !important}
+            .premium-logistics-ui .ui-bottom-nav button{min-width:54px}
+        }
+        .low-graphics .premium-logistics-ui .glass,
+        .low-graphics .premium-logistics-ui .task-card,
+        .low-graphics .premium-logistics-ui .ad-provider-card,
+        .low-graphics .premium-logistics-ui .ui-app-header,
+        .low-graphics .premium-logistics-ui .ui-bottom-nav{box-shadow:none !important;backdrop-filter:none !important;transform:none !important}
+        /* ==================== END LOGISTICS MOBILE GAME LIGHT 2026 ==================== */
+
 </style>
 </head>
 <body class="premium-logistics-ui" x-data="app()" x-init="initApp()">
@@ -1174,17 +1385,26 @@
     </div>
 
     <div x-show="joinedGroups && !bannedScreen" x-cloak class="main-container ui-app-shell max-w-sm mx-auto min-h-screen pb-36 relative" :class="(joinedGroups && !dismissedPromoBanner) ? 'pt-20' : ''">
-        <header class="ui-app-header p-2 flex justify-between items-center glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
-            <div class="flex items-center space-x-2">
-                <div class="relative w-8 h-8 neon-blue rounded-xl flex items-center justify-center font-black italic shadow-lg text-base">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
-                <div>
-                    <p class="font-bold text-xs tracking-tight flex items-center header-text"><span x-text="user.name || 'Shipper'"></span><span class="bg-blue-500/20 text-blue-400 text-[8px] px-2 py-0.5 rounded-full ml-2" x-text="'LV.' + truckLevel"></span></p>
-                    <p class="text-[7px] font-bold text-slate-500 tracking-widest mt-0.5 italic" x-text="'ID: ' + user.id"></p>
+        <header class="ui-app-header glass sticky top-0 z-[100] border-b-white/5 shadow-2xl">
+            <div class="game-profile-row">
+                <div class="game-avatar relative">📦<span class="national-day-only absolute text-[9px] -top-1 -right-1" aria-hidden="true">🇻🇳</span></div>
+                <div class="game-profile-main">
+                    <div class="game-name-row">
+                        <span class="game-user-name" x-text="user.name || 'Shipper'"></span>
+                        <span class="game-level-pill" x-text="'LV.' + truckLevel"></span>
+                    </div>
+                    <div class="game-user-sub" x-text="window.Telegram?.WebApp?.initDataUnsafe?.user?.username ? '@' + window.Telegram.WebApp.initDataUnsafe.user.username : 'ID: ' + user.id"></div>
+                    <div class="game-capacity-row">
+                        <span>Kho</span>
+                        <div class="game-capacity-track"><i :style="'width:' + Math.min(100, Math.max(0, Number(maxProducts||0) > 0 ? Number(currentProducts||0) / Number(maxProducts) * 100 : 0)) + '%'"></i></div>
+                        <b x-text="formatNumber(currentProducts) + '/' + formatNumber(maxProducts)"></b>
+                    </div>
                 </div>
             </div>
-            <div class="space-y-1">
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="font-black mr-1 text-blue-400" :class="ordersPopped ? 'value-pop' : ''" x-text="formatNumber(orders)"></span> 📦</div>
-                <div class="bg-slate-800/80 px-2 py-0.5 rounded-lg flex items-center border border-white/5 text-xs"><span class="coin-icon">💰</span><span class="font-black text-yellow-500" :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></span></div>
+            <div class="game-resource-row">
+                <div class="game-resource-chip orders"><span>📦</span><b :class="ordersPopped ? 'value-pop' : ''" x-text="formatNumber(orders)"></b></div>
+                <div class="game-resource-chip coins"><span>🪙</span><b :class="coinsPopped ? 'value-pop' : ''" x-text="formatNumber(coins)"></b></div>
+                <div class="game-resource-chip spins"><span>🎟️</span><b x-text="formatNumber(spins)"></b></div>
             </div>
         </header>
         <div class="national-day-banner" aria-label="Mừng Quốc khánh Việt Nam 02/09">
@@ -2051,6 +2271,7 @@
         // Centralized ad cadence. AdsGram và Monetag manual có cooldown persistent RIÊNG 10 phút.
         const MONETAG_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
         const RICHADS_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
+        const RICHADS_SDK_TIMEOUT_MS = 25 * 1000;
         const AUTO_AD_MONETAG_WEIGHT = 50;
         const AUTO_AD_ADSGRAM_WEIGHT = 50;
         const AUTO_AD_FIRST_DELAY_MIN_MS = 75 * 1000;
@@ -4672,12 +4893,48 @@
                     return '▶️ XEM QC RICHADS';
                 },
                 getRichAdsController() {
-                    if(this._richadsController)return this._richadsController;
+                    const state=window.__richAdsSdkState||{};
+                    if(this._richadsController&&typeof this._richadsController.triggerInterstitialVideo==='function'&&state.initialized!==false)return this._richadsController;
                     try{
                         const controller=typeof window.__initRichAdsOnce==='function'?window.__initRichAdsOnce():window.__richAdsControllerInstance;
-                        if(controller&&typeof controller.triggerInterstitialVideo==='function'){this._richadsController=controller;return controller;}
+                        if(controller&&typeof controller.triggerInterstitialVideo==='function'){
+                            this._richadsController=controller;
+                            return controller;
+                        }
                     }catch(e){console.warn('RichAds unavailable:',e?.message||e);}
-                    this._richadsController=null;return null;
+                    this._richadsController=null;
+                    return null;
+                },
+                reportRichAdsDiagnostic(kind,error='') {
+                    if(!this.user?.id)return;
+                    const safeKind=['init_ok','init_failed','call_start','resolved','rejected','timeout'].includes(String(kind||''))?String(kind):'rejected';
+                    const raw=String(error?.message||error||'').replace(/[\r\n\t]+/g,' ').slice(0,160);
+                    fetch(`${API_URL}/api/richads/diagnostic`,{
+                        method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({userId:this.user.id,kind:safeKind,message:raw})
+                    }).catch(()=>{});
+                },
+                runRichAdsSdkWithTimeout(controller) {
+                    return new Promise((resolve,reject)=>{
+                        let settled=false;
+                        const timer=setTimeout(()=>{
+                            if(settled)return;
+                            settled=true;
+                            const error=new Error('RichAds không phản hồi trong thời gian cho phép.');
+                            error.code='RICHADS_SDK_TIMEOUT';
+                            reject(error);
+                        },RICHADS_SDK_TIMEOUT_MS);
+                        Promise.resolve()
+                            .then(()=>controller.triggerInterstitialVideo())
+                            .then(result=>{
+                                if(settled)return;
+                                settled=true;clearTimeout(timer);resolve(result);
+                            },error=>{
+                                if(settled)return;
+                                settled=true;clearTimeout(timer);reject(error instanceof Error?error:new Error(String(error?.message||error||'RichAds rejected')));
+                            });
+                    });
                 },
                 readPendingRichAdsRecovery(){try{const v=JSON.parse(localStorage.getItem('shipper_richads_pending')||'null');return v&&v.token&&v.actionId?v:null;}catch(_){return null;}},
                 writePendingRichAdsRecovery(v){try{localStorage.setItem('shipper_richads_pending',JSON.stringify(v||{}));}catch(_){}},
@@ -4707,7 +4964,9 @@
                 },
                 async watchRichAdsTask() {
                     if(this._richadsRunning||this._rewardedRunning||this._adsgramRunning||this._autoAdInFlight)return false;
-                    this._richadsRunning=true;let token='',sdkCompleted=false;const pendingRecovery=this.readPendingRichAdsRecovery();
+                    this._richadsRunning=true;
+                    let token='',sdkCompleted=false,sdkInvoked=false;
+                    const pendingRecovery=this.readPendingRichAdsRecovery();
                     try{
                         await this.syncProviderLocks().catch(()=>false);await this.syncRichAdsManualState().catch(()=>false);
                         if(this.richadsTaskLocked){this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');return false;}
@@ -4715,17 +4974,51 @@
                         if(Number(this.richadsAdsToday||0)>=15){this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt RichAds hôm nay.');return false;}
                         if(this.updateRichAdsCooldown()>0){this.showNotification(this.richadsButtonText());return false;}
                         if(pendingRecovery){return await this.completeRichAdsSession(pendingRecovery,false);}
-                        const controller=this.getRichAdsController();if(!controller||typeof controller.triggerInterstitialVideo!=='function'){this.showNotification('⚠️ RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.');return false;}
+
+                        const controller=this.getRichAdsController();
+                        if(!controller||typeof controller.triggerInterstitialVideo!=='function'){
+                            const sdkState=window.__richAdsSdkState||{};
+                            this.reportRichAdsDiagnostic('init_failed',sdkState.loadError||sdkState.initError||'controller_unavailable');
+                            this.showNotification('⚠️ RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.');
+                            return false;
+                        }
+                        this.reportRichAdsDiagnostic('init_ok','controller_ready');
+
                         const actionId=this.adsgramActionId();this._richadsActionId=actionId;
-                        const startRes=await fetch(`${API_URL}/api/richads/session/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,sessionId:this.securitySessionId,actionId})});
+                        const startRes=await fetchWithTimeout(`${API_URL}/api/richads/session/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,sessionId:this.securitySessionId,actionId})},10000);
                         const startData=await startRes.json().catch(()=>({}));
-                        if(!startRes.ok||!startData.success||!startData.token){if(startData.providerLocked===true||startData.richadsLocked===true)this.richadsTaskLocked=true;if(startData.storageReady===false||startData.unavailable===true)this.richadsStorageReady=false;this.richadsAvailable=!this.richadsTaskLocked&&this.richadsStorageReady;if(startData.nextAllowedAt)this.richadsManualNextAllowedAt=Number(startData.nextAllowedAt);if(startData.richadsAdsToday!=null)this.richadsAdsToday=Number(startData.richadsAdsToday);this.updateRichAdsCooldown();throw new Error(startData.error||'RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.');}
+                        if(!startRes.ok||!startData.success||!startData.token){
+                            if(startData.providerLocked===true||startData.richadsLocked===true)this.richadsTaskLocked=true;
+                            if(startData.storageReady===false||startData.unavailable===true)this.richadsStorageReady=false;
+                            this.richadsAvailable=!this.richadsTaskLocked&&this.richadsStorageReady;
+                            if(startData.nextAllowedAt)this.richadsManualNextAllowedAt=Number(startData.nextAllowedAt);
+                            if(startData.richadsAdsToday!=null)this.richadsAdsToday=Number(startData.richadsAdsToday);
+                            this.updateRichAdsCooldown();
+                            throw new Error(startData.error||'RichAds hiện chưa sẵn sàng. Vui lòng thử lại sau.');
+                        }
+
                         token=String(startData.token);this._richadsActiveToken=token;
-                        await Promise.resolve(controller.triggerInterstitialVideo());sdkCompleted=true;
-                        const pending={token,actionId,sessionId:this.securitySessionId,sdkResolvedAt:Date.now()};this.writePendingRichAdsRecovery(pending);
+                        sdkInvoked=true;this.reportRichAdsDiagnostic('call_start','triggerInterstitialVideo');
+                        await this.runRichAdsSdkWithTimeout(controller);
+                        sdkCompleted=true;this.reportRichAdsDiagnostic('resolved','video_resolved');
+
+                        const pending={token,actionId,sessionId:this.securitySessionId,sdkResolvedAt:Date.now()};
+                        this.writePendingRichAdsRecovery(pending);
                         return await this.completeRichAdsSession(pending,false);
-                    }catch(e){console.warn('RichAds:',e);if(token&&!sdkCompleted)fetch(`${API_URL}/api/richads/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId:this._richadsActionId})}).catch(()=>{});if(sdkCompleted)this.showNotification('⚠️ Phần thưởng đang được cập nhật. Vui lòng bấm lại sau ít giây.');else this.showNotification(e?.message||'⚠️ RichAds hiện chưa khả dụng.');return false;}
-                    finally{this._richadsRunning=false;this._richadsActionId='';this._richadsActiveToken='';}
+                    }catch(e){
+                        console.warn('RichAds:',e);
+                        const timedOut=e?.code==='RICHADS_SDK_TIMEOUT';
+                        if(sdkInvoked&&!sdkCompleted)this.reportRichAdsDiagnostic(timedOut?'timeout':'rejected',e);
+                        if(token&&!sdkCompleted){
+                            fetchWithTimeout(`${API_URL}/api/richads/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId:this._richadsActionId})},6000).catch(()=>{});
+                        }
+                        if(sdkCompleted)this.showNotification('⚠️ Phần thưởng đang được cập nhật. Vui lòng bấm lại sau ít giây.');
+                        else if(timedOut)this.showNotification('⚠️ RichAds chưa thể hiển thị quảng cáo. Vui lòng thử lại sau.');
+                        else this.showNotification(e?.message||'⚠️ RichAds hiện chưa khả dụng.');
+                        return false;
+                    }finally{
+                        this._richadsRunning=false;this._richadsActionId='';this._richadsActiveToken='';
+                    }
                 },
                 reportAdsGramDiagnostic(error, format = 'interstitial', forcedKind = '') {
                     const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
