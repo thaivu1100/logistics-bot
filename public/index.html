@@ -1254,6 +1254,12 @@
         .task-section-btn.active { background:linear-gradient(145deg,rgba(37,99,235,.16),rgba(6,182,212,.08)); border-color:rgba(59,130,246,.45); color:var(--app-text); }
         .task-section-chevron { color:var(--app-muted); font-size:14px; }
         .task-section-panel { animation:taskPanelIn .18s ease-out; }
+        .pr-campaign-card{border:1px solid rgba(34,197,94,.25);background:linear-gradient(145deg,rgba(16,185,129,.10),rgba(37,99,235,.08));}
+        .pr-step{padding:10px;border-radius:16px;border:1px solid var(--app-line);background:var(--app-card-2);}
+        .pr-step b{color:var(--app-text);font-size:11px}.pr-step p{color:var(--app-text-2);font-size:10px;line-height:1.5;margin-top:4px}
+        .pr-link-box{user-select:text;-webkit-user-select:text;word-break:break-all;padding:9px 10px;border-radius:13px;background:var(--app-card-2);border:1px dashed rgba(59,130,246,.45);font-size:10px;font-weight:800;color:var(--app-text)}
+        .pr-stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.pr-stat{padding:9px;border-radius:14px;background:var(--app-card-2);border:1px solid var(--app-line)}.pr-stat span{display:block;color:var(--app-muted);font-size:9px;font-weight:800}.pr-stat b{display:block;margin-top:2px;color:var(--app-text);font-size:13px;font-weight:900}
+        .pr-reward-table{width:100%;border-collapse:separate;border-spacing:0;font-size:9px;overflow:hidden}.pr-reward-table th,.pr-reward-table td{padding:7px 5px;border-bottom:1px solid var(--app-line);text-align:right}.pr-reward-table th:first-child,.pr-reward-table td:first-child{text-align:left}.pr-reward-table th{color:var(--app-muted);font-weight:900}.pr-reward-table td{color:var(--app-text-2);font-weight:800}.pr-reward-table tr:last-child td{border-bottom:0}
         @keyframes taskPanelIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
 
         .settings-group-title {
@@ -1707,6 +1713,38 @@
                     <button type="button" class="task-section-btn" :class="taskSections.special ? 'active' : ''" @click="toggleTaskSection('special')">
                         <span>🎁 <span x-text="texts.taskSectionSpecial"></span><small class="task-section-meta" x-text="texts.oneTimeAndNewbie"></small></span><span class="task-section-chevron" x-text="taskSections.special ? '▾' : '▸'"></span>
                     </button>
+                    <button type="button" class="task-section-btn" :class="taskSections.pr ? 'active' : ''" @click="toggleTaskSection('pr')">
+                        <span>📣 <span x-text="texts.taskSectionPr"></span><small class="task-section-meta" x-text="prCurrent ? prStatusText(prCurrent.status) : texts.prCreateLink"></small></span><span class="task-section-chevron" x-text="taskSections.pr ? '▾' : '▸'"></span>
+                    </button>
+                </div>
+                <div x-show="taskSections.pr" x-transition x-cloak class="task-section-panel glass pr-campaign-card p-3 rounded-[25px] space-y-3 card-padding">
+                    <div class="flex items-start justify-between gap-2"><div><h3 class="text-sm font-black text-emerald-300">📣 PR MINIAPP</h3><p class="text-[10px] mt-1" style="color:var(--app-text-2)" x-text="texts.prIntro"></p></div><button @click="fetchPrCampaign(true)" class="px-2 py-1.5 rounded-xl bg-slate-800/50 text-[10px] font-black">↻</button></div>
+                    <p class="text-[10px] font-black text-amber-300" x-text="'⚠️ ' + texts.prLinkWarning"></p>
+
+                    <div x-show="!prCurrent || ['awaiting_review','paid','rejected'].includes(prCurrent.status)" class="space-y-2">
+                        <template x-if="prCurrent && prCurrent.status!=='draft' && prCurrent.status!=='active'"><div class="pr-step"><b x-text="prStatusText(prCurrent.status)"></b><p x-show="prCurrent.status==='rejected'" x-text="texts.prReason + ': ' + (prCurrent.rejectReason || 'N/A')"></p><p x-show="prCurrent.status==='awaiting_review'" x-text="texts.prQualified + ': ' + formatNumber(prCurrent.qualifiedCountFinal ?? prCurrent.qualifiedPlayers) + ' · ' + texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p><p x-show="prCurrent.status==='paid'" x-text="'+ ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p></div></template>
+                        <div class="grid grid-cols-2 gap-2"><select x-model="prPlatform" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px] font-black"><option value="facebook">Facebook</option><option value="x">X / Twitter</option><option value="threads">Threads</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="other">Other</option></select><button @click="createPrDraft()" :disabled="prLoading" class="rounded-xl bg-emerald-600 text-white font-black text-[10px] disabled:opacity-40" x-text="prCurrent ? texts.prNewCampaign : texts.prCreateLink"></button></div>
+                    </div>
+
+                    <div x-show="prCurrent && prCurrent.status==='draft'" class="space-y-2">
+                        <div class="grid grid-cols-2 gap-2"><select x-model="prPlatform" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px] font-black"><option value="facebook">Facebook</option><option value="x">X / Twitter</option><option value="threads">Threads</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="other">Other</option></select><button @click="createPrDraft()" :disabled="prLoading" class="rounded-xl bg-blue-600 text-white font-black text-[10px] disabled:opacity-40" x-text="texts.prCreateLink"></button></div>
+                        <div class="pr-link-box" x-text="prCurrent.trackingLink"></div><button @click="copyPrContent()" class="w-full py-2 rounded-xl bg-cyan-600/25 border border-cyan-500 text-cyan-200 font-black text-[10px]" x-text="texts.prCopyContent"></button>
+                        <input x-model.trim="prPostUrl" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px]" :placeholder="texts.prPostPlaceholder">
+                        <button @click="submitPrCampaign()" :disabled="prSubmitting || !prPostUrl" class="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-black text-[10px] disabled:opacity-40" x-text="prSubmitting ? texts.processing : texts.prSubmit"></button>
+                    </div>
+
+                    <div x-show="prCurrent && prCurrent.status==='active'" class="space-y-2">
+                        <div class="flex items-center justify-between"><b class="text-[11px] text-green-300" x-text="texts.prActive"></b><b class="text-[10px] text-amber-300" x-text="texts.prTimeLeft + ': ' + prCountdownText()"></b></div>
+                        <a :href="prCurrent.postUrl" target="_blank" rel="noopener" class="block pr-link-box" x-text="prCurrent.postUrl"></a>
+                        <div class="pr-stat-grid"><div class="pr-stat"><span x-text="texts.prRawClicks"></span><b x-text="formatNumber(prCurrent.rawClicks||0)"></b></div><div class="pr-stat"><span x-text="texts.prVisitors"></span><b x-text="formatNumber(prCurrent.telegramVisitors||0)"></b></div><div class="pr-stat"><span x-text="texts.prNewUsers"></span><b x-text="formatNumber(prCurrent.newUsers||0)"></b></div><div class="pr-stat"><span x-text="texts.prQualified"></span><b x-text="formatNumber(prCurrent.qualifiedPlayers||0)"></b></div></div>
+                        <div class="pr-step"><b x-text="texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders||0) + ' Orders'"></b></div>
+                    </div>
+
+                    <details class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'📘 ' + texts.prHowTo"></summary><div class="mt-2 space-y-2"><div><b x-text="texts.prStep1"></b><p x-text="texts.prStep1Desc"></p></div><div><b x-text="texts.prStep2"></b><p x-text="texts.prStep2Desc"></p></div><div><b x-text="texts.prStep3"></b><p x-text="texts.prStep3Desc"></p></div><p class="font-black text-amber-300" x-text="'⚠️ ' + texts.prHashtagNote"></p><p class="font-black text-red-300" x-text="'⚠️ ' + texts.prPublicNote"></p><div><b x-text="texts.prValidTitle"></b><p>1. <span x-text="texts.prValid1"></span></p><p>2. <span x-text="texts.prValid2"></span></p><p>3. <span x-text="texts.prValid3"></span></p><p>4. <span x-text="texts.prValid4"></span></p></div></div></details>
+
+                    <details class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'🎁 ' + texts.prRewardTable"></summary><table class="pr-reward-table mt-2"><thead><tr><th x-text="texts.prQualified"></th><th>Base</th><th>Bonus</th><th>Total</th></tr></thead><tbody><template x-for="row in prRewardTable" :key="row.users"><tr><td x-text="row.users"></td><td x-text="formatNumber(row.base)"></td><td x-text="row.bonus ? '+'+formatNumber(row.bonus) : '—'"></td><td class="font-black" x-text="formatNumber(row.total)"></td></tr></template></tbody></table></details>
+
+                    <details x-show="prHistory.length" class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'🗂 ' + texts.prHistory"></summary><div class="mt-2 space-y-2"><template x-for="c in prHistory" :key="c.id"><div class="p-2 rounded-xl border border-white/5"><div class="flex justify-between text-[10px] font-black"><span x-text="'#'+c.id+' · '+c.platform"></span><span x-text="prStatusText(c.status)"></span></div><p class="text-[9px] mt-1" style="color:var(--app-muted)" x-text="texts.prQualified+': '+formatNumber(c.qualifiedCountFinal??c.qualifiedPlayers||0)+' · '+formatNumber(c.totalRewardOrders||0)+' Orders'"></p></div></template></div></details>
                 </div>
                 <div x-show="taskSections.special && newUserTutorial.eligible" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding border border-emerald-500/30 bg-emerald-950/10">
                     <div class="flex items-center justify-between gap-2">
@@ -2591,7 +2629,7 @@
                 settingsAccount:'👤 TÀI KHOẢN', settingsLanguage:'🌐 NGÔN NGỮ', settingsAppearance:'🎨 HIỂN THỊ', settingsPerformance:'⚡ HIỆU NĂNG', settingsAudio:'🎵 ÂM THANH', settingsSupport:'☎️ HỖ TRỢ',
                 joinDateSimple:'Ngày tham gia', languageDesc:'Thay đổi ngôn ngữ toàn bộ Mini App ngay lập tức.', appearance:'Giao diện', themeDesc:'Chọn giao diện sáng hoặc tối. Màu chữ tự điều chỉnh để luôn dễ đọc.', lightTheme:'☀️ SÁNG', darkTheme:'🌙 TỐI',
                 graphics:'Đồ họa', graphicsDesc:'FULL HD giữ đầy đủ hiệu ứng · FIX LAG giảm hiệu ứng để máy yếu mượt hơn.', showFps:'Hiển thị FPS', fpsDesc:'Hiển thị FPS thực tế của giao diện, không ép tần số quét thiết bị.', on:'BẬT', off:'TẮT', backgroundMusic:'Nhạc nền', supportDesc:'Liên hệ Admin hoặc cộng đồng khi cần hỗ trợ.',
-                taskSectionDaily:'NHIỆM VỤ HÔM NAY', taskSectionAds:'QUẢNG CÁO', taskSectionLink:'VƯỢT LINK', taskSectionStreak:'ĐIỂM DANH 7 NGÀY', taskSectionSpecial:'TÂN THỦ / ĐẶC BIỆT', oneTimeAndNewbie:'Một lần & tân thủ', loadingShort:'Đang tải', inProgress:'CHƯA XONG',
+                taskSectionDaily:'NHIỆM VỤ HÔM NAY', taskSectionAds:'QUẢNG CÁO', taskSectionLink:'VƯỢT LINK', taskSectionStreak:'ĐIỂM DANH 7 NGÀY', taskSectionSpecial:'TÂN THỦ / ĐẶC BIỆT', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'Một lần & tân thủ', prIntro:'Đăng bài/video giới thiệu Kho Hàng và nhận thưởng theo số người chơi mới hợp lệ.', prHowTo:'HƯỚNG DẪN THAM GIA', prStep1:'Bước 1 · Chọn nền tảng', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube hoặc nền tảng khác.', prStep2:'Bước 2 · Đăng bài/video', prStep2Desc:'Đăng ở trang cá nhân, kênh hoặc cộng đồng phù hợp và cho phép quảng bá. Bài phải Public và giữ nguyên link PR trong 7 ngày.', prStep3:'Bước 3 · Gửi link bài PR', prStep3Desc:'Dán link bài viết/video vào Mini App. Thời gian 7 ngày bắt đầu ngay khi server chấp nhận link.', prValidTitle:'MỘT USER PR HỢP LỆ PHẢI ĐỦ 4 ĐIỀU KIỆN', prValid1:'Là user mới thật, chưa từng có tài khoản trước đó.', prValid2:'Đi qua đúng tracking link PR của chiến dịch này.', prValid3:'Mở Mini App bằng Telegram hợp lệ.', prValid4:'Trong 24 giờ thực hiện ít nhất 1 hoạt động thật: giao hàng, mở rương, xem QC Rewarded hợp lệ hoặc nhận thưởng nhiệm vụ.', prHashtagNote:'Nếu không đăng trong cộng đồng Kiếm Tiền Online hoặc đăng VIDEO, hãy thêm #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'Bài/video phải Public, không xóa bài và không thay link PR trong 7 ngày.', prCreateLink:'TẠO LINK PR', prCopyContent:'COPY NỘI DUNG + LINK', prSubmit:'GỬI LINK BÀI PR', prPostPlaceholder:'Dán link bài viết/video Public...', prActive:'CHIẾN DỊCH ĐANG CHẠY', prAwaiting:'ĐANG CHỜ ADMIN DUYỆT', prPaid:'ĐÃ DUYỆT', prRejected:'BỊ TỪ CHỐI', prDraft:'BẢN NHÁP', prNewCampaign:'TẠO CHIẾN DỊCH MỚI', prRewardTable:'BẢNG THƯỞNG', prQualified:'User hợp lệ', prEstimated:'Thưởng dự kiến', prRawClicks:'Click', prVisitors:'Visitor', prNewUsers:'User mới', prTimeLeft:'Còn lại', prHistory:'Lịch sử PR', prNoHistory:'Chưa có chiến dịch trước đó.', prReason:'Lý do', prLinkWarning:'Bắt buộc dùng đúng LINK PR MINIAPP bên dưới. Link mời bạn/referral không được tính cho PR.', loadingShort:'Đang tải', inProgress:'CHƯA XONG',
                 contactAdmin: 'Liên hệ Admin', enterCode: 'Mã...', redeem: 'Nhận',
                 redeemHistoryLabel: 'Lịch sử nhập code', noRedeemHistory: 'Chưa nhập mã nào', privateOnlyMe: 'Chỉ mình bạn thấy',
                 giftcodePageTitle: '🎟️ Nhập Code', giftcodeDesc: 'Nhập mã để nhận thưởng ngay. Phần thưởng chỉ mình bạn thấy được.',
@@ -2671,7 +2709,7 @@
                 settingsAccount:'👤 ACCOUNT', settingsLanguage:'🌐 LANGUAGE', settingsAppearance:'🎨 APPEARANCE', settingsPerformance:'⚡ PERFORMANCE', settingsAudio:'🎵 AUDIO', settingsSupport:'☎️ SUPPORT',
                 joinDateSimple:'Join date', languageDesc:'Switch the entire Mini App language instantly.', appearance:'Appearance', themeDesc:'Choose Light or Dark. Text colors automatically stay readable.', lightTheme:'☀️ LIGHT', darkTheme:'🌙 DARK',
                 graphics:'Graphics', graphicsDesc:'FULL HD keeps all effects · FIX LAG reduces effects for smoother low-end performance.', showFps:'Show FPS', fpsDesc:'Shows real rendered FPS without forcing the device refresh rate.', on:'ON', off:'OFF', backgroundMusic:'Background Music', supportDesc:'Contact Admin or the community when you need help.',
-                taskSectionDaily:"TODAY'S TASKS", taskSectionAds:'ADS', taskSectionLink:'LINK TASKS', taskSectionStreak:'7-DAY CHECK-IN', taskSectionSpecial:'NEW USER / SPECIAL', oneTimeAndNewbie:'One-time & new user', loadingShort:'Loading', inProgress:'IN PROGRESS',
+                taskSectionDaily:"TODAY'S TASKS", taskSectionAds:'ADS', taskSectionLink:'LINK TASKS', taskSectionStreak:'7-DAY CHECK-IN', taskSectionSpecial:'NEW USER / SPECIAL', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'One-time & new user', prIntro:'Publish a post/video about Logistics Warehouse and earn Orders from real new players.', prHowTo:'HOW TO JOIN', prStep1:'Step 1 · Choose a platform', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube, or another platform.', prStep2:'Step 2 · Publish your post/video', prStep2Desc:'Post on your profile, channel, or a relevant community that allows promotion. Keep it Public with the PR link unchanged for 7 days.', prStep3:'Step 3 · Submit the post URL', prStep3Desc:'Paste the public post/video URL into the Mini App. The 7-day timer starts when the server accepts the URL.', prValidTitle:'A VALID PR USER MUST MEET ALL 4 CONDITIONS', prValid1:'A truly new user who never had an account before.', prValid2:'Arrives through this campaign\'s exact PR tracking link.', prValid3:'Opens the Mini App with valid Telegram authentication.', prValid4:'Within 24 hours completes at least one real action: delivery, chest, valid Rewarded ad, or task reward.', prHashtagNote:'If the content is not posted in an online-earning community, or if it is a VIDEO, add #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'The post/video must stay Public. Do not delete it or replace the PR link during the 7-day campaign.', prCreateLink:'CREATE PR LINK', prCopyContent:'COPY CONTENT + LINK', prSubmit:'SUBMIT PR POST', prPostPlaceholder:'Paste the public post/video URL...', prActive:'CAMPAIGN ACTIVE', prAwaiting:'AWAITING ADMIN REVIEW', prPaid:'APPROVED', prRejected:'REJECTED', prDraft:'DRAFT', prNewCampaign:'CREATE NEW CAMPAIGN', prRewardTable:'REWARD TABLE', prQualified:'Qualified users', prEstimated:'Estimated reward', prRawClicks:'Clicks', prVisitors:'Visitors', prNewUsers:'New users', prTimeLeft:'Time left', prHistory:'PR history', prNoHistory:'No previous campaigns.', prReason:'Reason', prLinkWarning:'You must use the PR MINIAPP link below. Referral/invite links do not count for PR.', loadingShort:'Loading', inProgress:'IN PROGRESS',
                 contactAdmin: 'Contact Admin', enterCode: 'Code...', redeem: 'Redeem',
                 redeemHistoryLabel: 'Redeem history', noRedeemHistory: 'No codes redeemed yet', privateOnlyMe: 'Only visible to you',
                 giftcodePageTitle: '🎟️ Redeem Code', giftcodeDesc: 'Enter a code to get your reward instantly. Only you can see it.',
@@ -3127,7 +3165,7 @@
                 _autoAdInFlight:false, _autoAdEarliestAt:0, _autoAdTabCount:0, _autoAdTabThreshold:0, _autoAdLastTab:'',
 
                 _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
-                _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _uiSecondTimer: null, _providerSyncTimer:null, _countdownTimer: null,
+                _coinBoxScheduleTimer: null, _coinBoxHideTimer: null, _weeklyRefreshTimer: null, _prSyncTimer:null, _uiSecondTimer: null, _providerSyncTimer:null, _countdownTimer: null,
                 _pendingUpgradeAdToken: '', _pendingSpeedupAdToken: '', _pendingCoinBoxAdToken: '',
                 speedUpUsed: false, // Tăng Tốc x2 chỉ được dùng 1 lần cho mỗi mẻ sản xuất đang chờ
                 _saveQueue: Promise.resolve(), _saveInFlight: false, // Hàng đợi lưu dữ liệu tuần tự, xem chi tiết ở hàm saveState()
@@ -3152,7 +3190,8 @@
                 graphicsMode: localStorage.getItem('graphicsMode') === 'fixlag' ? 'fixlag' : 'fullhd',
                 themeMode: localStorage.getItem('shipper_theme') === 'light' ? 'light' : 'dark',
                 showFps: localStorage.getItem('shipper_show_fps') === '1', fpsValue:0, _fpsRaf:0, _fpsFrames:0, _fpsLastSample:0, _fpsVisibilityBound:false,
-                taskSections:{daily:true,ads:false,smartlink:false,link:false,streak:false,special:false},
+                taskSections:{daily:true,ads:false,smartlink:false,link:false,streak:false,special:false,pr:false},
+                prLoading:false,prSubmitting:false,prPlatform:'facebook',prPostUrl:'',prCurrent:null,prHistory:[],prLastSync:0,prRewardTable:[{users:1,base:800,bonus:0,total:800},{users:5,base:4000,bonus:500,total:4500},{users:10,base:8000,bonus:1200,total:9200},{users:25,base:20000,bonus:3000,total:23000},{users:50,base:40000,bonus:7000,total:47000},{users:100,base:80000,bonus:17000,total:97000},{users:200,base:160000,bonus:40000,total:200000}],
                 securitySessionId: '', securityRiskScore: 0, securityRiskLevel: 'LOW',
                 fraudClickIntervals: [], lastSecurityClickAt: 0, securityHeartbeatTimer: null,
                 antiFraudInstallId: '',
@@ -3768,6 +3807,13 @@
                         this.resetDailyIfNeeded();
                         this.checkWeeklyRewards();
                     }, 45000);
+                    // PR campaign stats: light polling only while the PR section is visible; one timer per WebView.
+                    if (this._prSyncTimer) clearInterval(this._prSyncTimer);
+                    this._prSyncTimer = setInterval(() => {
+                        if (!document.hidden && this.tab === 'tasks' && this.taskSections?.pr) {
+                            this.fetchPrCampaign(false).catch(() => {});
+                        }
+                    }, 30000);
                     this.scheduleCoinBox();
                     this.startCountdown();
                     this.startGoldenHourStatusSync();
@@ -3785,6 +3831,7 @@
                             this.syncAdsGramManualState().catch(() => {});
                             this.syncMonetagManualState().catch(() => {});
                             this.syncRichAdsManualState().catch(() => {});
+                            if (this.taskSections?.pr) this.fetchPrCampaign(true).catch(() => {});
                         }
                     });
                     window.addEventListener('focus', () => {
@@ -3795,6 +3842,7 @@
                             this.syncAdsGramManualState().catch(() => {});
                             this.syncMonetagManualState().catch(() => {});
                             this.syncRichAdsManualState().catch(() => {});
+                            if (this.taskSections?.pr) this.fetchPrCampaign(true).catch(() => {});
                         }
                     });
                     if (this.smartlinkAttemptId) {
@@ -3831,6 +3879,8 @@
                     // Đồng bộ trạng thái rút tiền (Chờ duyệt/Đã duyệt/Hủy) từ server để phản ánh ngay khi admin xử lý
                     this.fetchWithdrawHistory();
                     this.fetchRedeemHistory();
+                    this.syncPrVisit().catch(() => {});
+                    this.fetchPrCampaign().catch(() => {});
                     setInterval(() => { if (this.tab === 'withdraw') this.fetchWithdrawHistory(); }, 8000);
 
                     // Hiệu ứng số "nhảy" mỗi khi coin / đơn hàng tăng lên (chỉ khi tăng, không chạy khi giảm do rút tiền/trừ tiền)
@@ -3839,7 +3889,7 @@
                     this.$watch('orders', v => { if (v > prevOrders) { this.ordersPopped = false; this.$nextTick(() => { this.ordersPopped = true; setTimeout(() => this.ordersPopped = false, 450); }); } prevOrders = v; });
                     this.$watch('tab', (nextTab, previousTab) => {
                         this.saveState();
-                        if (nextTab === 'tasks') { this.syncDailyTasksFromServer().catch(() => {}); this.syncLinkTasks().catch(() => {}); this.syncProviderLocks().catch(() => {}); this.syncAdsGramManualState().catch(() => {}); this.syncMonetagManualState().catch(() => {}); this.syncRichAdsManualState().catch(() => {}); }
+                        if (nextTab === 'tasks') { this.syncDailyTasksFromServer().catch(() => {}); this.syncLinkTasks().catch(() => {}); this.syncProviderLocks().catch(() => {}); this.syncAdsGramManualState().catch(() => {}); this.syncMonetagManualState().catch(() => {}); this.syncRichAdsManualState().catch(() => {}); this.fetchPrCampaign(true).catch(() => {}); }
                         if (nextTab === 'jobmail') this.loadJobMail(1).catch(() => {});
                         this.onAutomaticAdBreakpoint(nextTab, previousTab);
                     });
@@ -7508,11 +7558,73 @@
                     this.sendSecurityHeartbeat();
                     this.securityHeartbeatTimer = setInterval(() => this.sendSecurityHeartbeat(), 60000);
                 },
+                prStatusText(status) {
+                    const s=String(status||'');
+                    if(s==='active') return this.texts.prActive;
+                    if(s==='awaiting_review') return this.texts.prAwaiting;
+                    if(s==='paid') return this.texts.prPaid;
+                    if(s==='rejected') return this.texts.prRejected;
+                    return this.texts.prDraft;
+                },
+                prApiError(data, fallbackVi='Không thể xử lý PR MINIAPP lúc này.', fallbackEn='PR MINIAPP request failed. Please try again.') {
+                    const d=data&&typeof data==='object'?data:{};
+                    if(this.language!=='en') return String(d.error||fallbackVi);
+                    if(d.activeCampaign) return 'You already have an active PR campaign.';
+                    if(d.duplicatePost) return 'This post URL has already been used for another PR campaign.';
+                    const code=String(d.code||'');
+                    if(code==='PR_SERVICE_ROLE_MISSING') return 'PR MINIAPP is being configured. Please try again later.';
+                    if(code==='23505') return 'A PR campaign with this data already exists.';
+                    return fallbackEn;
+                },
+                prCountdownText() {
+                    void this.tick;
+                    const end=this.prCurrent?.endsAt ? new Date(this.prCurrent.endsAt).getTime() : 0;
+                    let sec=Math.max(0,Math.floor((end-Date.now())/1000));
+                    const d=Math.floor(sec/86400);sec%=86400;const h=Math.floor(sec/3600);sec%=3600;const m=Math.floor(sec/60);const ss=sec%60;
+                    return this.language==='en' ? `${d}d ${String(h).padStart(2,'0')}h ${String(m).padStart(2,'0')}m ${String(ss).padStart(2,'0')}s` : `${d} ngày ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+                },
+                prPromoText() {
+                    const link=String(this.prCurrent?.trackingLink||'');
+                    if(this.language==='en') return `🚚 LOGISTICS WAREHOUSE 👑\n\n📦 Complete simple daily tasks\n📺 Watch ads for rewards\n🔗 Complete link tasks to earn Orders\n🎁 Open chests for rewards\n🏆 Climb the leaderboard\n💰 Earn Coins + Orders\n⚡ Simple and easy to use\n\n🔥 Open the bot and start earning rewards!\n\n🔗 ${link}\n\n#KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN`;
+                    return `🚚 KHO HÀNG KIẾM TIỀN 👑\n\n📦 Làm nhiệm vụ đơn giản mỗi ngày\n📺 Xem quảng cáo nhận thưởng\n🔗 Vượt link tích Đơn Hàng\n🎁 Mở rương săn quà hấp dẫn\n🏆 Leo BXH nhận thêm phần thưởng\n💰 Tích Coin + Đơn Hàng cực dễ\n⚡ Giao diện đơn giản, dễ sử dụng\n\n🔥 Vào bot ngay và bắt đầu kiếm thưởng!\n\n🔗 ${link}\n\n#KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN`;
+                },
+                async fetchPrCampaign(force=false) {
+                    if(!this.user?.id || this.isPublicBrowser || this.prLoading) return;
+                    if(!force && Date.now()-Number(this.prLastSync||0)<5000) return;
+                    this.prLoading=true;
+                    try{
+                        const res=await fetch(`${API_URL}/api/pr/me/${this.user.id}`);
+                        const data=await res.json().catch(()=>({}));
+                        if(!res.ok||!data.success){if(force)this.showNotification('⚠️ '+this.prApiError(data,'PR MINIAPP chưa sẵn sàng. Vui lòng thử lại sau.','PR MINIAPP is unavailable. Please try again later.'));return;}
+                        this.prCurrent=data.current||null;this.prHistory=Array.isArray(data.history)?data.history:[];this.prLastSync=Date.now();
+                        if(this.prCurrent?.platform)this.prPlatform=this.prCurrent.platform;
+                        if(this.prCurrent?.status!=='draft')this.prPostUrl='';
+                    }catch(e){if(force)this.showNotification('⚠️ '+(this.texts.serverConnectionError||'Server connection error.'));}
+                    finally{this.prLoading=false;}
+                },
+                async createPrDraft() {
+                    if(this.prLoading)return;this.prLoading=true;
+                    try{const res=await fetch(`${API_URL}/api/pr/draft`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,platform:this.prPlatform})});const data=await res.json().catch(()=>({}));if(!res.ok||!data.success){this.showNotification('❌ '+this.prApiError(data,'Không thể tạo link PR lúc này.','Could not create the PR link.'));if(data.current)this.prCurrent=data.current;return;}this.prCurrent=data.current;this.prHistory=data.history||this.prHistory;this.showNotification('✅ '+(this.language==='en'?'PR link ready.':'Đã tạo link PR riêng.'));}
+                    catch(e){this.showNotification('❌ '+(this.texts.serverConnectionError||'Server connection error.'));}finally{this.prLoading=false;}
+                },
+                async copyPrContent() {
+                    if(!this.prCurrent?.trackingLink){this.showNotification('⚠️ '+(this.language==='en'?'Create your PR link first.':'Hãy tạo link PR trước.'));return;}
+                    const text=this.prPromoText();try{await navigator.clipboard.writeText(text);this.showNotification('📋 '+(this.language==='en'?'Content + PR link copied.':'Đã copy nội dung + link PR.'));}catch(_){this.showNotification('❌ '+(this.language==='en'?'Could not copy.':'Không thể copy.'));}
+                },
+                async submitPrCampaign() {
+                    if(this.prSubmitting||!this.prCurrent?.id||this.prCurrent.status!=='draft')return;this.prSubmitting=true;
+                    try{const res=await fetch(`${API_URL}/api/pr/submit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,campaignId:this.prCurrent.id,platform:this.prPlatform,postUrl:this.prPostUrl})});const data=await res.json().catch(()=>({}));if(!res.ok||!data.success){this.showNotification('❌ '+this.prApiError(data,'Không thể gửi link bài PR. Hãy kiểm tra nền tảng và URL.','Could not submit the PR post. Check the selected platform and URL.'));return;}this.prCurrent=data.current;this.prPostUrl='';this.showNotification('✅ '+(this.language==='en'?'PR campaign started for 7 days.':'Chiến dịch PR 7 ngày đã bắt đầu.'));}
+                    catch(e){this.showNotification('❌ '+(this.texts.serverConnectionError||'Server connection error.'));}finally{this.prSubmitting=false;}
+                },
+                async syncPrVisit() {
+                    if(!this.user?.id||this.isPublicBrowser)return;try{await fetch(`${API_URL}/api/pr/visit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})});}catch(_){}
+                },
                 toggleTaskSection(key) {
                     if (!Object.prototype.hasOwnProperty.call(this.taskSections || {}, key)) return;
                     const opening = !this.taskSections[key];
                     Object.keys(this.taskSections).forEach(k => { this.taskSections[k] = false; });
                     if (opening) this.taskSections[key] = true;
+                    if (opening && key === 'pr') this.fetchPrCampaign(true).catch(() => {});
                 },
                 applyTheme() {
                     const mode = this.themeMode === 'light' ? 'light' : 'dark';
