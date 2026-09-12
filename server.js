@@ -195,6 +195,18 @@ app.use(express.static(path.join(__dirname, 'public'), {
 //    grant execute on function job_mail_user_stats(text) to service_role;
 //    grant execute on function job_mail_global_stats() to service_role;
 // =======================================================================================================
+// 4B) RICHADS — các cột này PHẢI là cột thật trong users để token idempotency + ví được commit cùng UPDATE.
+//     Nếu chưa chạy block này, server sẽ FAIL-CLOSED và không cấp phiên RichAds (không fallback vào RAM/user_extra).
+//     Block idempotent, không DROP/xóa dữ liệu:
+//
+//    alter table public.users add column if not exists "richadsAdsToday" integer not null default 0;
+//    alter table public.users add column if not exists "richadsDayKey" text;
+//    alter table public.users add column if not exists "lastRichAdsAdToken" text;
+//    alter table public.users add column if not exists "lastRichAdsRewardCoins" integer not null default 0;
+//    alter table public.users add column if not exists "lastRichAdsRewardOrders" integer not null default 0;
+//    alter table public.users add column if not exists "lastRichAdsCompletedAt" bigint not null default 0;
+//
+// =======================================================================================================
 // 5) LINK TASKS / VƯỢT LINK — FULL REPAIR MIGRATION.
 //    Chạy TOÀN BỘ block này 1 lần trong Supabase SQL Editor trước khi bật Link Task.
 //    Block idempotent: có thể chạy lại; KHÔNG DROP bảng, KHÔNG xóa lịch sử/reward/quota cũ.
@@ -1574,8 +1586,30 @@ loadAdmins();
 
 // Admin chính: chỉ đúng 1 ID hardcode, không thể bị xoá quyền.
 const isMainAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID);
-// Admin (chính hoặc phụ): dùng cho hầu hết lệnh quản trị.
+// Admin (chính hoặc phụ): cache nhanh cho các lệnh không nhạy cảm.
 const isAdmin = (ctx) => String(ctx.from?.id || '') === String(ADMIN_ID) || subAdminIds.has(String(ctx.from?.id || ''));
+
+// Maintenance/provider-lock phải dùng cùng một authority persistent ở mọi Node instance.
+// Với request web, ID luôn lấy từ Telegram initData đã verify; không bao giờ tin query/body userId để bypass.
+async function isAdminUserIdPersistent(userId) {
+    const id = String(userId || '');
+    if (!id) return false;
+    if (id === String(ADMIN_ID)) return true;
+    try {
+        const { data, error } = await (jobMailSupabase || supabase).from('admins').select('id').eq('id', id).maybeSingle();
+        if (error) throw error;
+        const allowed = !!data?.id;
+        if (allowed) subAdminIds.add(id); else subAdminIds.delete(id);
+        return allowed;
+    } catch (e) {
+        console.error('Persistent admin check:', e?.message || e);
+        return subAdminIds.has(id);
+    }
+}
+async function isVerifiedAdminRequest(req) {
+    const verifiedUser = telegramUserFromRequest(req);
+    return verifiedUser?.id ? isAdminUserIdPersistent(String(verifiedUser.id)) : false;
+}
 
 // ==================== KHOÁ BOT / MINI APP (BẢO TRÌ) ====================
 // app_settings là SOURCE OF TRUTH để trạng thái bảo trì sống qua restart/cold-start/multi-instance.
@@ -1625,9 +1659,9 @@ async function setBotLocked(locked) {
     return BOT_LOCKED;
 }
 
-// ==================== KHÓA RIÊNG NHIỆM VỤ QC MANUAL ====================
-// Source of truth: Supabase app_settings. Chỉ cho phép đúng 2 provider để tránh tạo key tùy ý.
-const AD_TASK_LOCK_PROVIDERS = new Set(['adsgram', 'monetag']);
+// ==================== KHÓA GLOBAL PROVIDER QUẢNG CÁO ====================
+// Source of truth: Supabase app_settings. Lock được kiểm tra server-side trước khi cấp session/token.
+const AD_TASK_LOCK_PROVIDERS = new Set(['adsgram', 'monetag', 'richads']);
 function adTaskLockKey(provider) {
     const normalized = String(provider || '').toLowerCase();
     if (!AD_TASK_LOCK_PROVIDERS.has(normalized)) throw new Error('AD_TASK_PROVIDER_INVALID');
@@ -1866,7 +1900,7 @@ function normalizeIpForDuplicateCheck(ip) {
 async function checkDuplicateIP(userId, ip) {
     const normalizedIp = normalizeIpForDuplicateCheck(ip);
     if (!normalizedIp) return [];
-    const { data, error } = await supabase.from('users').select('id, name').eq('ip', normalizedIp).neq('id', String(userId));
+    const { data, error } = await supabase.from('users').select('id, name').in('ip', canonicalIpVariants(normalizedIp)).neq('id', String(userId));
     if (error) {
         console.error(`Lỗi kiểm tra IP trùng cho ${userId}:`, error.message);
         return [];
@@ -1942,6 +1976,11 @@ function isPublicRoutableIp(value) {
 function normalizePublicRequestIp(value) {
     const ip = normalizeRequestIp(value);
     return isPublicRoutableIp(ip) ? ip : '';
+}
+function canonicalIpVariants(value) {
+    const ip = normalizePublicRequestIp(value);
+    if (!ip) return [];
+    return net.isIP(ip) === 4 ? [ip, `::ffff:${ip}`] : [ip];
 }
 function canonicalRequestIp(req) {
     // ONE source of truth for web business logic:
@@ -2649,7 +2688,7 @@ function buildReferralPendingConditionsText(userRow, onboardingVerified, languag
 // 4) Chưa từng được tính hợp lệ trước đó (referrerCounted = false)
 // Có thể được gọi từ nhiều nơi (bot /start, callback_query, API xem QC) nên hàm tự kiểm tra lại từ DB,
 // không tin tưởng dữ liệu client gửi lên.
-async function tryFinalizeReferral(userId, precomputedIsMember = null) {
+async function tryFinalizeReferralUnlocked(userId, precomputedIsMember = null) {
     const { data: userRecord, error: userError } = await readUserRow(userId);
     if (userError || !userRecord) return { ok: false, reason: 'user_not_found' };
     if (!userRecord.referrerId || userRecord.referrerId === userId) return { ok: false, reason: 'no_referrer' };
@@ -2754,6 +2793,15 @@ async function tryFinalizeReferral(userId, precomputedIsMember = null) {
     return { ok: true, validInvites: newValid };
 }
 
+async function tryFinalizeReferral(userId, precomputedIsMember = null) {
+    const id = String(userId || '');
+    if (!id) return { ok:false, reason:'user_not_found' };
+    const release = await acquirePersistentLeaseLock(persistentEventKey('referral-finalize-lock', id), 90 * 1000);
+    if (!release) return { ok:false, reason:'busy' };
+    try { return await tryFinalizeReferralUnlocked(id, precomputedIsMember); }
+    finally { try { await release(); } catch (_) {} }
+}
+
 // ==================== BOT LOGIC ====================
 
 // FIX LỖI GỐC "ADMIN DÙNG LỆNH BOT KHÔNG PHẢN HỒI" (VÀ CẢ BOT IM LẶNG VỚI MỌI NGƯỜI DÙNG):
@@ -2798,24 +2846,25 @@ bot.use(async (ctx, next) => {
 // để có thể tự mở khoá và dùng lệnh quản trị trong thời gian bảo trì.
 bot.use(async (ctx, next) => {
     let locked = BOT_LOCKED;
+    const actorId = String(ctx.from?.id || '');
+    let adminAllowed = actorId === String(ADMIN_ID);
     try {
-        locked = await readBotLockedPersistent();
+        [locked, adminAllowed] = await Promise.all([readBotLockedPersistent(), isAdminUserIdPersistent(actorId)]);
     } catch (e) {
         console.error('Maintenance middleware read:', e?.message || e);
-        if (!isAdmin(ctx)) {
+        adminAllowed = await isAdminUserIdPersistent(actorId).catch(() => isAdmin(ctx));
+        if (!adminAllowed) {
             const chatType = ctx.chat?.type;
             if (chatType === 'group' || chatType === 'supergroup' || chatType === 'channel') return;
             return ctx.reply(MAINTENANCE_MESSAGE).catch(() => {});
         }
     }
-    if (locked && !isAdmin(ctx)) {
+    if (locked && !adminAllowed) {
         const chatType = ctx.chat?.type;
         const isGroupOrChannel = chatType === 'group' || chatType === 'supergroup' || chatType === 'channel';
         if (isGroupOrChannel) return;
         const language = await getStoredUserLanguage(ctx.from?.id);
-        const maintenanceText = language === 'en'
-            ? '🔒 The bot is locked for maintenance. Please try again later!!'
-            : MAINTENANCE_MESSAGE;
+        const maintenanceText = language === 'en' ? '🔒 The bot is locked for maintenance. Please try again later!!' : MAINTENANCE_MESSAGE;
         if (ctx.callbackQuery) await ctx.answerCbQuery(maintenanceText, { show_alert: true }).catch(() => {});
         return ctx.reply(maintenanceText).catch(() => {});
     }
@@ -2823,7 +2872,7 @@ bot.use(async (ctx, next) => {
 });
 
 async function handleBotMaintenanceCommand(ctx, locked) {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminUserIdPersistent(ctx.from?.id))) return;
     try {
         await setBotLocked(locked);
         if (locked) {
@@ -2843,31 +2892,25 @@ bot.command('mokhoabot', ctx => handleBotMaintenanceCommand(ctx, false));
 bot.command('mobot', ctx => handleBotMaintenanceCommand(ctx, false));
 
 async function handleManualAdTaskLockCommand(ctx, provider, locked) {
-    if (!isAdmin(ctx)) return;
+    if (!(await isAdminUserIdPersistent(ctx.from?.id))) return;
     const normalized = String(provider || '').toLowerCase();
     try {
         await setAdTaskLock(normalized, !!locked, String(ctx.from?.id || ''));
-        if (normalized === 'adsgram') {
-            if (locked) {
-                return ctx.reply('🔒 ĐÃ KHÓA NHIỆM VỤ QC ADSGRAM\n\n📺 Người dùng không thể bắt đầu lượt QC AdsGram mới.\n♻️ Trạng thái được lưu Supabase và giữ nguyên sau restart.');
-            }
-            return ctx.reply('🔓 ĐÃ MỞ NHIỆM VỤ QC ADSGRAM');
-        }
-        if (locked) {
-            return ctx.reply('🔒 ĐÃ KHÓA NHIỆM VỤ QC MONETAG\n\n📺 Chỉ card XEM QC MONETAG bị khóa. Các Rewarded khác không bị ảnh hưởng.\n♻️ Trạng thái được lưu Supabase và giữ nguyên sau restart.');
-        }
-        return ctx.reply('🔓 ĐÃ MỞ NHIỆM VỤ QC MONETAG');
+        const label = normalized === 'adsgram' ? 'ADSGRAM' : normalized === 'monetag' ? 'MONETAG' : normalized === 'richads' ? 'RICHADS' : normalized.toUpperCase();
+        if (locked) return ctx.reply(`🔒 ĐÃ KHÓA PROVIDER ${label}\n\n📺 Mọi lượt quảng cáo mới của provider này sẽ bị server chặn trước khi SDK mở.\n♻️ Trạng thái lưu persistent trong Supabase và giữ nguyên sau restart/multi-instance.`);
+        return ctx.reply(`🔓 ĐÃ MỞ PROVIDER ${label}`);
     } catch (e) {
         console.error(`/${locked ? 'khoa' : 'mokhoa'}qc${normalized}:`, e?.message || e);
         return ctx.reply('❌ Không thể cập nhật trạng thái nhiệm vụ QC trong Supabase lúc này.');
     }
 }
-// /khoaqcadsgram và /mokhoaqcadsgram: khóa/mở riêng card QC AdsGram manual.
-// /khoaqcmonetag và /mokhoaqcmonetag: khóa/mở riêng card QC Monetag purpose=bonus-task.
+// Global provider lock: Telegram Bot và Admin Web dùng cùng app_settings key.
 bot.command('khoaqcadsgram', ctx => handleManualAdTaskLockCommand(ctx, 'adsgram', true));
 bot.command('mokhoaqcadsgram', ctx => handleManualAdTaskLockCommand(ctx, 'adsgram', false));
 bot.command('khoaqcmonetag', ctx => handleManualAdTaskLockCommand(ctx, 'monetag', true));
 bot.command('mokhoaqcmonetag', ctx => handleManualAdTaskLockCommand(ctx, 'monetag', false));
+bot.command('khoaqcrichads', ctx => handleManualAdTaskLockCommand(ctx, 'richads', true));
+bot.command('mokhoaqcrichads', ctx => handleManualAdTaskLockCommand(ctx, 'richads', false));
 
 // /addadmin <ID> - Phong 1 user làm admin phụ (CHỈ Admin chính được dùng lệnh này)
 // Admin phụ dùng được tất cả lệnh admin khác nhưng KHÔNG thể tự thêm/xoá admin (vẫn dưới quyền Admin chính).
@@ -3183,7 +3226,7 @@ async function getLatestJobMailSourceIp(userId) {
         const { data, error } = await jobMailDb().from('job_mails')
             .select('source_ip').eq('user_id', String(userId)).order('submitted_at',{ascending:false}).limit(1).maybeSingle();
         if (error) return '';
-        return String(data?.source_ip || '');
+        return normalizeIpForDuplicateCheck(data?.source_ip || '') || '';
     } catch (_) {
         return '';
     }
@@ -5003,13 +5046,12 @@ process.on('uncaughtException', (err) => {
 app.get('/api/lock-status', async (req, res) => {
     try {
         const locked = await readBotLockedPersistent({ force:true });
-        const verifiedUser = telegramUserFromRequest(req);
-        const isMainAdminRequest = verifiedUser?.id && String(verifiedUser.id) === String(ADMIN_ID);
+        const isAdminRequest = await isVerifiedAdminRequest(req);
         res.setHeader('Cache-Control','no-store');
-        return res.json({ locked: !!locked, isAdmin: !!isMainAdminRequest, message: MAINTENANCE_MESSAGE });
+        return res.json({ locked: !!locked, isAdmin: !!isAdminRequest, message: MAINTENANCE_MESSAGE });
     } catch (e) {
         console.error('Lock status read:', e?.message || e);
-        return res.status(503).json({ locked:true, stateUnavailable:true, message:MAINTENANCE_MESSAGE });
+        return res.status(503).json({ locked:true, stateUnavailable:true, isAdmin:false, message:MAINTENANCE_MESSAGE });
     }
 });
 
@@ -5049,8 +5091,7 @@ app.use('/api', async (req, res, next) => {
         return res.status(503).json({ locked:true, stateUnavailable:true, error:MAINTENANCE_MESSAGE, message:MAINTENANCE_MESSAGE });
     }
     if (locked) {
-        const verifiedUser = telegramUserFromRequest(req);
-        if (verifiedUser?.id && String(verifiedUser.id) === String(ADMIN_ID)) return next();
+        if (await isVerifiedAdminRequest(req)) return next();
         return res.status(503).json({ locked:true, error:MAINTENANCE_MESSAGE, message:MAINTENANCE_MESSAGE });
     }
     return next();
@@ -10020,6 +10061,38 @@ const ADSGRAM_BONUS_DAILY_LIMIT = 15;
 const MONETAG_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 const ADSGRAM_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 const AUTO_AD_MIN_COOLDOWN_MS = 150 * 1000;
+// RichAds TMA docs expose Promise resolve/reject for triggerInterstitialVideo(), but no publisher S2S signed completion/postback is documented.
+// Therefore server state hardens replay/idempotency/cooldown; it never treats focus/visibility/timeout as success.
+const RICHADS_PUB_ID = '1022542';
+const RICHADS_APP_ID = '8872';
+const RICHADS_DAILY_LIMIT = 15;
+const RICHADS_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
+const RICHADS_SESSION_TTL_MS = 10 * 60 * 1000;
+const RICHADS_MIN_COMPLETE_MS = 2500;
+const RICHADS_REQUIRED_USER_COLUMNS = ['richadsAdsToday','richadsDayKey','lastRichAdsAdToken','lastRichAdsRewardCoins','lastRichAdsRewardOrders','lastRichAdsCompletedAt'];
+async function richadsStorageReady(){
+    let cols=await getUserColumns();
+    if(!RICHADS_REQUIRED_USER_COLUMNS.every(c=>cols.has(c))) cols=await getUserColumns(true);
+    return RICHADS_REQUIRED_USER_COLUMNS.every(c=>cols.has(c));
+}
+function richadsSessionKey(token){return persistentEventKey('richads-session',String(token||''));}
+function richadsCompletedKey(token){return persistentEventKey('richads-completed',String(token||''));}
+function richadsActiveKey(userId){return persistentEventKey('richads-active-user',String(userId||''));}
+function richadsManualCooldownKey(userId){return persistentEventKey('richads-manual-next',String(userId||''));}
+function richadsDailyCountFromUser(user){return String(user?.richadsDayKey||'')===vietnamDayKey()?Math.max(0,Number(user?.richadsAdsToday||0)):0;}
+async function readRichadsManualNextAllowedAt(userId){return readPersistentCooldownAt(richadsManualCooldownKey(userId));}
+async function writeRichadsManualCooldown(userId,token,completedAt=Date.now()){
+    const nextAllowedAt=Number(completedAt)+RICHADS_MANUAL_COOLDOWN_MS;
+    const ok=await writePersistentEvent(richadsManualCooldownKey(userId),{status:'cooldown',provider:'richads',userId:String(userId),token:String(token||''),completedAt:Number(completedAt),nextAllowedAt},3);
+    return ok?nextAllowedAt:0;
+}
+async function releaseRichadsActive(userId,token,status='released'){
+    const active=await readPersistentEvent(richadsActiveKey(userId));
+    if(String(active?.token||'')===String(token||''))await writePersistentEvent(richadsActiveKey(userId),{...active,status,releasedAt:Date.now(),expiresAt:Date.now()-1},2).catch(()=>false);
+}
+function richadsResponseFromUser(user,token,rewardCoins,rewardOrders,nextAllowedAt,extra={}){
+    return {success:true,provider:'richads',adToken:String(token||''),purpose:'richads-manual',adsToday:Number(user?.adsToday||0),rewardedAdsToday:Number(user?.rewardedAdsToday||0),lifetimeAdsWatched:Number(user?.lifetimeAdsWatched||0),richadsAdsToday:richadsDailyCountFromUser(user),richadsDailyLimit:RICHADS_DAILY_LIMIT,richadsManualNextAllowedAt:Number(nextAllowedAt||0),nextAllowedAt:Number(nextAllowedAt||0),rewardCoins:Number(rewardCoins||0),rewardOrders:Number(rewardOrders||0),coins:Number(user?.coins||0),orders:Number(user?.orders||0),spins:Number(user?.spins||0),walletUpdatedAt:user?.walletUpdatedAt||null,completionVerification:'sdk_promise_plus_server_session',providerServerPostbackVerified:false,...extra};
+}
 function adsgramSessionKey(token){return persistentEventKey('adsgram-session',String(token||''));}
 function adsgramCompletedKey(token){return persistentEventKey('adsgram-completed',String(token||''));}
 function adsgramActiveKey(userId){return persistentEventKey('adsgram-active-user',String(userId||''));}
@@ -10177,12 +10250,8 @@ app.post('/api/adsgram/session/start',async(req,res)=>{
         const user=await loadCurrentDailyUser(userId);
         if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
         if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-        if(purpose==='adsgram-manual'||purpose==='adsgram-reward-manual'){
-            const taskLock=await readAdTaskLock('adsgram');
-            if(taskLock.locked){
-                return res.status(423).json({success:false,taskLocked:true,adsgramLocked:true,error:'Nhiệm vụ QC AdsGram đang tạm khóa.'});
-            }
-        }
+        const taskLock=await readAdTaskLock('adsgram');
+        if(taskLock.locked)return res.status(423).json({success:false,taskLocked:true,providerLocked:true,adsgramLocked:true,error:'Quảng cáo AdsGram đang tạm khóa.'});
         const bonusCount=Math.max(0,Number(user.bonusAdsToday||0));
         if(bonusCount>=ADSGRAM_BONUS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC nhận thưởng hôm nay.'});
         const now=Date.now();
@@ -10191,9 +10260,15 @@ app.post('/api/adsgram/session/start',async(req,res)=>{
         else if(purpose==='auto-ad')nextAllowedAt=await readAutoAdNextAllowedAt(userId);
         if(now<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,retryAfterMs:nextAllowedAt-now,nextAllowedAt,bonusAdsToday:bonusCount,purpose});
 
-        const monetagActive=await readPersistentEvent(persistentEventKey('ad-active-user',userId));
+        const [monetagActive,richadsActive]=await Promise.all([
+            readPersistentEvent(persistentEventKey('ad-active-user',userId)),
+            readPersistentEvent(richadsActiveKey(userId))
+        ]);
         if(monetagActive?.status==='active'&&Number(monetagActive.expiresAt||0)>now){
             return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo Monetag khác đang được xử lý.'});
+        }
+        if(richadsActive?.status==='active'&&Number(richadsActive.expiresAt||0)>now){
+            return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo RichAds khác đang được xử lý.'});
         }
         const active=await readPersistentEvent(adsgramActiveKey(userId));
         if(active&&String(active.status||'')==='active'&&Number(active.expiresAt||0)>now){
@@ -10346,6 +10421,116 @@ app.post('/api/monetag/manual/state',async(req,res)=>{
     }
 });
 
+// Provider lock snapshot để frontend không gọi SDK vô ích; session/start vẫn là chốt server-authoritative.
+app.post('/api/ad/providers/state',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    try{
+        const [adsgram,monetag,richads,user,richadsNextAllowedAt,richadsReady]=await Promise.all([readAdTaskLock('adsgram'),readAdTaskLock('monetag'),readAdTaskLock('richads'),loadCurrentDailyUser(userId),readRichadsManualNextAllowedAt(userId),richadsStorageReady()]);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const now=Date.now();
+        return res.json({success:true,adsgramLocked:!!adsgram.locked,monetagLocked:!!monetag.locked,richadsLocked:!!richads.locked||!richadsReady,richadsStorageReady:richadsReady,richadsAdsToday:richadsDailyCountFromUser(user),richadsDailyLimit:RICHADS_DAILY_LIMIT,richadsManualNextAllowedAt:richadsNextAllowedAt,richadsRetryAfterMs:Math.max(0,richadsNextAllowedAt-now),richadsCooldown:now<richadsNextAllowedAt});
+    }catch(e){console.error('Provider state:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không đọc được trạng thái provider.'});}
+});
+
+app.post('/api/richads/manual/state',async(req,res)=>{
+    const userId=String(req.body?.userId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    try{
+        const [user,nextAllowedAt,taskLock,storageReady]=await Promise.all([loadCurrentDailyUser(userId),readRichadsManualNextAllowedAt(userId),readAdTaskLock('richads'),richadsStorageReady()]);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        const now=Date.now();
+        return res.json({success:true,storageReady,richadsLocked:!!taskLock.locked||!storageReady,richadsAdsToday:richadsDailyCountFromUser(user),dailyLimit:RICHADS_DAILY_LIMIT,richadsManualNextAllowedAt:nextAllowedAt,nextAllowedAt,retryAfterMs:Math.max(0,nextAllowedAt-now),cooldown:now<nextAllowedAt,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID,setupRequired:!storageReady});
+    }catch(e){console.error('RichAds manual state:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không đọc được trạng thái RichAds.'});}
+});
+
+app.post('/api/richads/session/start',async(req,res)=>{
+    const userId=String(req.body?.userId||''),actionId=String(req.body?.actionId||'').slice(0,180),sessionId=String(req.body?.sessionId||'').slice(0,180);
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    if(!actionId)return res.status(400).json({success:false,error:'Thiếu actionId RichAds.'});
+    let release=null;
+    try{
+        release=await acquirePersistentLeaseLock(persistentEventKey('ad-start-user-lock',userId),30*1000);
+        if(!release)return res.status(409).json({success:false,retry:true,error:'Đang tạo phiên RichAds cho tài khoản này.'});
+        if(!(await richadsStorageReady()))return res.status(503).json({success:false,setupRequired:true,richadsLocked:true,error:'RichAds chưa sẵn sàng: cần chạy block SQL 4B ở đầu server.js.'});
+        const [providerLock,user,nextAllowedAt]=await Promise.all([readAdTaskLock('richads'),loadCurrentDailyUser(userId),readRichadsManualNextAllowedAt(userId)]);
+        if(providerLock.locked)return res.status(423).json({success:false,taskLocked:true,providerLocked:true,richadsLocked:true,error:'Quảng cáo RichAds đang tạm khóa.'});
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const count=richadsDailyCountFromUser(user),now=Date.now();
+        if(count>=RICHADS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,richadsAdsToday:count,error:'Đã hết 15 lượt RichAds hôm nay.'});
+        if(now<nextAllowedAt)return res.status(429).json({success:false,cooldown:true,nextAllowedAt,retryAfterMs:nextAllowedAt-now,richadsAdsToday:count,error:'RichAds đang trong thời gian chờ 10 phút.'});
+        const [monetagActive,adsgramActive,richadsActive]=await Promise.all([readPersistentEvent(persistentEventKey('ad-active-user',userId)),readPersistentEvent(adsgramActiveKey(userId)),readPersistentEvent(richadsActiveKey(userId))]);
+        if(monetagActive?.status==='active'&&Number(monetagActive.expiresAt||0)>now)return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo Monetag khác đang được xử lý.'});
+        if(adsgramActive?.status==='active'&&Number(adsgramActive.expiresAt||0)>now)return res.status(409).json({success:false,retry:true,active:true,error:'Một quảng cáo AdsGram khác đang được xử lý.'});
+        if(richadsActive?.status==='active'&&Number(richadsActive.expiresAt||0)>now&&richadsActive.token){
+            const existing=await readPersistentEvent(richadsSessionKey(richadsActive.token));
+            if(existing&&String(existing.actionId||'')===actionId&&String(existing.sessionId||'')===sessionId)return res.json({success:true,token:String(richadsActive.token),idempotent:true,recovered:true,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID});
+            return res.status(409).json({success:false,retry:true,active:true,error:'Một phiên RichAds khác đang hoạt động.'});
+        }
+        const token=crypto.randomBytes(24).toString('base64url'),startedAt=Date.now(),expiresAt=startedAt+RICHADS_SESSION_TTL_MS;
+        const session={status:'started',provider:'richads',userId,token,actionId,sessionId,startedAt,expiresAt};
+        if(!(await writePersistentEvent(richadsSessionKey(token),session,3)))return res.status(503).json({success:false,retry:true,error:'Không lưu được phiên RichAds.'});
+        if(!(await writePersistentEvent(richadsActiveKey(userId),{status:'active',provider:'richads',userId,token,actionId,sessionId,startedAt,expiresAt},3))){await writePersistentEvent(richadsSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},1).catch(()=>false);return res.status(503).json({success:false,retry:true,error:'Không khóa được phiên RichAds.'});}
+        return res.json({success:true,token,pubId:RICHADS_PUB_ID,appId:RICHADS_APP_ID,dailyLimit:RICHADS_DAILY_LIMIT,cooldownMs:RICHADS_MANUAL_COOLDOWN_MS});
+    }catch(e){console.error('RichAds session start:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không bắt đầu được RichAds.'});}
+    finally{if(release){try{await release();}catch(_){}}}
+});
+
+app.post('/api/richads/session/cancel',async(req,res)=>{
+    const userId=String(req.body?.userId||''),token=String(req.body?.token||''),actionId=String(req.body?.actionId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!token)return res.status(400).json({success:false,error:'Thiếu token RichAds.'});
+    try{const session=await readPersistentEvent(richadsSessionKey(token));if(!session||String(session.userId||'')!==userId)return res.status(400).json({success:false,error:'Phiên RichAds không hợp lệ.'});if(actionId&&session.actionId&&String(session.actionId)!==actionId)return res.status(400).json({success:false,error:'Action RichAds không khớp.'});if(String(session.status||'')==='completed')return res.json({success:true,cancelled:false,completed:true});await writePersistentEvent(richadsSessionKey(token),{...session,status:'cancelled',cancelledAt:Date.now(),expiresAt:Date.now()-1},2);await releaseRichadsActive(userId,token,'cancelled');return res.json({success:true,cancelled:true});}
+    catch(e){return res.status(503).json({success:false,retry:true,error:'Không cleanup được phiên RichAds.'});}
+});
+
+app.post('/api/richads/session/complete',async(req,res)=>{
+    const userId=String(req.body?.userId||''),token=String(req.body?.token||''),actionId=String(req.body?.actionId||''),sessionId=String(req.body?.sessionId||'');
+    if(!assertTelegramUser(req,userId))return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
+    if(!requireTelegramMobile(req,res))return;
+    if(!token)return res.status(400).json({success:false,error:'Thiếu token RichAds.'});
+    if(!(await richadsStorageReady().catch(()=>false)))return res.status(503).json({success:false,setupRequired:true,error:'RichAds chưa sẵn sàng: cần chạy block SQL 4B ở đầu server.js.'});
+    let release=null;
+    try{
+        release=await acquirePersistentLeaseLock(persistentEventKey('richads-complete-user-lock',userId),60*1000);
+        if(!release)return res.status(409).json({success:false,retry:true,error:'Lượt RichAds đang được xử lý.'});
+        const completed=await readPersistentEvent(richadsCompletedKey(token));
+        if(completed?.result&&String(completed.userId||'')===userId){await releaseRichadsActive(userId,token,'completed');return res.json({...completed.result,idempotent:true});}
+        const session=await readPersistentEvent(richadsSessionKey(token));
+        if(!session||String(session.userId||'')!==userId||String(session.status||'')!=='started')return res.status(400).json({success:false,error:'Phiên RichAds không hợp lệ.'});
+        const now=Date.now();
+        if(Number(session.expiresAt||0)<=now){await writePersistentEvent(richadsSessionKey(token),{...session,status:'expired',expiresAt:now-1},1).catch(()=>false);await releaseRichadsActive(userId,token,'expired');return res.status(410).json({success:false,expired:true,error:'Phiên RichAds đã hết hạn.'});}
+        if(session.actionId&&String(session.actionId)!==actionId)return res.status(400).json({success:false,error:'Action RichAds không khớp.'});
+        if(session.sessionId&&String(session.sessionId)!==sessionId)return res.status(400).json({success:false,error:'Telegram Mini App session không khớp.'});
+        const elapsed=now-Number(session.startedAt||now);
+        if(elapsed<RICHADS_MIN_COMPLETE_MS)return res.status(400).json({success:false,tooEarly:true,error:'RichAds kết thúc quá nhanh để ghi nhận.'});
+        let user=await loadCurrentDailyUser(userId);
+        if(!user)return res.status(404).json({success:false,error:'Không tìm thấy user.'});
+        if(user.isBanned)return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
+        const completedAt=Date.now();
+        if(String(user.lastRichAdsAdToken||'')===token){let nextAllowedAt=await readRichadsManualNextAllowedAt(userId);if(!nextAllowedAt)nextAllowedAt=await writeRichadsManualCooldown(userId,token,Number(user.lastRichAdsCompletedAt||completedAt));const fresh=(await readUserRow(userId)).data||user;const result=richadsResponseFromUser(fresh,token,Number(fresh.lastRichAdsRewardCoins||0),Number(fresh.lastRichAdsRewardOrders||0),nextAllowedAt,{elapsed});await writePersistentEvent(richadsCompletedKey(token),{status:'completed',userId,token,completedAt,result},3);await releaseRichadsActive(userId,token,'completed');return res.json({...result,idempotent:true,recovered:true});}
+        const count=richadsDailyCountFromUser(user);
+        if(count>=RICHADS_DAILY_LIMIT)return res.status(429).json({success:false,limitReached:true,richadsAdsToday:count,error:'Đã hết 15 lượt RichAds hôm nay.'});
+        const nextBefore=await readRichadsManualNextAllowedAt(userId);if(Date.now()<nextBefore)return res.status(429).json({success:false,cooldown:true,nextAllowedAt:nextBefore,retryAfterMs:nextBefore-Date.now(),richadsAdsToday:count,error:'RichAds đang trong thời gian chờ 10 phút.'});
+        const preRisk=await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:false,countAction:false,sessionId,checkDuplicateIp:true});if(preRisk.blockedReward)return res.status(429).json({success:false,verificationRequired:true,riskScore:preRisk.score,error:'Reward quảng cáo đang tạm giữ để kiểm tra bảo mật.'});
+        const rewardCoins=crypto.randomInt(10,26),rewardOrders=crypto.randomInt(10,26);
+        const updateFields={adsToday:Number(user.adsToday||0)+1,rewardedAdsToday:Number(user.rewardedAdsToday||0)+1,lifetimeAdsWatched:Number(user.lifetimeAdsWatched||0)+1,richadsAdsToday:count+1,richadsDayKey:vietnamDayKey(),lastRichAdsAdToken:token,lastRichAdsRewardCoins:rewardCoins,lastRichAdsRewardOrders:rewardOrders,lastRichAdsCompletedAt:completedAt,lastResetDate:vietnamDayKey()};
+        const mutation=await atomicWalletMutation(userId,{deltaCoins:rewardCoins,deltaOrders:rewardOrders,setFields:updateFields});if(mutation.error)return res.status(409).json({success:false,retry:true,error:mutation.error.message});
+        if(!(await flushUserExtra()))return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'RichAds đã được ghi nhận nhưng trạng thái user đang đồng bộ. Không cần xem lại QC.'});
+        const nextAllowedAt=await writeRichadsManualCooldown(userId,token,completedAt);if(!nextAllowedAt)return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward RichAds đã commit nhưng cooldown đang đồng bộ. Không cần xem lại QC.'});
+        const fresh=(await readUserRow(userId)).data||{};const result=richadsResponseFromUser(fresh,token,rewardCoins,rewardOrders,nextAllowedAt,{elapsed});
+        if(!(await writePersistentEvent(richadsCompletedKey(token),{status:'completed',userId,token,completedAt,result},3)))return res.status(503).json({success:false,retry:true,verified:true,adToken:token,error:'Reward RichAds đã commit nhưng marker completion đang đồng bộ. Không cần xem lại QC.'});
+        await writePersistentEvent(richadsSessionKey(token),{...session,status:'completed',completedAt},2).catch(()=>false);await releaseRichadsActive(userId,token,'completed');
+        await recordAntiFraudEvent(userId,'ad',{reactionTime:elapsed,ip:requestIp(req),rewardEvent:true,coins:rewardCoins,orders:rewardOrders,sessionId,purpose:'richads-manual',provider:'richads'}).catch(()=>{});insertRowSafe('ad_events',{user_id:userId,ad_type:'rewarded',status:'success',purpose:'richads-manual',provider:'richads',ip:requestIp(req),created_at:new Date().toISOString()}).catch(()=>{});logTransaction(userId,'coin',rewardCoins,'Xem 1 QC RichAds hợp lệ');logTransaction(userId,'orders',rewardOrders,'Xem 1 QC RichAds hợp lệ');try{await tryFinalizeReferral(userId);}catch(_){}try{result.tutorial=await maybeCompleteNewUserTutorial(userId);}catch(_){}
+        return res.json(result);
+    }catch(e){console.error('RichAds session complete:',e?.message||e);return res.status(503).json({success:false,retry:true,error:'Không hoàn tất được RichAds. Vui lòng thử lại.'});}
+    finally{if(release){try{await release();}catch(_){}}}
+});
+
 app.post('/api/ad/session/start', async (req, res) => {
     const authUserId = String(req.body?.userId || '');
     if (!assertTelegramUser(req, authUserId)) return res.status(401).json({success:false,error:'Telegram session không hợp lệ.'});
@@ -10372,6 +10557,8 @@ app.post('/api/ad/session/start', async (req, res) => {
         if (!releasePersistentAdStartLock) {
             return res.status(409).json({success:false,retry:true,error:'Đang tạo phiên Rewarded cho tài khoản này.'});
         }
+        const monetagProviderLock = await readAdTaskLock('monetag');
+        if (monetagProviderLock.locked) return res.status(423).json({success:false,taskLocked:true,providerLocked:true,monetagLocked:true,error:'Quảng cáo Monetag đang tạm khóa.'});
 
         let deliveryCaptchaBinding = { protected:false, token:'', state:null };
         if (sessionPurpose === 'delivery') {
@@ -10443,10 +10630,6 @@ app.post('/api/ad/session/start', async (req, res) => {
             const bonusUser = await loadCurrentDailyUser(normalizedUserId);
             if (!bonusUser) return res.status(404).json({success:false,error:'Không tìm thấy user.'});
             if (bonusUser.isBanned) return res.status(403).json({success:false,isBanned:true,error:'Tài khoản đã bị khóa.'});
-            const taskLock = await readAdTaskLock('monetag');
-            if (taskLock.locked) {
-                return res.status(423).json({success:false,taskLocked:true,monetagLocked:true,error:'Nhiệm vụ QC Monetag đang tạm khóa.'});
-            }
             const bonusCount = Math.max(0, Number(bonusUser.bonusAdsToday || 0));
             if (bonusCount >= 15) {
                 return res.status(429).json({success:false,limitReached:true,bonusAdsToday:bonusCount,error:'Đã hết 15 lượt QC Rewarded hôm nay.'});
@@ -10501,9 +10684,15 @@ app.post('/api/ad/session/start', async (req, res) => {
             }
         }
 
-        const adsgramActive=await readPersistentEvent(adsgramActiveKey(normalizedUserId));
+        const [adsgramActive,richadsActive]=await Promise.all([
+            readPersistentEvent(adsgramActiveKey(normalizedUserId)),
+            readPersistentEvent(richadsActiveKey(normalizedUserId))
+        ]);
         if(adsgramActive?.status==='active'&&Number(adsgramActive.expiresAt||0)>Date.now()){
             return res.status(409).json({success:false,retry:true,active:true,error:'Đang có một quảng cáo AdsGram được xử lý cho tài khoản này.'});
+        }
+        if(richadsActive?.status==='active'&&Number(richadsActive.expiresAt||0)>Date.now()){
+            return res.status(409).json({success:false,retry:true,active:true,error:'Đang có một quảng cáo RichAds được xử lý cho tài khoản này.'});
         }
 
         let existingToken = activeAdByUser.get(normalizedUserId);
@@ -12177,7 +12366,7 @@ async function adminGetUserDetail(userId){
     const successStatuses=new Set(['success','approved','completed']),cancelledStatuses=new Set(['cancelled','rejected','refunded']);
     const totalWithdrawn=withdrawals.filter(w=>successStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
     const totalCancelled=withdrawals.filter(w=>cancelledStatuses.has(String(w.status||'').toLowerCase())).reduce((s,w)=>s+Number(w.amount||0),0);
-    return {user:{...user,id},risk:{score:Math.max(0,Math.min(100,Number(risk.score||0))),level:risk.level||'LOW',reasons:risk.reasons||[]},duplicates,withdrawal:{totalWithdrawn,totalCancelled,latest:latestWithdrawal,latestIp:withdrawalIp},jobMail:{...mailStats,lastIp:lastMailIp||''},linkTask:linkStats,transactions:transactionsResult.data||[]};
+    return {user:{...user,id,ip:activeIp},risk:{score:Math.max(0,Math.min(100,Number(risk.score||0))),level:risk.level||'LOW',reasons:risk.reasons||[]},duplicates,withdrawal:{totalWithdrawn,totalCancelled,latest:latestWithdrawal,latestIp:withdrawalIp},jobMail:{...mailStats,lastIp:normalizeIpForDuplicateCheck(lastMailIp)||''},linkTask:linkStats,ads:{adsgramToday:null,monetagToday:null,richadsToday:richadsDailyCountFromUser(user)},transactions:transactionsResult.data||[]};
 }
 async function adminDashboardStats(force=false){
     if(!force&&adminDashboardCache&&Date.now()-adminDashboardCache.cachedAt<20000)return adminDashboardCache.value;
@@ -12204,7 +12393,8 @@ async function adminDashboardStats(force=false){
 
     // No existing RPC exposes these activity counters. Read only the minimum non-wallet columns required
     // for real dashboard numbers; never synthesize chart/history data.
-    const activityCols=['adsToday','rewardedAdsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt'].filter(c=>cols.has(c));
+    const activityCols=['adsToday','rewardedAdsToday','smartlinksToday','lifetimeAdsWatched','lifetimeSmartlinks','chestOpensTotal','validInvites','accountCreatedAt','richadsAdsToday','richadsDayKey'].filter(c=>cols.has(c));
+    let richadsToday=0;
     let offset=0,pageSize=1000;
     while(activityCols.length&&offset<200000){
         const {data,error}=await db.from('users').select(activityCols.join(',')).range(offset,offset+pageSize-1);
@@ -12218,11 +12408,14 @@ async function adminDashboardStats(force=false){
             totals.adsToday+=Number(u.adsToday||0);
             totals.rewardedAdsToday+=Number(u.rewardedAdsToday||0);
             totals.smartlinksToday+=Number(u.smartlinksToday||0);
+            if(String(u.richadsDayKey||'')===vietnamDayKey())richadsToday+=Number(u.richadsAdsToday||0);
             if(u.accountCreatedAt&&u.accountCreatedAt>=bounds.start&&u.accountCreatedAt<bounds.end)totals.newUsersToday++;
         }
         if(data.length<pageSize)break;
         offset+=pageSize;
     }
+
+    if(!cols.has('richadsAdsToday')){try{const extraAll=await getUserExtraAll();for(const extra of Object.values(extraAll||{}))if(String(extra?.richadsDayKey||'')===vietnamDayKey())richadsToday+=Number(extra?.richadsAdsToday||0);}catch(e){console.error('Admin RichAds aggregate:',e?.message||e);}}
 
     const [linkStats,jobStats,pendingWd,successWd,rejectedWd,refundedWd,todayWd,todayLink,linkDbReady]=await Promise.all([
         getLinkTaskGlobalStats().catch(()=>({completed:0,rewardOrders:0})),
@@ -12243,7 +12436,7 @@ async function adminDashboardStats(force=false){
         if(data.length<1000)break;
         wdOffset+=1000;
     }
-    const freshBotLocked=await readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED);
+    const [freshBotLocked,adsgramLock,monetagLock,richadsLock,richadsReady]=await Promise.all([readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED),readAdTaskLock('adsgram').catch(()=>normalizeAdTaskLockValue('adsgram',null)),readAdTaskLock('monetag').catch(()=>normalizeAdTaskLockValue('monetag',null)),readAdTaskLock('richads').catch(()=>normalizeAdTaskLockValue('richads',null)),richadsStorageReady().catch(()=>false)]);
     const value={
         ...totals,totalLinkTasks:Number(linkStats.completed||0),linkRewardOrders:Number(linkStats.rewardOrders||0),
         totalWithdrawn,
@@ -12253,7 +12446,7 @@ async function adminDashboardStats(force=false){
         refundedWithdrawals:Number(refundedWd.count||0),
         withdrawalsToday:Number(todayWd.count||0),
         linkTasksToday:Number(todayLink.count||0),jobMail:jobStats,botLocked:!!freshBotLocked,
-        adsgramToday:null,monetagToday:null, // schema hiện tại không có provider-specific daily aggregate đáng tin cậy; UI hiển thị N/A, không fake.
+        adsgramToday:null,monetagToday:null,richadsToday,richadsStorageReady:!!richadsReady,providerLocks:{adsgram:!!adsgramLock.locked,monetag:!!monetagLock.locked,richads:!!richadsLock.locked||!richadsReady}, // AdsGram/Monetag không có aggregate provider đáng tin cậy; RichAds có counter server-side riêng.
         supabaseReady,linkTaskDbReady:!!linkDbReady?.ready,trustProxy:TRUST_PROXY_SETTING===false?'DIRECT / 0 HOP':`${TRUST_PROXY_SETTING} HOP`,
         uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),
         nodeVersion:process.version,pid:process.pid,webAppUrl:String(WEB_APP_URL||'')
@@ -12311,13 +12504,14 @@ app.get('/api/admin/users',requireAdminWebSession,async(req,res)=>{
         if(cols.has('isBanned')&&banned!=='all')q=q.eq('isBanned',banned==='true');
         const {data,error,count}=await q;if(error)throw error;const rows=data||[];
         const ips=[...new Set(rows.map(r=>normalizeIpForDuplicateCheck(r.ip)).filter(Boolean))],duplicateCounts={};
-        await Promise.all(ips.slice(0,50).map(async ip=>{const c=await adminDb().from('users').select('id',{count:'exact',head:true}).eq('ip',ip);duplicateCounts[ip]=Number(c.count||0);}));
+        await Promise.all(ips.slice(0,50).map(async ip=>{const c=await adminDb().from('users').select('id',{count:'exact',head:true}).in('ip',canonicalIpVariants(ip));duplicateCounts[ip]=Number(c.count||0);}));
         const enriched=await Promise.all(rows.map(async r=>{
-            let riskScore=0,riskLevel='LOW',linkTaskCompleted=0;
+            let riskScore=0,riskLevel='LOW',linkTaskCompleted=0,richadsToday=0;
             try{const af=await getAntiFraudState(String(r.id));riskScore=Number(af.stats?.score||0);riskLevel=String(af.stats?.level||'LOW');}catch(_){}
             try{const lt=await getLinkTaskUserStats(String(r.id));linkTaskCompleted=Number(lt.completed||0);}catch(_){}
+            try{const full=(await readUserRow(String(r.id))).data||r;richadsToday=richadsDailyCountFromUser(full);}catch(_){}
             const ip=normalizeIpForDuplicateCheck(r.ip);
-            return {...r,riskScore,riskLevel,linkTaskCompleted,adsgramToday:null,monetagToday:null,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};
+            return {...r,ip,riskScore,riskLevel,linkTaskCompleted,adsgramToday:null,monetagToday:null,richadsToday,duplicateIpCount:ip?Number(duplicateCounts[ip]||0):0};
         }));
         return res.json({success:true,page,limit,total:Number(count||0),sort:sortField,dir:ascending?'asc':'desc',users:enriched});
     }catch(e){console.error('Admin users:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được danh sách người dùng.'});}
@@ -12344,7 +12538,7 @@ app.get('/api/admin/withdrawals',requireAdminWebSession,async(req,res)=>{try{con
 app.post('/api/admin/withdrawals/:id/action',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),map={approve:'success',reject:'rejected',refund:'refunded'},status=map[action];if(!status)return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});const result=await adminProcessWithdrawal(req.params.id,status,req.body?.reason,adminActor(req),true);adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được đơn rút.').slice(0,220)});}});
 app.get('/api/admin/link-tasks',requireAdminWebSession,async(req,res)=>{try{const [locks,dbReady]=await Promise.all([readLinkTaskAdminLockMap(),checkLinkTaskDatabaseReadiness({force:req.query.force==='1'})]);const bounds=vietnamDayBoundsIso();const tasks=await Promise.all(Object.values(LINK_TASK_CONFIG).map(async cfg=>{let rewardedToday=0,activeAttempts=0,lastProviderError='';try{const db=linkTaskDb();const [r,a,last]=await Promise.all([db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).eq('status','rewarded').gte('rewarded_at',bounds.start).lt('rewarded_at',bounds.end),db.from('link_task_attempts').select('id',{count:'exact',head:true}).eq('task_id',cfg.taskId).in('status',LINK_TASK_ACTIVE_STATUSES),db.from('link_task_attempts').select('metadata,created_at').eq('task_id',cfg.taskId).eq('status','cancelled').order('created_at',{ascending:false}).limit(1).maybeSingle()]);rewardedToday=Number(r.count||0);activeAttempts=Number(a.count||0);lastProviderError=adminSafeText(last.data?.metadata?.providerError||'',180);}catch(_){}return {id:cfg.taskId,name:cfg.provider,rewardOrders:cfg.rewardOrders,quotaType:cfg.quotaType,maxPerIp:cfg.maxPerIp,maxPerDevice:cfg.maxPerDevice,maxPerDeviceIp:cfg.maxPerDeviceIp||0,rule:linkTaskRuleText(cfg),envConfigured:linkTaskProviderConfigured(cfg),adminLocked:!!locks[cfg.taskId]?.locked,rewardedToday,activeAttempts,lastProviderError};}));return res.json({success:true,tasks,diagnostic:{serviceRole:!!SUPABASE_SERVICE_ROLE_KEY,ipHashSecret:!!IP_HASH_SECRET,ipIntelligence:!!IP_INTELLIGENCE_API_KEY,ipIntelligenceOptional:true,database:dbReady,network:requestNetworkDiagnostic(req),webAppUrl:String(WEB_APP_URL||'')}});}catch(e){console.error('Admin link tasks:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được Link Task diagnostic.'});}});
 app.post('/api/admin/link-tasks/:id/lock',requireAdminWebMutation,async(req,res)=>{try{const id=String(req.params.id||''),locked=req.body?.locked===true;if(!LINK_TASK_CONFIG[id])return res.status(400).json({success:false,error:'Nhiệm vụ không hợp lệ.'});const state=await setLinkTaskAdminLock(id,locked,adminActor(req));await writeAdminAudit(adminActor(req),locked?'lock_link_task':'unlock_link_task',id,{});return res.json({success:true,state});}catch(e){return res.status(500).json({success:false,error:'Không cập nhật được trạng thái nhiệm vụ.'});}});
-app.get('/api/admin/job-mails',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,160);let q=jobMailDb().from('job_mails').select('*',{count:'exact'}).order('submitted_at',{ascending:false}).range(offset,offset+limit-1);if(['pending','approved','rejected'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('user_id',qtext);else q=q.ilike('email_original',`%${qtext.replace(/[%_]/g,'\\$&')}%`);}const [{data,error,count},stats,availability]=await Promise.all([q,getJobMailGlobalStats(),getJobMailAvailability()]);if(error)throw error;return res.json({success:true,page,limit,total:Number(count||0),mails:data||[],stats,availability});}catch(e){console.error('Admin job mail:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được JOB MAIL.'});}});
+app.get('/api/admin/job-mails',requireAdminWebSession,async(req,res)=>{try{const page=adminPage(req.query.page),limit=adminLimit(req.query.limit,25,50),offset=(page-1)*limit,status=String(req.query.status||'pending'),qtext=adminSafeText(req.query.q,160);let q=jobMailDb().from('job_mails').select('*',{count:'exact'}).order('submitted_at',{ascending:false}).range(offset,offset+limit-1);if(['pending','approved','rejected'].includes(status))q=q.eq('status',status);if(qtext){if(/^\d+$/.test(qtext))q=q.eq('user_id',qtext);else q=q.ilike('email_original',`%${qtext.replace(/[%_]/g,'\\$&')}%`);}const [{data,error,count},stats,availability]=await Promise.all([q,getJobMailGlobalStats(),getJobMailAvailability()]);if(error)throw error;const mails=(data||[]).map(m=>({...m,source_ip:normalizeIpForDuplicateCheck(m.source_ip)||''}));return res.json({success:true,page,limit,total:Number(count||0),mails,stats,availability});}catch(e){console.error('Admin job mail:',e?.message||e);return res.status(500).json({success:false,error:'Không tải được JOB MAIL.'});}});
 app.post('/api/admin/job-mails/:id/action',requireAdminWebMutation,async(req,res)=>{try{const result=await adminJobMailAction(req.params.id,String(req.body?.action||''),req.body?.reason,adminActor(req));adminDashboardCache=null;return res.json({success:true,result});}catch(e){return res.status(409).json({success:false,error:String(e?.message||'Không xử lý được JOB MAIL.').slice(0,220)});}});
 app.post('/api/admin/job-mail/user/:id',requireAdminWebMutation,async(req,res)=>{try{const action=String(req.body?.action||''),banned=action==='ban';if(!['ban','unban'].includes(action))return res.status(400).json({success:false,error:'Thao tác không hợp lệ.'});const result=await adminSetJobMailBan(req.params.id,banned,adminActor(req));return res.json({success:true,result});}catch(e){return res.status(400).json({success:false,error:String(e?.message||'Không cập nhật được user.').slice(0,220)});}});
 app.post('/api/admin/job-mail/lock',requireAdminWebMutation,async(req,res)=>{try{const locked=req.body?.locked===true;await setJobMailManualLocked(locked);await writeAdminAudit(adminActor(req),locked?'lock_job_mail':'unlock_job_mail','job_mail',{});return res.json({success:true,availability:await getJobMailAvailability()});}catch(e){return res.status(500).json({success:false,error:'Không cập nhật được JOB MAIL.'});}});
@@ -12360,11 +12554,13 @@ app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{
     const db=await checkLinkTaskDatabaseReadiness({force:req.query.force==='1'}).catch(()=>({ready:false}));
     let supabaseOk=false;try{const x=await adminDb().from('users').select('id',{count:'exact',head:true});supabaseOk=!x.error;}catch(_){}
     let audit=[];try{const {data}=await adminDb().from('app_settings').select('key,value').like('key','admin_audit:%').order('key',{ascending:false}).limit(30);audit=(data||[]).map(r=>r.value);}catch(_){}
-    const [botLocked,adsgramTaskLock,monetagTaskLock,adsgramDiagnostics]=await Promise.all([
+    const [botLocked,adsgramTaskLock,monetagTaskLock,richadsTaskLock,adsgramDiagnostics,richadsReady]=await Promise.all([
         readBotLockedPersistent({force:true}).catch(()=>BOT_LOCKED),
         readAdTaskLock('adsgram').catch(()=>normalizeAdTaskLockValue('adsgram',null)),
         readAdTaskLock('monetag').catch(()=>normalizeAdTaskLockValue('monetag',null)),
-        readAdsgramDiagnostics().catch(()=>({interstitial:null,reward:null}))
+        readAdTaskLock('richads').catch(()=>normalizeAdTaskLockValue('richads',null)),
+        readAdsgramDiagnostics().catch(()=>({interstitial:null,reward:null})),
+        richadsStorageReady().catch(()=>false)
     ]);
     return res.json({success:true,system:{
         botLocked:!!botLocked,maintenanceMessage:MAINTENANCE_MESSAGE,uptimeSeconds:Math.floor(process.uptime()),startedAt:new Date(SERVER_BOOTED_AT).toISOString(),
@@ -12376,6 +12572,7 @@ app.get('/api/admin/system',requireAdminWebSession,async(req,res)=>{try{
             adsgramProviderState:'NOT_VERIFIED_FROM_SOURCE',
             adsgramLocked:!!adsgramTaskLock.locked,
             monetagLocked:!!monetagTaskLock.locked,
+            richadsLocked:!!richadsTaskLock.locked,richadsStorageReady:!!richadsReady,richadsPubId:RICHADS_PUB_ID,richadsAppId:RICHADS_APP_ID,richadsDailyLimit:RICHADS_DAILY_LIMIT,richadsManualCooldownMinutes:Math.round(RICHADS_MANUAL_COOLDOWN_MS/60000),
             adsgramDiagnostics,
             adsgramManualCooldownMinutes:Math.round(ADSGRAM_MANUAL_COOLDOWN_MS/60000),
             monetagManualCooldownMinutes:Math.round(MONETAG_MANUAL_COOLDOWN_MS/60000),
@@ -12393,6 +12590,8 @@ app.post('/api/admin/system/action',requireAdminWebMutation,async(req,res)=>{try
     else if(action==='unlockAdsgram')await setAdTaskLock('adsgram',false,actor);
     else if(action==='lockMonetag')await setAdTaskLock('monetag',true,actor);
     else if(action==='unlockMonetag')await setAdTaskLock('monetag',false,actor);
+    else if(action==='lockRichads')await setAdTaskLock('richads',true,actor);
+    else if(action==='unlockRichads')await setAdTaskLock('richads',false,actor);
     else if(action==='banIp')return res.json({success:true,result:await adminBanIp(req.body?.ip,actor)});
     else if(action==='resetAll'){
         if(String(req.body?.confirmText||'')!=='RESET ALL DATA')return res.status(400).json({success:false,error:'Nhập chính xác RESET ALL DATA để xác nhận.'});
@@ -12420,6 +12619,8 @@ return String.raw`<!DOCTYPE html>
 @media(max-width:1180px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.subgrid{grid-template-columns:repeat(3,minmax(0,1fr))}.link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.command-hero{grid-template-columns:minmax(0,1fr) 320px}}
 @media(max-width:820px){.sidebar{transform:translateX(-105%);transition:transform .22s ease;width:min(300px,86vw)}.sidebar.open{transform:translateX(0)}.drawer-overlay{display:block;position:fixed;inset:0;background:#0009;z-index:35;opacity:0;pointer-events:none;transition:.22s}.drawer-overlay.show{opacity:1;pointer-events:auto}.main{margin-left:0;padding:0 14px 48px}.topbar{margin:0 -14px 15px;padding:10px 14px;min-height:66px}.menu-btn{display:inline-flex}.top-actions .pill{display:none}.command-hero{grid-template-columns:1fr;padding:17px}.hero-panel{grid-template-columns:1fr 1fr}.grid,.subgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.link-grid,.detail-sections{grid-template-columns:1fr}.toolbar .field,.toolbar .grow{width:100%;min-width:0}.toolbar .btn{flex:1}.top-title{font-size:18px}.card{padding:13px}}
 @media(max-width:460px){.grid,.subgrid{grid-template-columns:1fr 1fr}.stat .v{font-size:19px}.hero-panel{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr}.modal{padding:8px}.modal-card{padding:13px;border-radius:18px}.top-kicker{display:none}.command-hero{padding:15px;border-radius:19px}.hero-title{font-size:25px}.hero-copy{font-size:11px}}
+/* Cinematic Logistics layer: CSS-only, keeps strict CSP and business DOM intact. */
+.sidebar:before{content:'📦';position:absolute;right:18px;top:18px;font-size:44px;opacity:.07;filter:drop-shadow(0 0 18px rgba(255,201,74,.4));pointer-events:none}.side-brand{position:relative;border:1px solid rgba(62,231,255,.12);border-radius:17px;background:linear-gradient(145deg,rgba(21,55,86,.72),rgba(8,24,40,.4));margin-bottom:10px}.nav-btn{min-height:44px}.nav-btn.active{box-shadow:inset 3px 0 0 var(--cyan),0 8px 22px rgba(0,0,0,.16)}.section-head{min-height:84px}.section-head:before{content:'🚚  ▰ ▰ ▰';position:absolute;right:28px;bottom:10px;font-size:25px;letter-spacing:5px;opacity:.055;pointer-events:none}.command-hero{min-height:220px}.command-hero:before{content:'🏭   🚚   📦 📦';position:absolute;right:25px;bottom:18px;font-size:34px;letter-spacing:8px;opacity:.10;pointer-events:none}.card,.status-box,.link-card{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}.card:hover,.link-card:hover{box-shadow:0 22px 55px rgba(0,0,0,.25),0 0 0 1px rgba(62,231,255,.05)}.stat .ico{display:inline-grid;place-items:center;width:31px;height:31px;border-radius:10px;background:rgba(62,231,255,.08);margin-right:4px}.table-wrap{border-color:#2b4f6f}tbody tr:nth-child(2n) td{background:rgba(12,31,50,.28)}.tag.good{box-shadow:0 0 0 1px rgba(72,231,162,.14)}.tag.bad{box-shadow:0 0 0 1px rgba(255,112,128,.15)}
 </style></head><body>
 <div id="toast" class="toast hidden"></div>
 <div id="loginView" class="login"><form id="loginForm" class="login-card" autocomplete="off"><div class="brand">🚚 Logistics Command Center</div><div class="brand-sub">SECURE ADMIN CONSOLE</div><input id="loginUser" class="field" placeholder="Tài khoản" autocomplete="username" required><div style="height:9px"></div><input id="loginPass" class="field" type="password" placeholder="Mật khẩu" autocomplete="current-password" required><div style="height:12px"></div><button class="btn primary" style="width:100%">Đăng nhập an toàn</button><p id="loginError" class="muted" style="font-size:11px"></p></form></div>
@@ -12456,7 +12657,7 @@ return String.raw`<!DOCTYPE html>
 <section id="sec-users" class="section">
   <div class="section-head"><div><h2>Quản lý người dùng</h2><p>IP gần nhất chỉ lấy từ canonical users.ip; event IP được giữ riêng.</p></div></div>
   <div class="toolbar"><input id="userSearch" class="field grow" placeholder="Tìm ID hoặc tên"><select id="userBanned" class="field"><option value="all">Tất cả trạng thái</option><option value="false">Đang hoạt động</option><option value="true">Đang ban</option></select><select id="userSort" class="field"><option value="id">Sort: ID</option><option value="name">Sort: Tên</option><option value="coins">Sort: Coin</option><option value="orders">Sort: Orders</option><option value="ads">Sort: QC</option><option value="smartlinks">Sort: SmartLink</option></select><select id="userDir" class="field"><option value="desc">Giảm dần</option><option value="asc">Tăng dần</option></select><button id="userSearchBtn" class="btn primary">Tải</button></div>
-  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Orders</th><th>QC</th><th>AdsGram</th><th>Monetag</th><th>SmartLink</th><th>Link Task</th><th>Risk</th><th>IP gần nhất</th><th>Ban</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><div id="usersPager" class="pager"></div></div>
+  <div class="table-wrap"><table><thead><tr><th>ID</th><th>Tên</th><th>Coin</th><th>Orders</th><th>QC</th><th>AdsGram</th><th>Monetag</th><th>RichAds</th><th>SmartLink</th><th>Link Task</th><th>Risk</th><th>IP gần nhất</th><th>Ban</th><th></th></tr></thead><tbody id="usersBody"></tbody></table><div id="usersPager" class="pager"></div></div>
 </section>
 
 <section id="sec-withdrawals" class="section">
@@ -12490,7 +12691,7 @@ return String.raw`<!DOCTYPE html>
 
 <section id="sec-system" class="section">
   <div class="section-head"><div><h2>Hệ thống & Audit</h2><p>Chỉ hiển thị trạng thái, không hiển thị secret/token.</p></div></div>
-  <div class="grid"><div class="card" style="grid-column:span 2"><pre id="systemInfo" class="diag mono"></pre><div class="actions"><button id="botLock" class="btn warn">Bật Maintenance</button><button id="botUnlock" class="btn good">Mở Bot</button><button id="adsgramLock" class="btn warn">Khóa QC AdsGram</button><button id="adsgramUnlock" class="btn good">Mở QC AdsGram</button><button id="monetagLock" class="btn warn">Khóa QC Monetag</button><button id="monetagUnlock" class="btn good">Mở QC Monetag</button></div></div><div class="card" style="grid-column:span 2"><h3>🚫 Ban theo IP hiện tại</h3><div class="toolbar"><input id="banIpInput" class="field grow" placeholder="Canonical public IP"><button id="banIpBtn" class="btn danger">Ban IP</button></div><p class="muted" style="font-size:10px">Không dùng private proxy IP hoặc IP do frontend tự khai báo.</p></div></div>
+  <div class="grid"><div class="card" style="grid-column:span 2"><pre id="systemInfo" class="diag mono"></pre><div class="actions"><button id="botLock" class="btn warn">Bật Maintenance</button><button id="botUnlock" class="btn good">Mở Bot</button><button id="adsgramLock" class="btn warn">Khóa QC AdsGram</button><button id="adsgramUnlock" class="btn good">Mở QC AdsGram</button><button id="monetagLock" class="btn warn">Khóa QC Monetag</button><button id="monetagUnlock" class="btn good">Mở QC Monetag</button><button id="richadsLock" class="btn warn">Khóa QC RichAds</button><button id="richadsUnlock" class="btn good">Mở QC RichAds</button></div></div><div class="card" style="grid-column:span 2"><h3>🚫 Ban theo IP hiện tại</h3><div class="toolbar"><input id="banIpInput" class="field grow" placeholder="Canonical public IP"><button id="banIpBtn" class="btn danger">Ban IP</button></div><p class="muted" style="font-size:10px">Không dùng private proxy IP hoặc IP do frontend tự khai báo.</p></div></div>
   <div class="card" style="margin-top:12px"><h3>🧾 Audit gần nhất</h3><pre id="auditList" class="pre"></pre></div>
   <div class="card" style="margin-top:12px;border-color:#683241"><h3>⚠️ Khu vực nguy hiểm</h3><button id="resetAllBtn" class="btn danger">RESET ALL DATA</button></div>
 </section>
@@ -12516,7 +12717,7 @@ function bind(){if(document.body.dataset.bound)return;document.body.dataset.boun
  $('userSearchBtn').onclick=function(){userPage=1;loadUsers()};$('userSearch').addEventListener('keydown',function(e){if(e.key==='Enter'){userPage=1;loadUsers()}});$('userBanned').onchange=function(){userPage=1;loadUsers()};$('userSort').onchange=function(){userPage=1;loadUsers()};$('userDir').onchange=function(){userPage=1;loadUsers()};
  $('wdLoad').onclick=function(){wdPage=1;loadWithdrawals()};$('wdStatus').onchange=function(){wdPage=1;loadWithdrawals()};
  $('jmLoad').onclick=loadJobMail;$('jmStatus').onchange=loadJobMail;$('jmLock').onclick=function(){setJobMailLock(true)};$('jmUnlock').onclick=function(){setJobMailLock(false)};$('jmBanUser').onclick=function(){setJobMailUserBan(true)};$('jmUnbanUser').onclick=function(){setJobMailUserBan(false)};
- $('gcCreate').onclick=createGiftcode;$('subAdminAdd').onclick=addSubAdmin;$('broadcastSend').onclick=sendBroadcast;$('botLock').onclick=function(){systemAction('lockBot')};$('botUnlock').onclick=function(){systemAction('unlockBot')};$('adsgramLock').onclick=function(){systemAction('lockAdsgram')};$('adsgramUnlock').onclick=function(){systemAction('unlockAdsgram')};$('monetagLock').onclick=function(){systemAction('lockMonetag')};$('monetagUnlock').onclick=function(){systemAction('unlockMonetag')};$('banIpBtn').onclick=function(){systemAction('banIp',{ip:$('banIpInput').value})};$('resetAllBtn').onclick=resetAllWeb;$('userModalClose').onclick=function(){$('userModal').classList.add('hidden')};
+ $('gcCreate').onclick=createGiftcode;$('subAdminAdd').onclick=addSubAdmin;$('broadcastSend').onclick=sendBroadcast;$('botLock').onclick=function(){systemAction('lockBot')};$('botUnlock').onclick=function(){systemAction('unlockBot')};$('adsgramLock').onclick=function(){systemAction('lockAdsgram')};$('adsgramUnlock').onclick=function(){systemAction('unlockAdsgram')};$('monetagLock').onclick=function(){systemAction('lockMonetag')};$('monetagUnlock').onclick=function(){systemAction('unlockMonetag')};$('richadsLock').onclick=function(){systemAction('lockRichads')};$('richadsUnlock').onclick=function(){systemAction('unlockRichads')};$('banIpBtn').onclick=function(){systemAction('banIp',{ip:$('banIpInput').value})};$('resetAllBtn').onclick=resetAllWeb;$('userModalClose').onclick=function(){$('userModal').classList.add('hidden')};
  document.querySelectorAll('.userAct').forEach(function(b){b.onclick=function(){userAction(b.dataset.action)}})
 }
 function switchTab(tab,force){currentTab=tab;document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.toggle('active',b.dataset.tab===tab)});document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active')});var sec=$('sec-'+tab);if(sec)sec.classList.add('active');$('pageTitle').textContent=titles[tab]||tab;closeDrawer();if(tab==='overview')loadOverview(force);if(tab==='users')loadUsers();if(tab==='withdrawals')loadWithdrawals();if(tab==='links')loadLinks();if(tab==='jobmail')loadJobMail();if(tab==='giftcodes')loadGiftcodes();if(tab==='admins')loadAdmins();if(tab==='system')loadSystem(force)}
@@ -12531,7 +12732,10 @@ async function loadOverview(force){try{
   ['TRUST PROXY','🌐 '+(s.trustProxy||'N/A')],
   ['UPTIME','⏱ '+fmtUptime(s.uptimeSeconds)],
   ['SERVER STARTED','🚀 '+fmtDate(s.startedAt)],
-  ['WEB_APP_URL','🌎 '+(s.webAppUrl||'N/A')]
+  ['WEB_APP_URL','🌎 '+(s.webAppUrl||'N/A')],
+  ['ADSGRAM',s.providerLocks&&s.providerLocks.adsgram?'🔒 LOCKED':'🔓 OPEN'],
+  ['MONETAG',s.providerLocks&&s.providerLocks.monetag?'🔒 LOCKED':'🔓 OPEN'],
+  ['RICHADS',s.providerLocks&&s.providerLocks.richads?'🔒 LOCKED':'🔓 OPEN']
  ];
  $('overviewStatus').innerHTML=status.map(function(x){return '<div class="status-box"><div class="s-label">'+esc(x[0])+'</div><div class="s-value">'+esc(x[1])+'</div></div>'}).join('');
  $('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE';
@@ -12563,16 +12767,17 @@ async function loadOverview(force){try{
   statCard('Mail chờ duyệt',s.jobMail&&s.jobMail.pending,'📩'),
   statCard('Mail gửi hôm nay',s.jobMail&&s.jobMail.todaySubmitted,'📨'),
   statCardText('AdsGram theo provider',s.adsgramToday==null?'N/A':s.adsgramToday,'🟦'),
-  statCardText('Monetag theo provider',s.monetagToday==null?'N/A':s.monetagToday,'🟪')
+  statCardText('Monetag theo provider',s.monetagToday==null?'N/A':s.monetagToday,'🟪'),
+  statCard('RichAds hôm nay',s.richadsToday,'🟧')
  ].join('');
 }catch(e){toast(e.message,true)}}
 function pager(id,page,total,limit,cb){var el=$(id),pages=Math.max(1,Math.ceil(Number(total||0)/Number(limit||25)));el.innerHTML='<button class="btn ghost" id="'+id+'Prev" '+(page<=1?'disabled':'')+'>←</button><span class="muted">Trang '+page+'/'+pages+' • '+num(total)+' bản ghi</span><button class="btn ghost" id="'+id+'Next" '+(page>=pages?'disabled':'')+'>→</button>';$(id+'Prev').onclick=function(){if(page>1)cb(page-1)};$(id+'Next').onclick=function(){if(page<pages)cb(page+1)}}
-async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+tag('N/A','')+'</td><td>'+tag('N/A','')+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="13" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
+async function loadUsers(){try{var url='/api/admin/users?page='+userPage+'&limit=25&q='+encodeURIComponent($('userSearch').value)+'&banned='+encodeURIComponent($('userBanned').value)+'&sort='+encodeURIComponent($('userSort').value)+'&dir='+encodeURIComponent($('userDir').value);var j=await api(url);$('usersBody').innerHTML=j.users.map(function(u){var ip=u.ip||'';return '<tr><td class="mono">'+esc(u.id)+'</td><td>'+esc(u.name||'User')+'</td><td>'+num(u.coins)+'</td><td>'+num(u.orders)+'</td><td>'+num(u.adsToday)+'</td><td>'+tag('N/A','')+'</td><td>'+tag('N/A','')+'</td><td>'+num(u.richadsToday)+'</td><td>'+num(u.smartlinksToday)+'</td><td>'+num(u.linkTaskCompleted)+'</td><td>'+tag((u.riskScore||0)+'/100',u.riskScore>=80?'bad':u.riskScore>=40?'warn':'good')+'</td><td class="mono">'+esc(ip)+(u.duplicateIpCount>1?' '+tag('TRÙNG '+u.duplicateIpCount,'bad'):'')+'</td><td>'+(u.isBanned?tag('BANNED','bad'):tag('ACTIVE','good'))+'</td><td><button class="btn ghost open-user" data-id="'+esc(u.id)+'">Chi tiết</button></td></tr>'}).join('')||'<tr><td colspan="14" class="empty">Không có dữ liệu</td></tr>';document.querySelectorAll('.open-user').forEach(function(b){b.onclick=function(){openUser(b.dataset.id)}});pager('usersPager',userPage,j.total,j.limit,function(pg){userPage=pg;loadUsers()})}catch(e){toast(e.message,true)}}
 async function openUser(id){try{var d=(await api('/api/admin/users/'+encodeURIComponent(id))).detail;currentUserId=String(d.user.id);$('userModalTitle').textContent='👤 '+(d.user.name||'User');$('userModalSub').textContent='ID '+currentUserId+' • Risk '+d.risk.score+'/100 '+d.risk.level;var dup=d.duplicates&&d.duplicates.length?d.duplicates.map(function(x){return x.id}).join(', '):'Không';var reasons=d.risk&&d.risk.reasons&&d.risk.reasons.length?d.risk.reasons.join(', '):'Không có';$('userDetailGroups').innerHTML=[
  group('👤 Tài khoản',[['ID',d.user.id],['Tên',d.user.name||'User'],['Trạng thái',d.user.isBanned?'BANNED':'ACTIVE'],['Ngôn ngữ',d.user.language||'vi'],['Tạo lúc',fmtDate(d.user.accountCreatedAt)]]),
  group('💰 Ví',[['Coin',num(d.user.coins)],['Đơn Hàng',num(d.user.orders)],['Spin',num(d.user.spins)],['Truck Level',num(d.user.truckLevel)]]),
  group('🚚 Hoạt động',[['Giao hàng hôm nay',num(d.user.deliveryCount)],['Tổng giao hàng',num(d.user.deliveryCountLifetime)],['Mở rương hôm nay',num(d.user.chestOpensToday)],['Tổng mở rương',num(d.user.chestOpensTotal)],['Referral hợp lệ',num(d.user.validInvites)]]),
- group('📺 Quảng cáo',[['QC hôm nay',num(d.user.adsToday)],['Rewarded hôm nay',num(d.user.rewardedAdsToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['AdsGram theo provider','N/A'],['Monetag theo provider','N/A']]),
+ group('📺 Quảng cáo',[['QC hôm nay',num(d.user.adsToday)],['Rewarded hôm nay',num(d.user.rewardedAdsToday)],['Tổng QC',num(d.user.lifetimeAdsWatched)],['AdsGram theo provider','N/A'],['Monetag theo provider','N/A'],['RichAds hôm nay',num(d.ads&&d.ads.richadsToday)]]),
  group('🔗 SmartLink',[['Hôm nay',num(d.user.smartlinksToday)],['Tổng SmartLink',num(d.user.lifetimeSmartlinks)]]),
  group('🧩 Vượt Link',[['Hoàn thành',d.linkTask?num(d.linkTask.completed):'N/A'],['Orders nhận',d.linkTask?num(d.linkTask.rewardOrders):'N/A']]),
  group('🌐 IP / Risk',[['IP gần nhất',d.user.ip||'Chưa có'],['Trùng IP với',dup],['Risk Score',d.risk.score+'/100'],['Risk Level',d.risk.level],['Lý do',reasons]]),
@@ -12614,6 +12819,11 @@ async function loadSystem(force){try{
  '\nAdsGram provider state: KHÔNG XÁC MINH TỪ SOURCE (Dashboard mới là nguồn trạng thái Active/Archived)'+
  '\nManual AdsGram: '+(a.adsgramLocked?'🔒 LOCKED':'🔓 OPEN')+
  '\nManual Monetag: '+(a.monetagLocked?'🔒 LOCKED':'🔓 OPEN')+
+ '\nRichAds: '+(a.richadsLocked?'🔒 LOCKED':'🔓 OPEN')+
+  '\nRichAds DB columns: '+(a.richadsStorageReady?'✅ READY':'❌ RUN SQL 4B')+
+ '\nRichAds Pub ID: '+String(a.richadsPubId||'N/A')+
+ '\nRichAds App ID: '+String(a.richadsAppId||'N/A')+
+ '\nRichAds daily/cooldown: '+String(a.richadsDailyLimit||15)+'/day • '+String(a.richadsManualCooldownMinutes||10)+' phút'+
  '\nAdsGram Interstitial diagnostic: '+diagText(diInt)+
  '\nAdsGram Reward diagnostic: '+diagText(diReward)+
  '\nAdsGram manual cooldown: '+String(a.adsgramManualCooldownMinutes||'N/A')+' phút'+
@@ -12624,6 +12834,7 @@ async function loadSystem(force){try{
  $('botLock').disabled=s.botLocked;$('botUnlock').disabled=!s.botLocked;
  $('adsgramLock').disabled=!!a.adsgramLocked;$('adsgramUnlock').disabled=!a.adsgramLocked;
  $('monetagLock').disabled=!!a.monetagLocked;$('monetagUnlock').disabled=!a.monetagLocked;
+ $('richadsLock').disabled=!!a.richadsLocked;$('richadsUnlock').disabled=!a.richadsLocked;
  $('topBotBadge').textContent=s.botLocked?'🔴 MAINTENANCE':'🟢 BOT ONLINE'
 }catch(e){toast(e.message,true)}}
 async function systemAction(a,extra){if(!confirm('Xác nhận thao tác '+a+'?'))return;try{await api('/api/admin/system/action',{method:'POST',body:JSON.stringify(Object.assign({action:a},extra||{}))});toast('✅ Đã cập nhật hệ thống');loadSystem(true);if(a==='lockBot'||a==='unlockBot')loadOverview(true)}catch(e){toast(e.message,true)}}
