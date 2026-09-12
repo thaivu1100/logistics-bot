@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
     <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
     <script src="https://thatlobster.com/6d/40/5a/6d405ae063c5343d0ad8658f24c728ae.js"></script>
     
@@ -827,6 +828,42 @@
         .low-graphics .premium-logistics-ui .modal-overlay { backdrop-filter:none !important; -webkit-backdrop-filter:none !important; box-shadow:none !important; }
         /* ==================== END PREMIUM LOGISTICS UI 2026 ==================== */
 
+        /* ==================== CINEMATIC WAREHOUSE VISUAL LAYER ====================
+           CSS-only art direction based on the supplied references. It does not create demo features/data. */
+        .premium-logistics-ui .ui-tab { position:relative; isolation:isolate; }
+        .premium-logistics-ui .ui-tab::before { content:""; position:absolute; inset:-10px -8px auto; height:190px; z-index:-2; pointer-events:none; border-radius:30px; opacity:.8; background:radial-gradient(circle at 76% 20%,rgba(251,191,36,.14),transparent 28%),radial-gradient(circle at 18% 28%,rgba(56,189,248,.14),transparent 30%); }
+        .premium-logistics-ui .ui-tab::after { position:absolute; right:10px; top:2px; z-index:-1; pointer-events:none; font-size:54px; letter-spacing:5px; opacity:.055; filter:drop-shadow(0 10px 16px rgba(0,0,0,.5)); }
+        .premium-logistics-ui .ui-home::after{content:'🏭🚚📦'}
+        .premium-logistics-ui .ui-chest::after{content:'✨🎁✨'}
+        .premium-logistics-ui .ui-tasks::after{content:'📋🚚'}
+        .premium-logistics-ui .ui-leaderboard::after{content:'👑🏆'}
+        .premium-logistics-ui .ui-friends::after{content:'👥📦'}
+        .premium-logistics-ui .ui-withdraw::after{content:'💳📦'}
+        .premium-logistics-ui .ui-giftcode::after{content:'🎟️🎁'}
+        .premium-logistics-ui .ui-jobmail::after{content:'📩🏭'}
+        .premium-logistics-ui .ui-settings::after{content:'⚙️🚚'}
+        .premium-logistics-ui .ui-tab > .glass,
+        .premium-logistics-ui .ui-tab > .neon-blue { position:relative; overflow:hidden; }
+        .premium-logistics-ui .ui-tab > .glass::before,
+        .premium-logistics-ui .ui-tab > .neon-blue::before { content:""; position:absolute; width:120px; height:120px; border-radius:50%; right:-70px; top:-72px; background:radial-gradient(circle,rgba(56,189,248,.13),transparent 68%); pointer-events:none; }
+        .premium-logistics-ui .ui-home > .neon-blue { background:radial-gradient(circle at 85% 18%,rgba(251,191,36,.18),transparent 25%),linear-gradient(145deg,#173c71,#125a87 56%,#15365b) !important; }
+        .premium-logistics-ui .ui-chest .chest-container { border-radius:34px; background:radial-gradient(circle,rgba(251,191,36,.18),rgba(37,99,235,.08) 48%,transparent 72%); }
+        .premium-logistics-ui .ui-tasks .task-card { background:linear-gradient(145deg,rgba(38,59,88,.9),rgba(22,37,59,.92)) !important; }
+        .premium-logistics-ui .ui-leaderboard .rank-1 { box-shadow:0 15px 34px rgba(217,157,19,.22) !important; }
+        .premium-logistics-ui .ui-friends .glass { border-color:rgba(52,211,153,.13) !important; }
+        .premium-logistics-ui .ui-withdraw .glass { border-color:rgba(56,189,248,.16) !important; }
+        .premium-logistics-ui .ui-giftcode .glass { border-color:rgba(251,191,36,.18) !important; }
+        .premium-logistics-ui .ui-settings .glass { background:linear-gradient(145deg,rgba(30,50,78,.98),rgba(20,34,54,.98)) !important; }
+        .premium-logistics-ui .ad-provider-card { position:relative; overflow:hidden; padding:15px !important; border-radius:22px !important; }
+        .premium-logistics-ui .ad-provider-card::after { content:'📦'; position:absolute; right:10px; bottom:-9px; font-size:48px; opacity:.045; transform:rotate(-8deg); pointer-events:none; }
+        .premium-logistics-ui .ad-provider-card.richads-card { background:linear-gradient(145deg,rgba(84,45,16,.56),rgba(29,45,68,.98) 62%) !important; border-color:rgba(251,146,60,.28) !important; }
+        .premium-logistics-ui .provider-status { display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;font-size:10px;font-weight:900;background:rgba(16,185,129,.12);color:#86efac;border:1px solid rgba(52,211,153,.18); }
+        .premium-logistics-ui .provider-status.locked { background:rgba(245,158,11,.10);color:#fcd34d;border-color:rgba(245,158,11,.2); }
+        .premium-logistics-ui .richads-meter { height:7px;border-radius:999px;background:#0f1d31;overflow:hidden;border:1px solid rgba(251,146,60,.12); }
+        .premium-logistics-ui .richads-meter > span { display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#fb923c,#fbbf24);transition:width .35s ease; }
+        .low-graphics .premium-logistics-ui .ui-tab::after,.low-graphics .premium-logistics-ui .ui-tab::before,.low-graphics .premium-logistics-ui .ad-provider-card::after{filter:none!important;animation:none!important;box-shadow:none!important}
+        /* ==================== END CINEMATIC WAREHOUSE VISUAL LAYER ==================== */
+
 </style>
 </head>
 <body class="premium-logistics-ui" x-data="app()" x-init="initApp()">
@@ -1384,18 +1421,18 @@
                         </div>
                     </div>
                 </div>
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding border border-cyan-500/15">
+                <div class="glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding border border-cyan-500/15">
                     <div class="flex items-center justify-between gap-2">
-                        <h3 class="text-sm font-black uppercase text-cyan-300">📺 XEM QC ADSGRAM</h3>
-                        <span class="text-[10px] font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
+                        <div><h3 class="text-sm font-black uppercase text-cyan-300">📺 XEM QC ADSGRAM</h3><p class="text-[8px] text-slate-400 mt-1">Provider Reward / Interstitial</p></div>
+                        <div class="text-right"><span class="provider-status" :class="adsgramTaskLocked ? 'locked' : ''" x-text="adsgramTaskLocked ? '🔒 LOCKED' : '● OPEN'"></span><div class="text-[10px] mt-1 font-black text-cyan-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></div></div>
                     </div>
                     <p x-show="adsgramTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
-                    <button @click="watchAdsGramTask()" :disabled="adsgramTaskLocked || (bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
+                    <button @click="watchAdsGramTask()" :disabled="adsgramTaskLocked || (bonusAdsToday||0) >= 15 || adsgramManualCooldown > 0 || _adsgramRunning || _rewardedRunning || _richadsRunning || _autoAdInFlight" class="w-full py-2 bg-cyan-600/25 border border-cyan-500 rounded-[25px] font-black text-[10px] uppercase text-cyan-300 hover:bg-cyan-600/40 transition disabled:opacity-40 btn-text" x-text="adsgramButtonText()"></button>
                 </div>
-                <div class="glass p-3 rounded-[25px] space-y-2 card-padding">
-                    <div class="flex items-center justify-between">
-                        <h3 class="text-sm font-black uppercase text-blue-300">📺 XEM QC MONETAG</h3>
-                        <span class="text-[10px] font-black text-blue-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></span>
+                <div class="glass ad-provider-card p-3 rounded-[25px] space-y-2 card-padding">
+                    <div class="flex items-center justify-between gap-2">
+                        <div><h3 class="text-sm font-black uppercase text-blue-300">📺 XEM QC MONETAG</h3><p class="text-[8px] text-slate-400 mt-1">Rewarded Interstitial</p></div>
+                        <div class="text-right"><span class="provider-status" :class="monetagTaskLocked ? 'locked' : ''" x-text="monetagTaskLocked ? '🔒 LOCKED' : '● OPEN'"></span><div class="text-[10px] mt-1 font-black text-blue-300" x-text="(bonusAdsToday||0) + '/15 ' + texts.today"></div></div>
                     </div>
                     <p class="text-[9px] text-slate-400"><span x-text="texts.watchAdRewardDesc"></span>
                         <span class="text-yellow-400 font-black">10–25 Coin + 10–25 Đơn</span>.
@@ -1403,7 +1440,17 @@
                         <span x-text="texts.maxPerDay"></span>
                     </p>
                     <p x-show="monetagTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Nhiệm vụ đang tạm khóa.</p>
-                    <button @click="watchBonusAdTask()" :disabled="monetagTaskLocked || (bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                    <button @click="watchBonusAdTask()" :disabled="monetagTaskLocked || (bonusAdsToday||0) >= 15 || monetagManualCooldown > 0 || _rewardedRunning || _adsgramRunning || _richadsRunning || _autoAdInFlight" class="w-full py-2 bg-blue-600/30 border border-blue-500 rounded-[25px] font-black text-[10px] uppercase text-blue-400 hover:bg-blue-600/50 transition disabled:opacity-40 btn-text" x-text="bonusAdButtonText()"></button>
+                </div>
+                <div class="glass ad-provider-card richads-card space-y-2 card-padding">
+                    <div class="flex items-center justify-between gap-2">
+                        <div><h3 class="text-sm font-black uppercase text-orange-300">📺 QC RICHADS</h3><p class="text-[9px] text-slate-400 mt-1">Reward base giống Monetag: <b class="text-yellow-300">10–25 Coin + 10–25 Đơn</b> • cooldown 10 phút.</p></div>
+                        <span class="provider-status" :class="richadsTaskLocked ? 'locked' : ''" x-text="richadsTaskLocked ? '🔒 LOCKED' : '● OPEN'"></span>
+                    </div>
+                    <div class="flex items-center justify-between text-[10px] font-black"><span class="text-orange-200">RichAds Video</span><span class="text-orange-300" x-text="(richadsAdsToday||0) + '/15 ' + texts.today"></span></div>
+                    <div class="richads-meter"><span :style="'width:' + Math.min(100, Math.max(0, Number(richadsAdsToday||0) / 15 * 100)) + '%'"></span></div>
+                    <p x-show="richadsTaskLocked" class="text-[9px] text-amber-300 font-black">🔒 Quảng cáo RichAds đang tạm khóa.</p>
+                    <button @click="watchRichAdsTask()" :disabled="richadsTaskLocked || (richadsAdsToday||0) >= 15 || richadsManualCooldown > 0 || _richadsRunning || _rewardedRunning || _adsgramRunning || _autoAdInFlight" class="w-full py-2.5 bg-orange-500/20 border border-orange-400/60 rounded-[25px] font-black text-[10px] uppercase text-orange-200 hover:bg-orange-500/30 transition disabled:opacity-40 btn-text" x-text="richadsButtonText()"></button>
                 </div>
             </div>
 
@@ -1919,6 +1966,7 @@
         const API_URL = window.location.origin;
         // Centralized ad cadence. AdsGram và Monetag manual có cooldown persistent RIÊNG 10 phút.
         const MONETAG_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
+        const RICHADS_MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
         const AUTO_AD_MONETAG_WEIGHT = 50;
         const AUTO_AD_ADSGRAM_WEIGHT = 50;
         const AUTO_AD_FIRST_DELAY_MIN_MS = 75 * 1000;
@@ -1980,6 +2028,7 @@
                     data.maintenanceLocked ||
                     data._rewardedRunning ||
                     data._adsgramRunning ||
+                    data._richadsRunning ||
                     data._deliveryClaimInFlight ||
                     data.isShipping ||
                     data._pendingDeliveryClaim ||
@@ -2340,6 +2389,7 @@
                 goldenHourVisible:false, goldenHourActive:false, goldenHourMultiplier:1, goldenHourStartAt:0, goldenHourEndAt:0, goldenHourNextStartAt:0, goldenHourNextEndAt:0, goldenHourCountdown:'00:00', goldenHourServerOffset:0, _goldenHourSyncTimer:null, _goldenHourBoundarySyncPending:false,
                 _rewardedRunning: false, _rewardedActionId: '', _rewardedActiveToken: '', _rewardedPurpose: '',
                 _adsgramRunning:false, _adsgramInterstitialController:null, _adsgramRewardController:null, _adsgramActionId:'', _adsgramActiveToken:'', _adsgramPendingRecovery:false,
+                _richadsRunning:false, _richadsController:null, _richadsActionId:'', _richadsActiveToken:'',
                 _autoAdInFlight:false, _autoAdEarliestAt:0, _autoAdTabCount:0, _autoAdTabThreshold:0, _autoAdLastTab:'',
 
                 _lastErrorFeedbackAt: 0, _dailyResetSyncing: false, _smartlinkSaving: false, _taskClaimInFlight: false,
@@ -2357,12 +2407,12 @@
                     {rank:7,orders:5000,spins:1,min:5},{rank:8,orders:4000,spins:0,min:5},{rank:9,orders:3000,spins:0,min:5},{rank:10,orders:2000,spins:0,min:5}
                 ],
                 deliveryCount: 0, extraDeliveryAdsToday: 0, extraDeliveryCount: 0, rewardedAdsToday: 0, deliveryServerLimit: 5,
-                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, monetagManualNextAllowedAt:0, monetagManualCooldown:0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, adsgramTaskLocked:false, monetagTaskLocked:false, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
+                lifetimeAdsWatched: 0, lifetimeSmartlinks: 0, bonusAdsToday: 0, bonusAdNextAllowedAt: 0, bonusAdCooldown: 0, monetagManualNextAllowedAt:0, monetagManualCooldown:0, adsgramManualNextAllowedAt:0, adsgramManualCooldown:0, adsgramTaskLocked:false, monetagTaskLocked:false, richadsTaskLocked:false, richadsAdsToday:0, richadsManualNextAllowedAt:0, richadsManualCooldown:0, autoAdNextAllowedAt:0, walletSyncedAt: null, coinsPopped: false, ordersPopped: false,
                 newUserWelcome:{eligible:false,claimed:false},
                 newUserTutorial:{eligible:false,ads:0,adGoal:3,smartlinks:0,smartlinkGoal:2,completed:false,rewardClaimed:false},
                 withdrawRemain: 1, withdrawHistory: [], language: (localStorage.getItem('shipper_language') === 'en' ? 'en' : 'vi'), giftCode: '', redeemHistory: [], bannedScreen: false,
                 isAppLoading: true, loadingProgress: 0, _quizServerHydrated: false, // Hiện màn loading ngay khi mở app, tắt sau khi tải xong dữ liệu user trong initApp()
-                maintenanceLocked: false, // true khi Admin dùng /khoabot - hiện màn hình bảo trì che toàn bộ app
+                maintenanceLocked: false, isAdminSession:false, _maintenanceMonitorStarted:false, _maintenanceTimer:null, _maintenanceBootBlocked:false, // server-authoritative maintenance
                 withdrawMethod: 'bank', withdrawBankName: '', withdrawAccountName: '', withdrawAccountNumber: '', withdrawOrdersAmount: null,
                 withdrawWalletType: 'momo', withdrawSubmitting: false, upgradeSubmitting: false, giftcodeSubmitting: false,
                 graphicsMode: localStorage.getItem('graphicsMode') === 'fixlag' ? 'fixlag' : 'fullhd',
@@ -2779,8 +2829,8 @@
 
                     // Bảo trì chỉ áp dụng luồng Mini App thật; public landing vẫn có thể hiển thị thông tin/CTA Telegram.
                     await this.checkMaintenanceLock();
-                    setInterval(() => this.checkMaintenanceLock(), 15000);
-                    if (this.maintenanceLocked) { this.finishAppLoading(); return; }
+                    this.startMaintenanceMonitor();
+                    if (this.maintenanceLocked) { this._maintenanceBootBlocked=true; await this.finishAppLoading(); return; }
                     this.isPublicBrowser=false;
                     this.user.id = tgUser.id.toString();
                     this.user.name = tgUser.first_name || 'Shipper';
@@ -2872,6 +2922,7 @@
                             this.lifetimeAdsWatched = data.lifetimeAdsWatched || 0;
                             this.lifetimeSmartlinks = data.lifetimeSmartlinks || 0;
                             this.bonusAdsToday = data.bonusAdsToday || 0;
+                            this.richadsAdsToday = (String(data.richadsDayKey||'') === this.vietnamDayKey(new Date())) ? Number(data.richadsAdsToday||0) : 0;
                             this.bonusAdNextAllowedAt = Number(data.bonusAdNextAllowedAt || 0); // legacy mirror only
                             this.monetagManualNextAllowedAt = Number(data.monetagManualNextAllowedAt || 0); // dedicated state endpoint sẽ hydrate persistent cooldown
                             this.updateBonusAdCooldown();
@@ -2966,7 +3017,7 @@
                         await fetch(`${API_URL}/api/save-ip/${this.user.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
                     } catch (e) { console.error('Lỗi lưu IP:', e); }
                     await this.syncLinkTasks();
-                    await Promise.all([this.syncAdsGramManualState().catch(() => false), this.syncMonetagManualState().catch(() => false)]);
+                    await Promise.all([this.syncAdsGramManualState().catch(() => false), this.syncMonetagManualState().catch(() => false), this.syncRichAdsManualState().catch(() => false), this.syncProviderLocks().catch(() => false)]);
                     
                     if (!this.rankList || this.rankList.length === 0) this.initRankList();
                     this.applyLevelStats(); // Đồng bộ thời gian sản xuất / sản lượng / kho theo cấp xe hiện tại
@@ -3049,6 +3100,7 @@
                         this.updateSmartlinkCooldown();
                         this.updateBonusAdCooldown();
                         this.updateAdsGramManualCooldown();
+                        this.updateRichAdsCooldown();
                         this.updateGoldenHourCountdown();
                         if(this.tab==='tasks'&&!this._linkTaskExpirySyncing&&Array.isArray(this.linkTasks)&&this.linkTasks.some(t=>this.linkTaskIsActive(t)&&this.linkTaskSecondsRemaining(t)<=0)){
                             this._linkTaskExpirySyncing=true;
@@ -3113,11 +3165,11 @@
                             });
                         }
                     } catch (e) {}
+                    this._maintenanceBootBlocked=false;
                 },
                 
-                // Kiểm tra trạng thái khoá bảo trì của Bot/Mini App (Admin bật bằng /khoabot, tắt bằng /mokhoabot).
-                // Lỗi mạng khi kiểm tra sẽ KHÔNG khoá app (fail-open), tránh app bị kẹt ở màn hình bảo trì oan
-                // chỉ vì 1 lần gọi API bị mất mạng tạm thời.
+                // Trạng thái bảo trì được kiểm tra server-side bằng Telegram initData; Admin chính/phụ dùng cùng policy.
+                // Nếu không đọc được persistent state thì Mini App Telegram fail-closed để user không bypass bảo trì.
                 async finishAppLoading() {
                     // Dừng vòng lặp tăng tiến độ + huỷ mốc chờ dự phòng, ép thanh loading chạy đầy 100%
                     // rồi mới ẩn màn loading để vào giao diện (đúng yêu cầu: thanh chạy đầy mới vào app).
@@ -3179,18 +3231,32 @@
                 },
 
                 async checkMaintenanceLock() {
+                    const wasLocked = this.maintenanceLocked === true;
                     try {
-                        // Server xác minh Admin bằng Telegram initData header; không tin query/body userId.
-                        // Nếu không đọc được persistent state thì fail-closed để user không bypass bảo trì.
                         const res = await fetchWithTimeout(`${API_URL}/api/lock-status`, { cache:'no-store' }, 8000);
                         const data = await res.json().catch(() => ({}));
-                        if (!res.ok) { this.maintenanceLocked = true; return false; }
-                        this.maintenanceLocked = !!data.locked;
+                        if (!res.ok) { this.isAdminSession=false; this.maintenanceLocked=true; return false; }
+                        this.isAdminSession = data.isAdmin === true;
+                        this.maintenanceLocked = data.locked === true && !this.isAdminSession;
+                        if (wasLocked && !this.maintenanceLocked && this._maintenanceBootBlocked) {
+                            this._maintenanceBootBlocked=false;
+                            setTimeout(() => window.location.reload(), 120);
+                        }
                         return !this.maintenanceLocked;
                     } catch (e) {
-                        this.maintenanceLocked = true;
-                        return false;
+                        // Fail-closed for a Telegram user: a transient read error must never bypass persistent maintenance.
+                        this.isAdminSession=false; this.maintenanceLocked=true; return false;
                     }
+                },
+                startMaintenanceMonitor() {
+                    if (this._maintenanceMonitorStarted) return;
+                    this._maintenanceMonitorStarted=true;
+                    if (this._maintenanceTimer) clearInterval(this._maintenanceTimer);
+                    this._maintenanceTimer=setInterval(() => this.checkMaintenanceLock().catch(()=>false), 12000);
+                    const refresh=()=>{ if(!document.hidden) this.checkMaintenanceLock().catch(()=>false); };
+                    document.addEventListener('visibilitychange', refresh);
+                    window.addEventListener('focus', refresh);
+                    try { window.Telegram?.WebApp?.onEvent?.('activated', refresh); } catch (_) {}
                 },
 
                 async checkGroupMembership(silent = false) {
@@ -4361,8 +4427,8 @@
                     return lo + Math.floor(Math.random() * (hi - lo + 1));
                 },
                 chooseAutomaticAdProvider() {
-                    const monetag = Math.max(0, Number(AUTO_AD_MONETAG_WEIGHT || 0));
-                    const adsgram = Math.max(0, Number(AUTO_AD_ADSGRAM_WEIGHT || 0));
+                    const monetag = this.monetagTaskLocked ? 0 : Math.max(0, Number(AUTO_AD_MONETAG_WEIGHT || 0));
+                    const adsgram = this.adsgramTaskLocked ? 0 : Math.max(0, Number(AUTO_AD_ADSGRAM_WEIGHT || 0));
                     const total = monetag + adsgram;
                     if (total <= 0) return '';
                     const roll = this.autoAdRandomInt(1, total);
@@ -4400,6 +4466,7 @@
                     this._autoAdInFlight = true;
                     let success = false;
                     try {
+                        await this.syncProviderLocks().catch(()=>false);
                         const provider = this.chooseAutomaticAdProvider();
                         if (provider === 'adsgram') {
                             success = await this.playAdsGramBonus('reward', {auto:true, silent:true});
@@ -4455,6 +4522,97 @@
                         this.updateBonusAdCooldown();
                         return true;
                     } catch (_) { return false; }
+                },
+                async syncProviderLocks() {
+                    if (!this.user?.id) return false;
+                    try {
+                        const res=await fetch(`${API_URL}/api/ad/providers/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})});
+                        const data=await res.json().catch(()=>({}));
+                        if(!res.ok||!data.success)return false;
+                        this.adsgramTaskLocked=data.adsgramLocked===true;
+                        this.monetagTaskLocked=data.monetagLocked===true;
+                        this.richadsTaskLocked=data.richadsLocked===true;
+                        if(typeof data.richadsAdsToday==='number')this.richadsAdsToday=Number(data.richadsAdsToday);
+                        if(data.richadsManualNextAllowedAt!=null)this.richadsManualNextAllowedAt=Number(data.richadsManualNextAllowedAt||0);
+                        this.updateRichAdsCooldown();
+                        return true;
+                    }catch(_){return false;}
+                },
+                updateRichAdsCooldown() {
+                    this.richadsManualCooldown=Math.max(0,Math.ceil((Number(this.richadsManualNextAllowedAt||0)-Date.now())/1000));
+                    return this.richadsManualCooldown;
+                },
+                async syncRichAdsManualState() {
+                    if(!this.user?.id)return false;
+                    try{
+                        const res=await fetch(`${API_URL}/api/richads/manual/state`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})});
+                        const data=await res.json().catch(()=>({}));
+                        if(!res.ok||!data.success)return false;
+                        this.richadsTaskLocked=data.richadsLocked===true;
+                        this.richadsAdsToday=Number(data.richadsAdsToday||0);
+                        this.richadsManualNextAllowedAt=Number(data.richadsManualNextAllowedAt||data.nextAllowedAt||0);
+                        this.updateRichAdsCooldown();return true;
+                    }catch(_){return false;}
+                },
+                richadsButtonText() {
+                    this.updateRichAdsCooldown();
+                    if(this.richadsTaskLocked)return this.language==='en'?'🔒 RICHADS LOCKED':'🔒 RICHADS ĐANG TẠM KHÓA';
+                    if(Number(this.richadsAdsToday||0)>=15)return this.language==='en'?'DAILY LIMIT REACHED':'ĐÃ HẾT 15 LƯỢT HÔM NAY';
+                    if(this.richadsManualCooldown>0)return `⏳ ${this.formatCooldownSeconds(this.richadsManualCooldown)}`;
+                    if(this._richadsRunning)return '⏳ ĐANG XỬ LÝ RICHADS...';
+                    return '▶️ XEM QC RICHADS';
+                },
+                getRichAdsController() {
+                    if(this._richadsController)return this._richadsController;
+                    if(typeof window.TelegramAdsController!=='function')return null;
+                    try{const c=new window.TelegramAdsController();c.initialize({pubId:'1022542',appId:'8872'});this._richadsController=c;return c;}catch(e){console.warn('RichAds initialize:',e);this._richadsController=null;return null;}
+                },
+                readPendingRichAdsRecovery(){try{const v=JSON.parse(localStorage.getItem('shipper_richads_pending')||'null');return v&&v.token&&v.actionId?v:null;}catch(_){return null;}},
+                writePendingRichAdsRecovery(v){try{localStorage.setItem('shipper_richads_pending',JSON.stringify(v||{}));}catch(_){}},
+                clearPendingRichAdsRecovery(){try{localStorage.removeItem('shipper_richads_pending');}catch(_){}},
+                applyRichAdsResult(result={}) {
+                    if(result.adsToday!=null)this.adsToday=Number(result.adsToday);
+                    if(result.rewardedAdsToday!=null)this.rewardedAdsToday=Number(result.rewardedAdsToday);
+                    if(result.lifetimeAdsWatched!=null)this.lifetimeAdsWatched=Number(result.lifetimeAdsWatched);
+                    if(result.richadsAdsToday!=null)this.richadsAdsToday=Number(result.richadsAdsToday);
+                    if(result.richadsManualNextAllowedAt!=null)this.richadsManualNextAllowedAt=Number(result.richadsManualNextAllowedAt||0);
+                    if(result.coins!=null)this.coins=Number(result.coins);if(result.orders!=null)this.orders=Number(result.orders);if(result.spins!=null)this.spins=Number(result.spins);
+                    if(result.walletUpdatedAt)this.walletSyncedAt=result.walletUpdatedAt;if(result.tutorial)this.applyNewUserStatus({tutorial:result.tutorial,spins:result.spins,walletUpdatedAt:result.walletUpdatedAt});this.updateRichAdsCooldown();
+                },
+                async completeRichAdsSession(pending, silent=false) {
+                    let completeData=null,completeRes=null;
+                    for(let attempt=0;attempt<6;attempt++){
+                        try{completeRes=await fetch(`${API_URL}/api/richads/session/complete`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token:pending.token,actionId:pending.actionId,sessionId:pending.sessionId||this.securitySessionId})});completeData=await completeRes.json().catch(()=>({}));}catch(_){completeRes=null;completeData={success:false,retry:true};}
+                        if(completeRes?.ok&&completeData?.success)break;
+                        if(completeData?.verified&&completeData?.adToken){await this.syncLatestUser().catch(()=>false);await this.syncRichAdsManualState().catch(()=>false);this.clearPendingRichAdsRecovery();if(!silent)this.showNotification('✅ RichAds đã được ghi nhận, ví đang đồng bộ.');return true;}
+                        if(!(completeData?.retry||!completeRes||[408,409,429,500,502,503,504].includes(completeRes.status)))break;
+                        await new Promise(r=>setTimeout(r,Math.min(2200,300*Math.pow(2,attempt))));
+                    }
+                    if(!completeData?.success)throw new Error(completeData?.error||'Không thể đồng bộ lượt RichAds.');
+                    this.clearPendingRichAdsRecovery();this.applyRichAdsResult(completeData);this.syncDailyTasksFromServer().catch(()=>false);this.checkReferralNow();this.saveState();
+                    if(!silent)this.showNotification(`📺 RichAds hợp lệ: +${Number(completeData.rewardCoins||0)} Coin +${Number(completeData.rewardOrders||0)} Đơn Hàng (${this.richadsAdsToday}/15)`);
+                    return true;
+                },
+                async watchRichAdsTask() {
+                    if(this._richadsRunning||this._rewardedRunning||this._adsgramRunning||this._autoAdInFlight)return false;
+                    this._richadsRunning=true;let token='',sdkCompleted=false;const pendingRecovery=this.readPendingRichAdsRecovery();
+                    try{
+                        await this.syncProviderLocks().catch(()=>false);await this.syncRichAdsManualState().catch(()=>false);
+                        if(this.richadsTaskLocked){this.showNotification('🔒 Quảng cáo RichAds đang tạm khóa.');return false;}
+                        if(Number(this.richadsAdsToday||0)>=15){this.showNotification('⚠️ Bạn đã đạt giới hạn 15 lượt RichAds hôm nay.');return false;}
+                        if(this.updateRichAdsCooldown()>0){this.showNotification(this.richadsButtonText());return false;}
+                        if(pendingRecovery){return await this.completeRichAdsSession(pendingRecovery,false);}
+                        const controller=this.getRichAdsController();if(!controller||typeof controller.triggerInterstitialVideo!=='function'){this.showNotification('⚠️ RichAds SDK chưa sẵn sàng. Vui lòng thử lại sau.');return false;}
+                        const actionId=this.adsgramActionId();this._richadsActionId=actionId;
+                        const startRes=await fetch(`${API_URL}/api/richads/session/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,sessionId:this.securitySessionId,actionId})});
+                        const startData=await startRes.json().catch(()=>({}));
+                        if(!startRes.ok||!startData.success||!startData.token){if(startData.richadsLocked||startData.providerLocked)this.richadsTaskLocked=true;if(startData.nextAllowedAt)this.richadsManualNextAllowedAt=Number(startData.nextAllowedAt);if(startData.richadsAdsToday!=null)this.richadsAdsToday=Number(startData.richadsAdsToday);this.updateRichAdsCooldown();throw new Error(startData.error||'Không tạo được phiên RichAds.');}
+                        token=String(startData.token);this._richadsActiveToken=token;
+                        await Promise.resolve(controller.triggerInterstitialVideo());sdkCompleted=true;
+                        const pending={token,actionId,sessionId:this.securitySessionId,sdkResolvedAt:Date.now()};this.writePendingRichAdsRecovery(pending);
+                        return await this.completeRichAdsSession(pending,false);
+                    }catch(e){console.warn('RichAds:',e);if(token&&!sdkCompleted)fetch(`${API_URL}/api/richads/session/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,token,actionId:this._richadsActionId})}).catch(()=>{});if(sdkCompleted)this.showNotification('⚠️ RichAds đã hoàn tất nhưng máy chủ đang đồng bộ. Bấm lại để tiếp tục đúng phiên, không cần xem lại.');else this.showNotification(e?.message||'⚠️ RichAds hiện chưa khả dụng.');return false;}
+                    finally{this._richadsRunning=false;this._richadsActionId='';this._richadsActiveToken='';}
                 },
                 reportAdsGramDiagnostic(error, format = 'interstitial', forcedKind = '') {
                     const normalized = String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial';
@@ -4588,7 +4746,9 @@
                     const silent = options?.silent === true;
                     const normalized = auto ? 'reward' : (String(format || '').toLowerCase() === 'reward' ? 'reward' : 'interstitial');
                     const purpose = auto ? 'auto-ad' : (normalized === 'interstitial' ? 'adsgram-manual' : 'adsgram-reward-manual');
-                    if (this._adsgramRunning || this._rewardedRunning || (this._autoAdInFlight && !auto)) return false;
+                    await this.syncProviderLocks().catch(()=>false);
+                    if(this.adsgramTaskLocked){if(!silent)this.showNotification('🔒 Quảng cáo AdsGram đang tạm khóa.');return false;}
+                    if (this._adsgramRunning || this._rewardedRunning || this._richadsRunning || (this._autoAdInFlight && !auto)) return false;
                     if (this.readPendingAdsGramRecovery()) {
                         await this.reconcilePendingAdsGram({silent});
                         return false;
@@ -5752,6 +5912,8 @@
                 },
                 async preloadRewardedAd() {
                     if (this._rewardedPreloadStarted || typeof show_11457064 !== 'function') return false;
+                    const providerStateReady = await this.syncProviderLocks().catch(()=>false);
+                    if (!providerStateReady || this.monetagTaskLocked) return false;
                     this._rewardedPreloadStarted = true;
                     try {
                         await Promise.resolve(show_11457064({ type: 'preload', ymid: String(this.user?.id || '') }));
@@ -5767,7 +5929,9 @@
                     // SDK/verification success không được biến thành "QC lỗi" chỉ vì callback Delivery/Upgrade/X2 lỗi.
                     const autoAd = purpose === 'auto-ad' || options?.auto === true;
                     const silent = options?.silent === true;
-                    if (this._rewardedRunning || this._adsgramRunning || (this._autoAdInFlight && !autoAd)) return false;
+                    await this.syncProviderLocks().catch(()=>false);
+                    if(this.monetagTaskLocked){if(!silent)this.showNotification('🔒 Quảng cáo Monetag đang tạm khóa.');return false;}
+                    if (this._rewardedRunning || this._adsgramRunning || this._richadsRunning || (this._autoAdInFlight && !autoAd)) return false;
                     this._rewardedRunning = true;
                     const actionId = `${this.user?.id || 'user'}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
                     this._rewardedActionId = actionId;
@@ -5824,7 +5988,7 @@
                                 await this.retryDeliveryClaim(pendingToken);
                                 return false; // Rewarded cũ đã verified; tuyệt đối không mở thêm Monetag.
                             }
-                            if (purpose === 'bonus-task' && (sessionData?.taskLocked || sessionData?.monetagLocked)) {
+                            if (sessionData?.taskLocked || sessionData?.providerLocked || sessionData?.monetagLocked) {
                                 this.monetagTaskLocked = true;
                                 if (!silent) this.showNotification('🔒 Nhiệm vụ đang tạm khóa.');
                                 return false; // server fail-closed trước khi Monetag SDK mở
