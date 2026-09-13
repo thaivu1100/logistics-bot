@@ -1305,6 +1305,44 @@
         .low-graphics .task-section-panel { animation:none !important; }
         .low-graphics .fps-overlay { backdrop-filter:none !important; box-shadow:none !important; }
 
+
+        /* ==================== PR MINIAPP PERMANENT LINK + JOB MAIL READABILITY FINAL ==================== */
+        .premium-logistics-ui .pr-campaign-card{padding:15px !important;border-color:rgba(16,185,129,.24) !important;}
+        .premium-logistics-ui .pr-permanent-card{padding:13px;border-radius:18px;background:linear-gradient(145deg,rgba(14,165,233,.13),rgba(16,185,129,.09));border:1px solid rgba(56,189,248,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+        .premium-logistics-ui .pr-permanent-title,.premium-logistics-ui .pr-submit-title{font-size:12px;line-height:1.4;font-weight:900;color:var(--app-text)}
+        .premium-logistics-ui .pr-link-box{font-size:11.5px !important;line-height:1.5;padding:10px 11px !important;}
+        .premium-logistics-ui .pr-step{padding:12px !important;}
+        .premium-logistics-ui .pr-step b{font-size:12px !important;line-height:1.45}
+        .premium-logistics-ui .pr-step p{font-size:11.5px !important;line-height:1.6}
+        .premium-logistics-ui .pr-stat span{font-size:10.5px !important;line-height:1.35}
+        .premium-logistics-ui .pr-stat b{font-size:14px !important;line-height:1.35}
+        .premium-logistics-ui .pr-reward-table{font-size:10.5px !important;}
+        .premium-logistics-ui .pr-reward-table th,.premium-logistics-ui .pr-reward-table td{padding:8px 6px !important;}
+        .premium-logistics-ui .pr-action-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+        .premium-logistics-ui .pr-action-row button{min-height:40px;font-size:11px !important}
+        .premium-logistics-ui .pr-submit-card{padding:13px;border-radius:18px;background:var(--app-card-2);border:1px solid var(--app-line)}
+        .premium-logistics-ui .pr-submit-card label{display:block;margin-bottom:5px;font-size:11px;font-weight:900;color:var(--app-text-2)}
+        .premium-logistics-ui .pr-submit-card input,.premium-logistics-ui .pr-submit-card select{font-size:14px !important;min-height:44px !important}
+
+        /* JOB MAIL final contrast layer. Applies after legacy/premium rules in both themes. */
+        .premium-logistics-ui .job-mail-wrap,.premium-logistics-ui .job-mail-wrap p,.premium-logistics-ui .job-mail-wrap li,.premium-logistics-ui .job-mail-wrap span{line-height:1.6}
+        .premium-logistics-ui .job-mail-rule{color:var(--app-text) !important;}
+        .premium-logistics-ui .job-mail-rule p,.premium-logistics-ui .job-mail-rule li,.premium-logistics-ui .job-mail-tip-body,.premium-logistics-ui .job-mail-history-email{font-size:12px !important;line-height:1.65 !important;color:var(--app-text-2) !important;}
+        .premium-logistics-ui .job-mail-copy{font-size:13px !important;line-height:1.7 !important;color:var(--app-text-2) !important;}
+        .premium-logistics-ui .job-mail-tip-title,.premium-logistics-ui .job-mail-rule h3{font-size:14px !important;line-height:1.5 !important;}
+        .premium-logistics-ui .job-mail-textarea{font-size:14px !important;line-height:1.6 !important;color:var(--app-text) !important;background:var(--app-card) !important;border-color:var(--app-line-strong) !important;}
+        html.theme-dark .premium-logistics-ui .job-mail-hero{background:linear-gradient(145deg,#17315a,#172033 62%,#4a2b12) !important;border-color:#37506d !important;color:#f8fafc !important}
+        html.theme-dark .premium-logistics-ui .job-mail-rule,html.theme-dark .premium-logistics-ui .job-mail-stat-grid>div{background:#172033 !important;border-color:#334155 !important;color:#f8fafc !important}
+        html.theme-dark .premium-logistics-ui .job-mail-danger{background:linear-gradient(145deg,#3b1c26,#172033) !important;border-color:#7f3344 !important}
+        html.theme-dark .premium-logistics-ui .job-mail-tip-title{color:#fde68a !important}
+        html.theme-light .premium-logistics-ui .job-mail-hero{background:linear-gradient(145deg,#eff6ff,#ffffff 62%,#fff7ed) !important;border-color:#cbd5e1 !important;color:#0f172a !important}
+        html.theme-light .premium-logistics-ui .job-mail-rule,html.theme-light .premium-logistics-ui .job-mail-stat-grid>div{background:#ffffff !important;border-color:#dbe3ed !important;color:#0f172a !important}
+        html.theme-light .premium-logistics-ui .job-mail-danger{background:linear-gradient(145deg,#fff1f2,#ffffff) !important;border-color:#fecdd3 !important}
+        html.theme-light .premium-logistics-ui .job-mail-final-note{background:linear-gradient(145deg,#ecfdf5,#ffffff) !important;border-color:#bbf7d0 !important}
+        html.theme-light .premium-logistics-ui .job-mail-tip-title,html.theme-light .premium-logistics-ui .job-mail-rule h3{color:#0f172a !important}
+        html.theme-light .premium-logistics-ui .job-mail-copy,html.theme-light .premium-logistics-ui .job-mail-tip-body,html.theme-light .premium-logistics-ui .job-mail-rule p,html.theme-light .premium-logistics-ui .job-mail-rule li{color:#334155 !important}
+        html.theme-light .premium-logistics-ui .job-mail-critical{color:#9f1239 !important}
+        html.theme-light .premium-logistics-ui .job-mail-textarea{background:#fff !important;color:#0f172a !important;border-color:#cbd5e1 !important}
 </style>
 </head>
 <body class="premium-logistics-ui" x-data="app()" x-init="initApp()">
@@ -1714,37 +1752,66 @@
                         <span>🎁 <span x-text="texts.taskSectionSpecial"></span><small class="task-section-meta" x-text="texts.oneTimeAndNewbie"></small></span><span class="task-section-chevron" x-text="taskSections.special ? '▾' : '▸'"></span>
                     </button>
                     <button type="button" class="task-section-btn" :class="taskSections.pr ? 'active' : ''" @click="toggleTaskSection('pr')">
-                        <span>📣 <span x-text="texts.taskSectionPr"></span><small class="task-section-meta" x-text="prCurrent ? prStatusText(prCurrent.status) : texts.prCreateLink"></small></span><span class="task-section-chevron" x-text="taskSections.pr ? '▾' : '▸'"></span>
+                        <span>📣 <span x-text="texts.taskSectionPr"></span><small class="task-section-meta" x-text="prCurrent?.status==='active' ? prStatusText(prCurrent.status) : (prLink ? texts.prLinkReady : texts.loadingShort)"></small></span><span class="task-section-chevron" x-text="taskSections.pr ? '▾' : '▸'"></span>
                     </button>
                 </div>
-                <div x-show="taskSections.pr" x-transition x-cloak class="task-section-panel glass pr-campaign-card p-3 rounded-[25px] space-y-3 card-padding">
-                    <div class="flex items-start justify-between gap-2"><div><h3 class="text-sm font-black text-emerald-300">📣 PR MINIAPP</h3><p class="text-[10px] mt-1" style="color:var(--app-text-2)" x-text="texts.prIntro"></p></div><button @click="fetchPrCampaign(true)" class="px-2 py-1.5 rounded-xl bg-slate-800/50 text-[10px] font-black">↻</button></div>
-                    <p class="text-[10px] font-black text-amber-300" x-text="'⚠️ ' + texts.prLinkWarning"></p>
+                <div x-show="taskSections.pr" x-transition x-cloak class="task-section-panel glass pr-campaign-card rounded-[25px] space-y-3 card-padding">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0"><h3 class="text-sm font-black text-emerald-300">📣 PR MINIAPP</h3><p class="text-[11px] mt-1 leading-relaxed" style="color:var(--app-text-2)" x-text="texts.prIntro"></p></div>
+                        <button @click="fetchPrCampaign(true)" :disabled="prLoading" class="px-3 py-2 rounded-xl bg-slate-800/50 text-[11px] font-black disabled:opacity-50">↻</button>
+                    </div>
+                    <p class="text-[11px] leading-relaxed font-black text-amber-300" x-text="'⚠️ ' + texts.prLinkWarning"></p>
 
-                    <div x-show="!prCurrent || ['awaiting_review','paid','rejected'].includes(prCurrent.status)" class="space-y-2">
-                        <template x-if="prCurrent && prCurrent.status!=='draft' && prCurrent.status!=='active'"><div class="pr-step"><b x-text="prStatusText(prCurrent.status)"></b><p x-show="prCurrent.status==='rejected'" x-text="texts.prReason + ': ' + (prCurrent.rejectReason || 'N/A')"></p><p x-show="prCurrent.status==='awaiting_review'" x-text="texts.prQualified + ': ' + formatNumber(prCurrent.qualifiedCountFinal ?? prCurrent.qualifiedPlayers) + ' · ' + texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p><p x-show="prCurrent.status==='paid'" x-text="'+ ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p></div></template>
-                        <div class="grid grid-cols-2 gap-2"><select x-model="prPlatform" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px] font-black"><option value="facebook">Facebook</option><option value="x">X / Twitter</option><option value="threads">Threads</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="other">Other</option></select><button @click="createPrDraft()" :disabled="prLoading" class="rounded-xl bg-emerald-600 text-white font-black text-[10px] disabled:opacity-40" x-text="prCurrent ? texts.prNewCampaign : texts.prCreateLink"></button></div>
+                    <div class="pr-permanent-card">
+                        <div class="pr-permanent-title">🔗 <span x-text="texts.prMyLink"></span></div>
+                        <div class="pr-link-box mt-2" x-text="prLink || (prLoading ? texts.loadingShort + '…' : 'N/A')"></div>
+                        <div class="pr-action-row">
+                            <button @click="copyPrLink()" :disabled="!prLink" class="rounded-xl bg-blue-600 text-white font-black disabled:opacity-50" x-text="texts.prCopyLink"></button>
+                            <button @click="copyPrContent()" :disabled="!prLink" class="rounded-xl bg-cyan-600 text-white font-black disabled:opacity-50" x-text="texts.prCopyContent"></button>
+                        </div>
                     </div>
 
-                    <div x-show="prCurrent && prCurrent.status==='draft'" class="space-y-2">
-                        <div class="grid grid-cols-2 gap-2"><select x-model="prPlatform" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px] font-black"><option value="facebook">Facebook</option><option value="x">X / Twitter</option><option value="threads">Threads</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="other">Other</option></select><button @click="createPrDraft()" :disabled="prLoading" class="rounded-xl bg-blue-600 text-white font-black text-[10px] disabled:opacity-40" x-text="texts.prCreateLink"></button></div>
-                        <div class="pr-link-box" x-text="prCurrent.trackingLink"></div><button @click="copyPrContent()" class="w-full py-2 rounded-xl bg-cyan-600/25 border border-cyan-500 text-cyan-200 font-black text-[10px]" x-text="texts.prCopyContent"></button>
-                        <input x-model.trim="prPostUrl" class="w-full p-2.5 rounded-xl bg-slate-800/50 border border-white/10 text-[10px]" :placeholder="texts.prPostPlaceholder">
-                        <button @click="submitPrCampaign()" :disabled="prSubmitting || !prPostUrl" class="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-black text-[10px] disabled:opacity-40" x-text="prSubmitting ? texts.processing : texts.prSubmit"></button>
+                    <template x-if="prCurrent && prCurrent.status!=='active'">
+                        <div class="pr-step">
+                            <div class="flex items-center justify-between gap-2"><b x-text="prStatusText(prCurrent.status)"></b><span class="text-[11px] font-black" style="color:var(--app-muted)" x-text="'#' + prCurrent.id"></span></div>
+                            <p x-show="prCurrent.status==='rejected'" x-text="texts.prReason + ': ' + (prCurrent.rejectReason || 'N/A')"></p>
+                            <p x-show="prCurrent.status==='awaiting_review'" x-text="texts.prQualified + ': ' + formatNumber(prCurrent.qualifiedCountFinal ?? prCurrent.qualifiedPlayers) + ' · ' + texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p>
+                            <p x-show="prCurrent.status==='paid'" x-text="'+ ' + formatNumber(prCurrent.totalRewardOrders) + ' Orders'"></p>
+                        </div>
+                    </template>
+
+                    <div x-show="!prCurrent || prCurrent.status!=='active'" class="pr-submit-card space-y-2">
+                        <div class="pr-submit-title">📣 <span x-text="texts.prSubmitTitle"></span></div>
+                        <div>
+                            <label x-text="texts.prPlatformLabel"></label>
+                            <select x-model="prPlatform"><option value="facebook">Facebook</option><option value="x">X / Twitter</option><option value="threads">Threads</option><option value="tiktok">TikTok</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="other">Other</option></select>
+                        </div>
+                        <div>
+                            <label x-text="texts.prPostLabel"></label>
+                            <input x-model.trim="prPostUrl" :placeholder="texts.prPostPlaceholder">
+                        </div>
+                        <button @click="submitPrCampaign()" :disabled="prSubmitting || !prPostUrl || !prLink" class="w-full py-3 rounded-xl bg-emerald-600 text-white font-black text-[12px] disabled:opacity-50" x-text="prSubmitting ? texts.processing : texts.prStartCampaign"></button>
                     </div>
 
                     <div x-show="prCurrent && prCurrent.status==='active'" class="space-y-2">
-                        <div class="flex items-center justify-between"><b class="text-[11px] text-green-300" x-text="texts.prActive"></b><b class="text-[10px] text-amber-300" x-text="texts.prTimeLeft + ': ' + prCountdownText()"></b></div>
+                        <div class="flex items-center justify-between gap-2"><b class="text-[12px] text-green-300" x-text="texts.prActive"></b><b class="text-[11px] text-amber-300 tabular-nums" x-text="texts.prTimeLeft + ': ' + prCountdownText()"></b></div>
                         <a :href="prCurrent.postUrl" target="_blank" rel="noopener" class="block pr-link-box" x-text="prCurrent.postUrl"></a>
-                        <div class="pr-stat-grid"><div class="pr-stat"><span x-text="texts.prRawClicks"></span><b x-text="formatNumber(prCurrent.rawClicks||0)"></b></div><div class="pr-stat"><span x-text="texts.prVisitors"></span><b x-text="formatNumber(prCurrent.telegramVisitors||0)"></b></div><div class="pr-stat"><span x-text="texts.prNewUsers"></span><b x-text="formatNumber(prCurrent.newUsers||0)"></b></div><div class="pr-stat"><span x-text="texts.prQualified"></span><b x-text="formatNumber(prCurrent.qualifiedPlayers||0)"></b></div></div>
-                        <div class="pr-step"><b x-text="texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders||0) + ' Orders'"></b></div>
+                        <div class="pr-stat-grid">
+                            <div class="pr-stat"><span x-text="texts.prRawClicks"></span><b x-text="formatNumber(prCurrent.rawClicks||0)"></b></div>
+                            <div class="pr-stat"><span x-text="texts.prUniqueClicks"></span><b x-text="formatNumber(prCurrent.uniqueClicks||0)"></b></div>
+                            <div class="pr-stat"><span x-text="texts.prVisitors"></span><b x-text="formatNumber(prCurrent.telegramVisitors||0)"></b></div>
+                            <div class="pr-stat"><span x-text="texts.prNewUsers"></span><b x-text="formatNumber(prCurrent.newUsers||0)"></b></div>
+                            <div class="pr-stat"><span x-text="texts.prQualified"></span><b x-text="formatNumber(prCurrent.qualifiedPlayers||0)"></b></div>
+                            <div class="pr-stat"><span x-text="texts.prRisk"></span><b x-text="formatNumber(prCurrent.riskReview||0)"></b></div>
+                        </div>
+                        <div class="pr-step"><b x-text="'🎁 ' + texts.prEstimated + ': ' + formatNumber(prCurrent.totalRewardOrders||0) + ' Orders'"></b></div>
                     </div>
 
-                    <details class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'📘 ' + texts.prHowTo"></summary><div class="mt-2 space-y-2"><div><b x-text="texts.prStep1"></b><p x-text="texts.prStep1Desc"></p></div><div><b x-text="texts.prStep2"></b><p x-text="texts.prStep2Desc"></p></div><div><b x-text="texts.prStep3"></b><p x-text="texts.prStep3Desc"></p></div><p class="font-black text-amber-300" x-text="'⚠️ ' + texts.prHashtagNote"></p><p class="font-black text-red-300" x-text="'⚠️ ' + texts.prPublicNote"></p><div><b x-text="texts.prValidTitle"></b><p>1. <span x-text="texts.prValid1"></span></p><p>2. <span x-text="texts.prValid2"></span></p><p>3. <span x-text="texts.prValid3"></span></p><p>4. <span x-text="texts.prValid4"></span></p></div></div></details>
+                    <details class="pr-step"><summary class="font-black text-[12px] cursor-pointer" x-text="'📘 ' + texts.prHowTo"></summary><div class="mt-2 space-y-2"><div><b x-text="texts.prStep1"></b><p x-text="texts.prStep1Desc"></p></div><div><b x-text="texts.prStep2"></b><p x-text="texts.prStep2Desc"></p></div><div><b x-text="texts.prStep3"></b><p x-text="texts.prStep3Desc"></p></div><p class="font-black text-amber-300" x-text="'⚠️ ' + texts.prHashtagNote"></p><p class="font-black text-red-300" x-text="'⚠️ ' + texts.prPublicNote"></p><div><b x-text="texts.prValidTitle"></b><p>1. <span x-text="texts.prValid1"></span></p><p>2. <span x-text="texts.prValid2"></span></p><p>3. <span x-text="texts.prValid3"></span></p><p>4. <span x-text="texts.prValid4"></span></p></div></div></details>
 
-                    <details class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'🎁 ' + texts.prRewardTable"></summary><table class="pr-reward-table mt-2"><thead><tr><th x-text="texts.prQualified"></th><th>Base</th><th>Bonus</th><th>Total</th></tr></thead><tbody><template x-for="row in prRewardTable" :key="row.users"><tr><td x-text="row.users"></td><td x-text="formatNumber(row.base)"></td><td x-text="row.bonus ? '+'+formatNumber(row.bonus) : '—'"></td><td class="font-black" x-text="formatNumber(row.total)"></td></tr></template></tbody></table></details>
+                    <details class="pr-step"><summary class="font-black text-[12px] cursor-pointer" x-text="'🎁 ' + texts.prRewardTable"></summary><table class="pr-reward-table mt-2"><thead><tr><th x-text="texts.prQualified"></th><th>Base</th><th>Bonus</th><th>Total</th></tr></thead><tbody><template x-for="row in prRewardTable" :key="row.users"><tr><td x-text="row.users"></td><td x-text="formatNumber(row.base)"></td><td x-text="row.bonus ? '+'+formatNumber(row.bonus) : '—'"></td><td class="font-black" x-text="formatNumber(row.total)"></td></tr></template></tbody></table></details>
 
-                    <details x-show="prHistory.length" class="pr-step"><summary class="font-black text-[10px] cursor-pointer" x-text="'🗂 ' + texts.prHistory"></summary><div class="mt-2 space-y-2"><template x-for="c in prHistory" :key="c.id"><div class="p-2 rounded-xl border border-white/5"><div class="flex justify-between text-[10px] font-black"><span x-text="'#'+c.id+' · '+c.platform"></span><span x-text="prStatusText(c.status)"></span></div><p class="text-[9px] mt-1" style="color:var(--app-muted)" x-text="texts.prQualified+': '+formatNumber(c.qualifiedCountFinal??c.qualifiedPlayers||0)+' · '+formatNumber(c.totalRewardOrders||0)+' Orders'"></p></div></template></div></details>
+                    <details x-show="prHistory.length" class="pr-step"><summary class="font-black text-[12px] cursor-pointer" x-text="'🗂 ' + texts.prHistory"></summary><div class="mt-2 space-y-2"><template x-for="c in prHistory" :key="c.id"><div class="p-2.5 rounded-xl border" style="border-color:var(--app-line)"><div class="flex justify-between gap-2 text-[11px] font-black"><span x-text="'#'+c.id+' · '+c.platform"></span><span x-text="prStatusText(c.status)"></span></div><p class="text-[11px] mt-1" style="color:var(--app-muted)" x-text="texts.prQualified+': '+formatNumber(c.qualifiedCountFinal ?? c.qualifiedPlayers ?? 0)+' · '+formatNumber(c.totalRewardOrders||0)+' Orders'"></p></div></template></div></details>
                 </div>
                 <div x-show="taskSections.special && newUserTutorial.eligible" x-transition x-cloak class="task-section-panel glass p-3 rounded-[25px] space-y-3 card-padding border border-emerald-500/30 bg-emerald-950/10">
                     <div class="flex items-center justify-between gap-2">
@@ -2629,7 +2696,7 @@
                 settingsAccount:'👤 TÀI KHOẢN', settingsLanguage:'🌐 NGÔN NGỮ', settingsAppearance:'🎨 HIỂN THỊ', settingsPerformance:'⚡ HIỆU NĂNG', settingsAudio:'🎵 ÂM THANH', settingsSupport:'☎️ HỖ TRỢ',
                 joinDateSimple:'Ngày tham gia', languageDesc:'Thay đổi ngôn ngữ toàn bộ Mini App ngay lập tức.', appearance:'Giao diện', themeDesc:'Chọn giao diện sáng hoặc tối. Màu chữ tự điều chỉnh để luôn dễ đọc.', lightTheme:'☀️ SÁNG', darkTheme:'🌙 TỐI',
                 graphics:'Đồ họa', graphicsDesc:'FULL HD giữ đầy đủ hiệu ứng · FIX LAG giảm hiệu ứng để máy yếu mượt hơn.', showFps:'Hiển thị FPS', fpsDesc:'Hiển thị FPS thực tế của giao diện, không ép tần số quét thiết bị.', on:'BẬT', off:'TẮT', backgroundMusic:'Nhạc nền', supportDesc:'Liên hệ Admin hoặc cộng đồng khi cần hỗ trợ.',
-                taskSectionDaily:'NHIỆM VỤ HÔM NAY', taskSectionAds:'QUẢNG CÁO', taskSectionLink:'VƯỢT LINK', taskSectionStreak:'ĐIỂM DANH 7 NGÀY', taskSectionSpecial:'TÂN THỦ / ĐẶC BIỆT', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'Một lần & tân thủ', prIntro:'Đăng bài/video giới thiệu Kho Hàng và nhận thưởng theo số người chơi mới hợp lệ.', prHowTo:'HƯỚNG DẪN THAM GIA', prStep1:'Bước 1 · Chọn nền tảng', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube hoặc nền tảng khác.', prStep2:'Bước 2 · Đăng bài/video', prStep2Desc:'Đăng ở trang cá nhân, kênh hoặc cộng đồng phù hợp và cho phép quảng bá. Bài phải Public và giữ nguyên link PR trong 7 ngày.', prStep3:'Bước 3 · Gửi link bài PR', prStep3Desc:'Dán link bài viết/video vào Mini App. Thời gian 7 ngày bắt đầu ngay khi server chấp nhận link.', prValidTitle:'MỘT USER PR HỢP LỆ PHẢI ĐỦ 4 ĐIỀU KIỆN', prValid1:'Là user mới thật, chưa từng có tài khoản trước đó.', prValid2:'Đi qua đúng tracking link PR của chiến dịch này.', prValid3:'Mở Mini App bằng Telegram hợp lệ.', prValid4:'Trong 24 giờ thực hiện ít nhất 1 hoạt động thật: giao hàng, mở rương, xem QC Rewarded hợp lệ hoặc nhận thưởng nhiệm vụ.', prHashtagNote:'Nếu không đăng trong cộng đồng Kiếm Tiền Online hoặc đăng VIDEO, hãy thêm #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'Bài/video phải Public, không xóa bài và không thay link PR trong 7 ngày.', prCreateLink:'TẠO LINK PR', prCopyContent:'COPY NỘI DUNG + LINK', prSubmit:'GỬI LINK BÀI PR', prPostPlaceholder:'Dán link bài viết/video Public...', prActive:'CHIẾN DỊCH ĐANG CHẠY', prAwaiting:'ĐANG CHỜ ADMIN DUYỆT', prPaid:'ĐÃ DUYỆT', prRejected:'BỊ TỪ CHỐI', prDraft:'BẢN NHÁP', prNewCampaign:'TẠO CHIẾN DỊCH MỚI', prRewardTable:'BẢNG THƯỞNG', prQualified:'User hợp lệ', prEstimated:'Thưởng dự kiến', prRawClicks:'Click', prVisitors:'Visitor', prNewUsers:'User mới', prTimeLeft:'Còn lại', prHistory:'Lịch sử PR', prNoHistory:'Chưa có chiến dịch trước đó.', prReason:'Lý do', prLinkWarning:'Bắt buộc dùng đúng LINK PR MINIAPP bên dưới. Link mời bạn/referral không được tính cho PR.', loadingShort:'Đang tải', inProgress:'CHƯA XONG',
+                taskSectionDaily:'NHIỆM VỤ HÔM NAY', taskSectionAds:'QUẢNG CÁO', taskSectionLink:'VƯỢT LINK', taskSectionStreak:'ĐIỂM DANH 7 NGÀY', taskSectionSpecial:'TÂN THỦ / ĐẶC BIỆT', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'Một lần & tân thủ', prIntro:'Đăng bài/video giới thiệu Kho Hàng và nhận thưởng theo số người chơi mới hợp lệ.', prHowTo:'HƯỚNG DẪN THAM GIA', prStep1:'Bước 1 · Chọn nền tảng', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube hoặc nền tảng khác.', prStep2:'Bước 2 · Đăng bài/video', prStep2Desc:'Đăng ở trang cá nhân, kênh hoặc cộng đồng phù hợp và cho phép quảng bá. Bài phải Public và giữ nguyên link PR trong 7 ngày.', prStep3:'Bước 3 · Gửi link bài PR', prStep3Desc:'Dán link bài viết/video vào Mini App. Thời gian 7 ngày bắt đầu ngay khi server chấp nhận link.', prValidTitle:'MỘT USER PR HỢP LỆ PHẢI ĐỦ 4 ĐIỀU KIỆN', prValid1:'Là user mới thật, chưa từng có tài khoản trước đó.', prValid2:'Đi qua đúng link PR MINIAPP riêng của người đăng trong thời gian chiến dịch đang chạy.', prValid3:'Mở Mini App bằng Telegram hợp lệ.', prValid4:'Trong 24 giờ thực hiện ít nhất 1 hoạt động thật: giao hàng, mở rương, xem QC Rewarded hợp lệ hoặc nhận thưởng nhiệm vụ.', prHashtagNote:'Nếu không đăng trong cộng đồng Kiếm Tiền Online hoặc đăng VIDEO, hãy thêm #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'Bài/video phải Public, không xóa bài và không thay link PR trong 7 ngày.', prCreateLink:'LẤY LINK PR', prMyLink:'LINK PR MINIAPP CỦA BẠN', prCopyLink:'COPY LINK', prCopyContent:'COPY NỘI DUNG + LINK', prSubmitTitle:'GỬI BÀI PR', prStartCampaign:'BẮT ĐẦU CHIẾN DỊCH 7 NGÀY', prSubmit:'GỬI LINK BÀI PR', prPostPlaceholder:'Dán link bài viết/video Public...', prPlatformLabel:'Nền tảng', prPostLabel:'Link bài viết/video', prUniqueClicks:'Unique Click', prRisk:'Risk / Review', prLinkReady:'LINK SẴN SÀNG', prActive:'CHIẾN DỊCH ĐANG CHẠY', prAwaiting:'ĐANG CHỜ ADMIN DUYỆT', prPaid:'ĐÃ DUYỆT', prRejected:'BỊ TỪ CHỐI', prDraft:'BẢN NHÁP', prNewCampaign:'TẠO CHIẾN DỊCH MỚI', prRewardTable:'BẢNG THƯỞNG', prQualified:'User hợp lệ', prEstimated:'Thưởng dự kiến', prRawClicks:'Click', prVisitors:'Visitor', prNewUsers:'User mới', prTimeLeft:'Còn lại', prHistory:'Lịch sử PR', prNoHistory:'Chưa có chiến dịch trước đó.', prReason:'Lý do', prLinkWarning:'Bắt buộc dùng đúng LINK PR MINIAPP bên dưới. Link mời bạn/referral không được tính cho PR.', loadingShort:'Đang tải', inProgress:'CHƯA XONG',
                 contactAdmin: 'Liên hệ Admin', enterCode: 'Mã...', redeem: 'Nhận',
                 redeemHistoryLabel: 'Lịch sử nhập code', noRedeemHistory: 'Chưa nhập mã nào', privateOnlyMe: 'Chỉ mình bạn thấy',
                 giftcodePageTitle: '🎟️ Nhập Code', giftcodeDesc: 'Nhập mã để nhận thưởng ngay. Phần thưởng chỉ mình bạn thấy được.',
@@ -2709,7 +2776,7 @@
                 settingsAccount:'👤 ACCOUNT', settingsLanguage:'🌐 LANGUAGE', settingsAppearance:'🎨 APPEARANCE', settingsPerformance:'⚡ PERFORMANCE', settingsAudio:'🎵 AUDIO', settingsSupport:'☎️ SUPPORT',
                 joinDateSimple:'Join date', languageDesc:'Switch the entire Mini App language instantly.', appearance:'Appearance', themeDesc:'Choose Light or Dark. Text colors automatically stay readable.', lightTheme:'☀️ LIGHT', darkTheme:'🌙 DARK',
                 graphics:'Graphics', graphicsDesc:'FULL HD keeps all effects · FIX LAG reduces effects for smoother low-end performance.', showFps:'Show FPS', fpsDesc:'Shows real rendered FPS without forcing the device refresh rate.', on:'ON', off:'OFF', backgroundMusic:'Background Music', supportDesc:'Contact Admin or the community when you need help.',
-                taskSectionDaily:"TODAY'S TASKS", taskSectionAds:'ADS', taskSectionLink:'LINK TASKS', taskSectionStreak:'7-DAY CHECK-IN', taskSectionSpecial:'NEW USER / SPECIAL', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'One-time & new user', prIntro:'Publish a post/video about Logistics Warehouse and earn Orders from real new players.', prHowTo:'HOW TO JOIN', prStep1:'Step 1 · Choose a platform', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube, or another platform.', prStep2:'Step 2 · Publish your post/video', prStep2Desc:'Post on your profile, channel, or a relevant community that allows promotion. Keep it Public with the PR link unchanged for 7 days.', prStep3:'Step 3 · Submit the post URL', prStep3Desc:'Paste the public post/video URL into the Mini App. The 7-day timer starts when the server accepts the URL.', prValidTitle:'A VALID PR USER MUST MEET ALL 4 CONDITIONS', prValid1:'A truly new user who never had an account before.', prValid2:'Arrives through this campaign\'s exact PR tracking link.', prValid3:'Opens the Mini App with valid Telegram authentication.', prValid4:'Within 24 hours completes at least one real action: delivery, chest, valid Rewarded ad, or task reward.', prHashtagNote:'If the content is not posted in an online-earning community, or if it is a VIDEO, add #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'The post/video must stay Public. Do not delete it or replace the PR link during the 7-day campaign.', prCreateLink:'CREATE PR LINK', prCopyContent:'COPY CONTENT + LINK', prSubmit:'SUBMIT PR POST', prPostPlaceholder:'Paste the public post/video URL...', prActive:'CAMPAIGN ACTIVE', prAwaiting:'AWAITING ADMIN REVIEW', prPaid:'APPROVED', prRejected:'REJECTED', prDraft:'DRAFT', prNewCampaign:'CREATE NEW CAMPAIGN', prRewardTable:'REWARD TABLE', prQualified:'Qualified users', prEstimated:'Estimated reward', prRawClicks:'Clicks', prVisitors:'Visitors', prNewUsers:'New users', prTimeLeft:'Time left', prHistory:'PR history', prNoHistory:'No previous campaigns.', prReason:'Reason', prLinkWarning:'You must use the PR MINIAPP link below. Referral/invite links do not count for PR.', loadingShort:'Loading', inProgress:'IN PROGRESS',
+                taskSectionDaily:"TODAY'S TASKS", taskSectionAds:'ADS', taskSectionLink:'LINK TASKS', taskSectionStreak:'7-DAY CHECK-IN', taskSectionSpecial:'NEW USER / SPECIAL', taskSectionPr:'PR MINIAPP', oneTimeAndNewbie:'One-time & new user', prIntro:'Publish a post/video about Logistics Warehouse and earn Orders from real new players.', prHowTo:'HOW TO JOIN', prStep1:'Step 1 · Choose a platform', prStep1Desc:'Facebook, X, Threads, TikTok, Instagram, YouTube, or another platform.', prStep2:'Step 2 · Publish your post/video', prStep2Desc:'Post on your profile, channel, or a relevant community that allows promotion. Keep it Public with the PR link unchanged for 7 days.', prStep3:'Step 3 · Submit the post URL', prStep3Desc:'Paste the public post/video URL into the Mini App. The 7-day timer starts when the server accepts the URL.', prValidTitle:'A VALID PR USER MUST MEET ALL 4 CONDITIONS', prValid1:'A truly new user who never had an account before.', prValid2:'Arrives through the promoter\'s exact PR MINIAPP link while the campaign is active.', prValid3:'Opens the Mini App with valid Telegram authentication.', prValid4:'Within 24 hours completes at least one real action: delivery, chest, valid Rewarded ad, or task reward.', prHashtagNote:'If the content is not posted in an online-earning community, or if it is a VIDEO, add #KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN.', prPublicNote:'The post/video must stay Public. Do not delete it or replace the PR link during the 7-day campaign.', prCreateLink:'GET PR LINK', prMyLink:'YOUR PR MINIAPP LINK', prCopyLink:'COPY LINK', prCopyContent:'COPY CONTENT + LINK', prSubmitTitle:'SUBMIT PR POST', prStartCampaign:'START 7-DAY CAMPAIGN', prSubmit:'SUBMIT PR POST', prPostPlaceholder:'Paste the public post/video URL...', prPlatformLabel:'Platform', prPostLabel:'Post/video URL', prUniqueClicks:'Unique Clicks', prRisk:'Risk / Review', prLinkReady:'LINK READY', prActive:'CAMPAIGN ACTIVE', prAwaiting:'AWAITING ADMIN REVIEW', prPaid:'APPROVED', prRejected:'REJECTED', prDraft:'DRAFT', prNewCampaign:'CREATE NEW CAMPAIGN', prRewardTable:'REWARD TABLE', prQualified:'Qualified users', prEstimated:'Estimated reward', prRawClicks:'Clicks', prVisitors:'Visitors', prNewUsers:'New users', prTimeLeft:'Time left', prHistory:'PR history', prNoHistory:'No previous campaigns.', prReason:'Reason', prLinkWarning:'You must use the PR MINIAPP link below. Referral/invite links do not count for PR.', loadingShort:'Loading', inProgress:'IN PROGRESS',
                 contactAdmin: 'Contact Admin', enterCode: 'Code...', redeem: 'Redeem',
                 redeemHistoryLabel: 'Redeem history', noRedeemHistory: 'No codes redeemed yet', privateOnlyMe: 'Only visible to you',
                 giftcodePageTitle: '🎟️ Redeem Code', giftcodeDesc: 'Enter a code to get your reward instantly. Only you can see it.',
@@ -3191,7 +3258,7 @@
                 themeMode: localStorage.getItem('shipper_theme') === 'light' ? 'light' : 'dark',
                 showFps: localStorage.getItem('shipper_show_fps') === '1', fpsValue:0, _fpsRaf:0, _fpsFrames:0, _fpsLastSample:0, _fpsVisibilityBound:false,
                 taskSections:{daily:true,ads:false,smartlink:false,link:false,streak:false,special:false,pr:false},
-                prLoading:false,prSubmitting:false,prPlatform:'facebook',prPostUrl:'',prCurrent:null,prHistory:[],prLastSync:0,prRewardTable:[{users:1,base:800,bonus:0,total:800},{users:5,base:4000,bonus:500,total:4500},{users:10,base:8000,bonus:1200,total:9200},{users:25,base:20000,bonus:3000,total:23000},{users:50,base:40000,bonus:7000,total:47000},{users:100,base:80000,bonus:17000,total:97000},{users:200,base:160000,bonus:40000,total:200000}],
+                prLoading:false,prSubmitting:false,prPlatform:'facebook',prPostUrl:'',prLink:'',prCode:'',prCurrent:null,prHistory:[],prLastSync:0,prRewardTable:[{users:1,base:800,bonus:0,total:800},{users:5,base:4000,bonus:500,total:4500},{users:10,base:8000,bonus:1200,total:9200},{users:25,base:20000,bonus:3000,total:23000},{users:50,base:40000,bonus:7000,total:47000},{users:100,base:80000,bonus:17000,total:97000},{users:200,base:160000,bonus:40000,total:200000}],
                 securitySessionId: '', securityRiskScore: 0, securityRiskLevel: 'LOW',
                 fraudClickIntervals: [], lastSecurityClickAt: 0, securityHeartbeatTimer: null,
                 antiFraudInstallId: '',
@@ -7584,7 +7651,7 @@
                     return this.language==='en' ? `${d}d ${String(h).padStart(2,'0')}h ${String(m).padStart(2,'0')}m ${String(ss).padStart(2,'0')}s` : `${d} ngày ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
                 },
                 prPromoText() {
-                    const link=String(this.prCurrent?.trackingLink||'');
+                    const link=String(this.prLink||this.prCurrent?.prLink||this.prCurrent?.trackingLink||'');
                     if(this.language==='en') return `🚚 LOGISTICS WAREHOUSE 👑\n\n📦 Complete simple daily tasks\n📺 Watch ads for rewards\n🔗 Complete link tasks to earn Orders\n🎁 Open chests for rewards\n🏆 Climb the leaderboard\n💰 Earn Coins + Orders\n⚡ Simple and easy to use\n\n🔥 Open the bot and start earning rewards!\n\n🔗 ${link}\n\n#KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN`;
                     return `🚚 KHO HÀNG KIẾM TIỀN 👑\n\n📦 Làm nhiệm vụ đơn giản mỗi ngày\n📺 Xem quảng cáo nhận thưởng\n🔗 Vượt link tích Đơn Hàng\n🎁 Mở rương săn quà hấp dẫn\n🏆 Leo BXH nhận thêm phần thưởng\n💰 Tích Coin + Đơn Hàng cực dễ\n⚡ Giao diện đơn giản, dễ sử dụng\n\n🔥 Vào bot ngay và bắt đầu kiếm thưởng!\n\n🔗 ${link}\n\n#KHOHANGKIEMTIEN #KIEMTIENONLINE #KIEMTIEN`;
                 },
@@ -7596,25 +7663,36 @@
                         const res=await fetch(`${API_URL}/api/pr/me/${this.user.id}`);
                         const data=await res.json().catch(()=>({}));
                         if(!res.ok||!data.success){if(force)this.showNotification('⚠️ '+this.prApiError(data,'PR MINIAPP chưa sẵn sàng. Vui lòng thử lại sau.','PR MINIAPP is unavailable. Please try again later.'));return;}
-                        this.prCurrent=data.current||null;this.prHistory=Array.isArray(data.history)?data.history:[];this.prLastSync=Date.now();
-                        if(this.prCurrent?.platform)this.prPlatform=this.prCurrent.platform;
-                        if(this.prCurrent?.status!=='draft')this.prPostUrl='';
+                        this.prLink=String(data.prLink||'');this.prCode=String(data.prCode||'');this.prCurrent=data.current||null;this.prHistory=Array.isArray(data.history)?data.history:[];this.prLastSync=Date.now();
+                        if(this.prCurrent?.status==='active'&&this.prCurrent?.platform)this.prPlatform=this.prCurrent.platform;
+                        if(this.prCurrent?.status==='active')this.prPostUrl='';
                     }catch(e){if(force)this.showNotification('⚠️ '+(this.texts.serverConnectionError||'Server connection error.'));}
                     finally{this.prLoading=false;}
                 },
                 async createPrDraft() {
-                    if(this.prLoading)return;this.prLoading=true;
-                    try{const res=await fetch(`${API_URL}/api/pr/draft`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,platform:this.prPlatform})});const data=await res.json().catch(()=>({}));if(!res.ok||!data.success){this.showNotification('❌ '+this.prApiError(data,'Không thể tạo link PR lúc này.','Could not create the PR link.'));if(data.current)this.prCurrent=data.current;return;}this.prCurrent=data.current;this.prHistory=data.history||this.prHistory;this.showNotification('✅ '+(this.language==='en'?'PR link ready.':'Đã tạo link PR riêng.'));}
-                    catch(e){this.showNotification('❌ '+(this.texts.serverConnectionError||'Server connection error.'));}finally{this.prLoading=false;}
+                    // Legacy UI compatibility: the server now provisions one permanent link per account.
+                    if(this.prLoading)return;
+                    await this.fetchPrCampaign(true);
+                    if(this.prLink)this.showNotification('✅ '+(this.language==='en'?'Your permanent PR link is ready.':'Link PR riêng của bạn đã sẵn sàng.'));
+                },
+                async copyPrLink() {
+                    if(!this.prLink){this.showNotification('⚠️ '+(this.language==='en'?'PR link is not ready yet.':'Link PR chưa sẵn sàng.'));return;}
+                    try{await navigator.clipboard.writeText(this.prLink);this.showNotification('📋 '+(this.language==='en'?'PR link copied.':'Đã copy link PR.'));}
+                    catch(_){this.showNotification('❌ '+(this.language==='en'?'Could not copy.':'Không thể copy.'));}
                 },
                 async copyPrContent() {
-                    if(!this.prCurrent?.trackingLink){this.showNotification('⚠️ '+(this.language==='en'?'Create your PR link first.':'Hãy tạo link PR trước.'));return;}
+                    if(!this.prLink){this.showNotification('⚠️ '+(this.language==='en'?'PR link is not ready yet.':'Link PR chưa sẵn sàng.'));return;}
                     const text=this.prPromoText();try{await navigator.clipboard.writeText(text);this.showNotification('📋 '+(this.language==='en'?'Content + PR link copied.':'Đã copy nội dung + link PR.'));}catch(_){this.showNotification('❌ '+(this.language==='en'?'Could not copy.':'Không thể copy.'));}
                 },
                 async submitPrCampaign() {
-                    if(this.prSubmitting||!this.prCurrent?.id||this.prCurrent.status!=='draft')return;this.prSubmitting=true;
-                    try{const res=await fetch(`${API_URL}/api/pr/submit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,campaignId:this.prCurrent.id,platform:this.prPlatform,postUrl:this.prPostUrl})});const data=await res.json().catch(()=>({}));if(!res.ok||!data.success){this.showNotification('❌ '+this.prApiError(data,'Không thể gửi link bài PR. Hãy kiểm tra nền tảng và URL.','Could not submit the PR post. Check the selected platform and URL.'));return;}this.prCurrent=data.current;this.prPostUrl='';this.showNotification('✅ '+(this.language==='en'?'PR campaign started for 7 days.':'Chiến dịch PR 7 ngày đã bắt đầu.'));}
-                    catch(e){this.showNotification('❌ '+(this.texts.serverConnectionError||'Server connection error.'));}finally{this.prSubmitting=false;}
+                    if(this.prSubmitting||!this.prPostUrl||!this.prLink||this.prCurrent?.status==='active')return;this.prSubmitting=true;
+                    try{
+                        const res=await fetch(`${API_URL}/api/pr/submit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id,platform:this.prPlatform,postUrl:this.prPostUrl})});
+                        const data=await res.json().catch(()=>({}));
+                        if(!res.ok||!data.success){this.showNotification('❌ '+this.prApiError(data,'Không thể gửi link bài PR. Hãy kiểm tra nền tảng và URL.','Could not submit the PR post. Check the selected platform and URL.'));if(data.current)this.prCurrent=data.current;return;}
+                        this.prLink=String(data.prLink||this.prLink);this.prCode=String(data.prCode||this.prCode);this.prCurrent=data.current||null;this.prHistory=Array.isArray(data.history)?data.history:this.prHistory;this.prPostUrl='';this.prLastSync=Date.now();
+                        this.showNotification('✅ '+(this.language==='en'?'PR campaign started for 7 days.':'Chiến dịch PR 7 ngày đã bắt đầu.'));
+                    }catch(e){this.showNotification('❌ '+(this.texts.serverConnectionError||'Server connection error.'));}finally{this.prSubmitting=false;}
                 },
                 async syncPrVisit() {
                     if(!this.user?.id||this.isPublicBrowser)return;try{await fetch(`${API_URL}/api/pr/visit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:this.user.id})});}catch(_){}
